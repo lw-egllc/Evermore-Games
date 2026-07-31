@@ -1,0 +1,1743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Fairway Rush</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#7fb8d9; touch-action:none;
+    font-family:'VT323', monospace; user-select:none; -webkit-user-select:none; }
+  #game { display:block; width:100%; height:100%; touch-action:none; image-rendering:pixelated; }
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(15,26,20,.78); backdrop-filter:blur(3px); z-index:30; text-align:center; padding:24px; }
+  .hidden { display:none; }
+  .card { background:#f3ecd8; border:3px solid #2b3a2f; border-radius:10px; padding:26px 30px; box-shadow:0 8px 0 #1b241d; max-width:340px; width:100%; }
+  h1 { font-size:38px; color:#26331f; letter-spacing:1px; line-height:1.05; text-transform:uppercase; }
+  h1 span { color:#3f8f4d; }
+  .sub { color:#4b5a44; font-size:19px; margin:10px 0 18px; line-height:1.35; }
+  .big-score { font-size:64px; font-weight:700; color:#26331f; line-height:1; }
+  .score-label { font-size:22px; font-weight:700; color:#3f8f4d; margin-bottom:6px; letter-spacing:2px; }
+  .best { color:#5c6b55; font-size:16px; margin-bottom:16px; }
+  .themeRow { display:flex; justify-content:center; gap:8px; margin:14px 0 18px; flex-wrap:wrap; }
+  .themeBtn { border:2px solid #2b3a2f; border-radius:9px; background:#fff; width:52px; height:56px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer;
+    font-family:'VT323',monospace; box-shadow:0 3px 0 #2b3a2f; transition:transform .06s; }
+  .themeBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #2b3a2f; }
+  .themeBtn .te { font-size:22px; line-height:1; }
+  .themeBtn .tl { font-size:11px; color:#4b5a44; margin-top:2px; }
+  .themeBtn.active { background:#3f8f4d; }
+  .themeBtn.active .tl { color:#f3ecd8; }
+  button { border:3px solid #17321d; cursor:pointer; background:#3f8f4d; color:#f3ecd8; font-size:24px; font-weight:700;
+    padding:12px 40px; border-radius:8px; box-shadow:0 5px 0 #17321d; transition:transform .06s; letter-spacing:2px;
+    font-family:'VT323',monospace; text-transform:uppercase; }
+  button:active { transform:translateY(4px); box-shadow:0 1px 0 #17321d; }
+  .emoji { font-size:42px; margin-bottom:4px; }
+
+  /* ---- HUD ---- */
+  .hud-card { background:rgba(35,58,42,.88); border:2px solid rgba(255,255,255,.25); border-radius:8px;
+    color:#eaf3ea; padding:8px 12px; box-shadow:0 3px 0 rgba(0,0,0,.25); }
+  .hud-card.tan { background:rgba(238,228,200,.92); color:#2c3626; border-color:rgba(43,58,47,.35); }
+  .hud-card.dark { background:rgba(24,32,26,.88); }
+  .hud-label { font-size:13px; letter-spacing:2px; opacity:.75; text-transform:uppercase; line-height:1.1; }
+  .hud-value { font-size:24px; font-weight:700; line-height:1.05; }
+
+  #topLeft { position:fixed; top:12px; left:12px; z-index:5; }
+  #topRight { position:fixed; top:12px; right:12px; z-index:5; display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+  #brandRow { font-size:12px; letter-spacing:3px; opacity:.7; text-transform:uppercase; }
+
+  #windCard { display:flex; flex-direction:column; align-items:center; padding:6px 14px; }
+  #windArrow { width:26px; height:26px; margin:2px 0; }
+
+  #pinBubble { position:fixed; z-index:6; pointer-events:none; transform:translate(-50%,-100%);
+    background:#233a2a; color:#eaf3ea; border:2px solid rgba(255,255,255,.3); border-radius:7px;
+    padding:4px 10px; font-size:20px; font-weight:700; white-space:nowrap; box-shadow:0 3px 0 rgba(0,0,0,.25); }
+  #pinBubble::after { content:''; position:absolute; left:50%; bottom:-7px; transform:translateX(-50%);
+    border-left:7px solid transparent; border-right:7px solid transparent; border-top:7px solid #233a2a; }
+
+  #bottomBar { position:fixed; left:0; right:0; bottom:16px; z-index:5; display:flex; align-items:flex-end;
+    justify-content:space-between; padding:0 12px; gap:10px; }
+  #clubCard { display:flex; flex-direction:column; align-items:flex-end; min-width:78px; text-align:right; }
+  #clubCard .hud-value { font-size:19px; }
+  #meterWrap { flex:1; max-width:340px; }
+  #meterTrack { position:relative; height:20px; border-radius:5px; background:rgba(20,30,22,.55);
+    border:2px solid rgba(255,255,255,.25); overflow:hidden; }
+  #meterFill { position:absolute; left:0; top:0; bottom:0; width:0%;
+    background:linear-gradient(90deg,#3f8f4d 0%,#3f8f4d 55%,#e0c23f 78%,#c65b3f 100%); }
+  #meterTicks { position:absolute; inset:0; display:flex; }
+  #meterTicks div { flex:1; border-right:1px solid rgba(255,255,255,.18); }
+  #meterCenter { position:absolute; top:-3px; bottom:-3px; left:75%; width:2px; background:rgba(255,255,255,.55); }
+  #meterTrack.slider-mode { cursor:grab; touch-action:none; }
+  #meterThumb { position:absolute; top:-6px; width:14px; height:32px; margin-left:-7px; border-radius:5px;
+    background:#f3ecd8; border:2px solid #2b3a2f; display:none; box-shadow:0 2px 0 rgba(0,0,0,.3); }
+  #meterThumb.show { display:block; }
+
+  #pauseBtn { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:5;
+    width:38px; height:38px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:16px; }
+  #pauseBtn:active { transform:translateX(-50%) translateY(2px); }
+
+  .settingsRow { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 2px; border-bottom:1px solid rgba(43,58,47,.15); text-align:left; }
+  .settingsRow:last-of-type { border-bottom:none; }
+  .settingsLabel { font-size:19px; color:#2c3626; }
+  .segToggle { display:flex; border:2px solid #2b3a2f; border-radius:7px; overflow:hidden; }
+  .segToggle .seg { padding:6px 12px; font-size:15px; font-family:'VT323',monospace; cursor:pointer;
+    background:#fff; color:#2c3626; letter-spacing:1px; }
+  .segToggle .seg.on { background:#3f8f4d; color:#f3ecd8; }
+  .segToggle .seg + .seg { border-left:2px solid #2b3a2f; }
+
+  #clubSelect { display:flex; align-items:center; gap:6px; padding:8px 8px; }
+  #clubSelect .chev { width:26px; height:26px; border-radius:6px; border:2px solid rgba(255,255,255,.3);
+    background:rgba(255,255,255,.08); color:#eaf3ea; font-size:18px; line-height:1; display:flex; align-items:center;
+    justify-content:center; cursor:pointer; user-select:none; }
+  #clubSelect .chev:active { background:rgba(255,255,255,.25); }
+  #clubSelect .mid { display:flex; flex-direction:column; align-items:center; min-width:74px; }
+  #clubSelect .hud-value { font-size:18px; }
+
+  #toast { position:fixed; left:50%; top:16%; transform:translate(-50%,-6px); z-index:7; pointer-events:none;
+    background:#233a2a; color:#eaf3ea; padding:9px 18px; border:2px solid rgba(255,255,255,.3); border-radius:8px;
+    font-size:21px; font-weight:700; opacity:0; transition:opacity .25s, transform .25s; text-align:center;
+    white-space:nowrap; box-shadow:0 3px 0 rgba(0,0,0,.25); }
+  #toast.show { opacity:1; transform:translate(-50%,0); }
+
+  #hint { position:fixed; bottom:78px; left:50%; transform:translateX(-50%); z-index:5; color:#fff;
+    font-size:17px; text-align:center; opacity:.9; text-shadow:0 1px 3px rgba(0,0,0,.6); pointer-events:none;
+    transition:opacity .6s; letter-spacing:.5px; }
+
+  #minimap { position:fixed; top:100px; right:12px; z-index:5; border-radius:8px; overflow:hidden;
+    box-shadow:0 3px 0 rgba(0,0,0,.3); border:2px solid rgba(255,255,255,.4); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<canvas id="minimap" width="76" height="118"></canvas>
+
+<div id="pauseBtn" class="hud-card dark">⏸</div>
+
+<div id="topLeft" class="hud-card">
+  <div class="hud-label" id="parLabel">Par 4</div>
+  <div class="hud-value"><span id="hudYards">0</span> yds</div>
+</div>
+
+<div id="topRight">
+  <div class="hud-card tan" style="text-align:right;">
+    <div id="brandRow">Fairway Rush</div>
+    <div class="hud-value">Stroke <span id="strokeNum">0</span></div>
+  </div>
+  <div class="hud-card dark" id="windCard">
+    <div class="hud-label">Wind</div>
+    <svg id="windArrow" viewBox="0 0 24 24"><path d="M12 2 L18 14 L13 14 L13 22 L11 22 L11 14 L6 14 Z" fill="#fff"/></svg>
+    <div class="hud-value" style="font-size:18px;"><span id="windSpeed">0</span> mph</div>
+  </div>
+</div>
+
+<div id="pinBubble" class="hidden"><span id="pinYards">0</span>Y</div>
+
+<div id="toast"></div>
+<div id="hint">Drag sideways to aim &middot; swipe up to swing</div>
+
+<div id="bottomBar">
+  <div class="hud-card dark" id="clubSelect">
+    <div class="chev" id="clubPrev">&#8249;</div>
+    <div class="mid">
+      <div class="hud-label">Club</div>
+      <div class="hud-value" id="selectedClubName">Driver</div>
+      <div class="hud-label"><span id="clubRange">2-270</span>y</div>
+    </div>
+    <div class="chev" id="clubNext">&#8250;</div>
+  </div>
+  <div id="meterWrap">
+    <div id="meterTrack">
+      <div id="meterTicks"></div>
+      <div id="meterCenter"></div>
+      <div id="meterFill"></div>
+      <div id="meterThumb"></div>
+    </div>
+  </div>
+  <div class="hud-card dark" id="clubCard">
+    <div class="hud-label">Suggests</div>
+    <div class="hud-value" id="clubName">Driver</div>
+    <div class="hud-label"><span id="clubYards">0</span>y max</div>
+  </div>
+</div>
+
+<div id="startOverlay" class="overlay">
+  <div class="card">
+    <div class="emoji">🏌️‍♂️⛳</div>
+    <h1>Fairway <span>Rush</span></h1>
+    <p class="sub">One hole. One shot at a time.<br>
+    <b>Drag sideways</b> to rotate your aim.<br>
+    <b>Swipe up</b> from the bottom to swing — faster &amp; farther swipes hit harder, a crooked swipe curves the ball.<br>
+    Watch the wind, and mind the trees, sand &amp; water!</p>
+    <div class="themeRow" data-scope="start"></div>
+    <button id="startBtn">Tee Off</button>
+  </div>
+</div>
+
+<div id="endOverlay" class="overlay hidden">
+  <div class="card">
+    <div class="emoji" id="endEmoji">🏁</div>
+    <div class="score-label" id="scoreLabel">PAR</div>
+    <h1 id="endTitle" style="font-size:26px;">Holed in</h1>
+    <div class="big-score" id="finalStrokes">0</div>
+    <div class="best" id="bestScore">Best: —</div>
+    <div class="themeRow" data-scope="end"></div>
+    <button id="againBtn">New Hole</button>
+  </div>
+</div>
+
+<div id="pauseOverlay" class="overlay hidden">
+  <div class="card" style="text-align:left;">
+    <h1 style="text-align:center; font-size:30px;">Paused</h1>
+    <div class="settingsRow">
+      <div class="settingsLabel">Music</div>
+      <div class="segToggle" data-setting="music"><div class="seg" data-val="on">On</div><div class="seg" data-val="off">Off</div></div>
+    </div>
+    <div class="settingsRow">
+      <div class="settingsLabel">Sound FX</div>
+      <div class="segToggle" data-setting="sfx"><div class="seg" data-val="on">On</div><div class="seg" data-val="off">Off</div></div>
+    </div>
+    <div class="settingsRow">
+      <div class="settingsLabel">Trajectory Line</div>
+      <div class="segToggle" data-setting="trajectory"><div class="seg" data-val="on">On</div><div class="seg" data-val="off">Off</div></div>
+    </div>
+    <div class="settingsRow">
+      <div class="settingsLabel">Power Meter</div>
+      <div class="segToggle" data-setting="meter"><div class="seg" data-val="swipe">Swipe</div><div class="seg" data-val="slider">Slider</div></div>
+    </div>
+    <div style="text-align:center; margin-top:18px;">
+      <button id="resumeBtn">Resume</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ================= CONFIG (tune freely) ================= */
+const MIN_SHOT = 1.5, MAX_SHOT = 270;    // yards
+const CURVE_STRENGTH = 0.16;             // lateral yards per (curveFactor * shotYards * t^2)
+const MAX_APEX = 9;                      // arc height scale (yards) - kept modest for the 3D perspective view
+const WIND_SCALE = 2.0;                  // yards of drift per mph at max effect
+const TREE_HEIGHT = 5.5, ROCK_HEIGHT = 2.2;
+const FRICTION_PER_SEC = { fairway:0.16, rough:0.055, green:0.30, bunker:0.02, ob:0.05 };
+const HOLE_R = 1.15;                     // yards
+const HOLE_CAPTURE_SPEED = 6.5;          // yd/s
+const STOP_SPEED = 0.12;                 // yd/s
+const SLOPE_ACCEL = 9;                   // yd/s^2 per unit of ground slope, pushes rolling balls downhill
+const ROTATE_SENSITIVITY = 0.0038;       // radians per px dragged
+const SWING_MIN_PX = 22;                 // ignore tiny accidental swipes
+const SPEED_FULL_PX_PER_MS = 1.65;       // swipe speed considered "full power"
+
+/* ---- clubs: each caps the max achievable shot distance ---- */
+const CLUBS = [
+  { name:'Driver', max:270 },
+  { name:'Iron',   max:180 },
+  { name:'Wedge',  max:90  },
+  { name:'Putter', max:25  }
+];
+
+/* ================= TERRAIN THEMES ================= */
+const THEMES = {
+  grass: {
+    label:'Grassland', emoji:'🌱',
+    skyTop:[90,150,196], skyBottom:[190,222,232], backdrop:'city', ambient:'birds',
+    groundBase:'#456f38',
+    fairway:['#79c267','#6fb75d'], rough:['#4d7a3f','#456f38'], green:['#8fe07a','#7fce6c'],
+    bunkerFill:'#e9d8a6', bunkerStroke:'#c9b47b', waterFill:'#4fa8e0', waterStroke:'#3a86bf',
+    obstacle:'tree', archPost:'#8a6a45', archBeam:'#7a5b3a', archDecor:'#3f8f4d', flagColor:'#e0483f'
+  },
+  desert: {
+    label:'Desert', emoji:'🏜️',
+    skyTop:[92,150,214], skyBottom:[247,206,148], backdrop:'mesas', ambient:'birds',
+    groundBase:'#c9a86a',
+    fairway:['#d8c081','#cdb376'], rough:['#c2a05c','#b3924f'], green:['#dfce8e','#d3c17f'],
+    bunkerFill:'#efe1b0', bunkerStroke:'#cdb87e', waterFill:'#4fb0a6', waterStroke:'#357f78',
+    obstacle:'cactus', archPost:'#8a6a45', archBeam:'#6e5335', archDecor:'#3f8f4d', flagColor:'#e0483f'
+  },
+  space: {
+    label:'Space', emoji:'🪐',
+    skyTop:[8,10,30], skyBottom:[30,20,50], backdrop:'stars', ambient:'ufo',
+    groundBase:'#5b5f6b',
+    fairway:['#8f95a3','#83899a'], rough:['#5b6070','#525665'], green:['#a7adb8','#9aa0ac'],
+    bunkerFill:'#3a3d47', bunkerStroke:'#26282f', waterFill:'#5de0c0', waterStroke:'#33a68c',
+    obstacle:'crater', archPost:'#7d8492', archBeam:'#666d7a', archDecor:'#5de0c0', flagColor:'#ff6b9d'
+  },
+  jungle: {
+    label:'Jungle', emoji:'🌴',
+    skyTop:[76,140,150], skyBottom:[198,224,196], backdrop:'canopy', ambient:'birds',
+    groundBase:'#2f5d34',
+    fairway:['#5fae5b','#54a052'], rough:['#356b38','#2c5b2f'], green:['#7fd06a','#71c05e'],
+    bunkerFill:'#a98a5a', bunkerStroke:'#8a6d42', waterFill:'#3f8f7a', waterStroke:'#2c6b5a',
+    obstacle:'jungle', archPost:'#5a4327', archBeam:'#493420', archDecor:'#5fae5b', flagColor:'#e0483f'
+  },
+  snake: {
+    label:'The Belly', emoji:'🐍',
+    skyTop:[70,14,20], skyBottom:[135,42,44], backdrop:'ribs', ambient:'none',
+    groundBase:'#7a2430',
+    fairway:['#c96a72','#bd5f68'], rough:['#8a3038','#7a2830'], green:['#e08a8f','#d47d83'],
+    bunkerFill:'#4f2026', bunkerStroke:'#3a1519', waterFill:'#9db94a', waterStroke:'#79953a',
+    obstacle:'rib', archPost:'#e8dcc8', archBeam:'#d8c8ae', archDecor:'#9db94a', flagColor:'#e0483f'
+  }
+};
+let currentThemeKey = 'grass';
+function theme(){ return THEMES[currentThemeKey] || THEMES.grass; }
+
+/* ---- pseudo-3D camera ---- */
+const CAMERA_BACK = 3;                   // yards the camera sits behind the ball
+const FOCAL = 15;                        // yards, controls how fast things shrink toward the horizon
+const HEIGHT_K = 1.55;                   // extra vertical scale for object/arc heights on screen
+
+/* ================= CANVAS / VIEW ================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const mini = document.getElementById('minimap');
+const mctx = mini.getContext('2d');
+let W=0, H=0, DPR=1, anchorX=0, horizonY=0, groundBaseY=0, pxPerYardNear=10;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W*DPR; canvas.height = H*DPR;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.imageSmoothingEnabled = false;
+  anchorX = W/2;
+  horizonY = H*0.36;
+  groundBaseY = H*0.985;
+  pxPerYardNear = W*0.034;
+}
+window.addEventListener('resize', resize);
+
+/* ================= AUDIO ================= */
+let AC = null;
+function audio(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(AC&&AC.state==='suspended') AC.resume(); }
+function tone(freq, dur, type='sine', vol=0.16, slideTo=null, delay=0){
+  if(!AC) return;
+  const t0 = AC.currentTime+delay;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t0);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0+dur);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+  o.connect(g); g.connect(AC.destination);
+  o.start(t0); o.stop(t0+dur);
+}
+function noiseBurst(dur, vol=0.2, delay=0){
+  if(!AC) return;
+  const t0 = AC.currentTime+delay;
+  const bufSize = AC.sampleRate*dur;
+  const buf = AC.createBuffer(1, bufSize, AC.sampleRate);
+  const data = buf.getChannelData(0);
+  for(let i=0;i<bufSize;i++) data[i] = (Math.random()*2-1)*(1-i/bufSize);
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const g = AC.createGain(); g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+  src.connect(g); g.connect(AC.destination);
+  src.start(t0);
+}
+const sfx = {
+  swing(){ if(!sfxOn) return; tone(340,0.14,'sine',0.14,700); },
+  treeHit(){ if(!sfxOn) return; noiseBurst(0.18,0.22); tone(140,0.12,'square',0.1); },
+  splash(){ if(!sfxOn) return; tone(300,0.35,'sine',0.14,90); },
+  bunker(){ if(!sfxOn) return; noiseBurst(0.12,0.1); },
+  putt(){ if(!sfxOn) return; tone(500,0.08,'sine',0.1); },
+  holed(){ if(!sfxOn) return; tone(523,0.11,'sine',0.15,null,0); tone(659,0.11,'sine',0.15,null,0.1); tone(784,0.22,'sine',0.16,null,0.2); },
+  ob(){ if(!sfxOn) return; tone(200,0.3,'sawtooth',0.1,90); }
+};
+
+/* ================= SETTINGS STATE ================= */
+let paused = false;
+let musicOn = true;
+let sfxOn = true;
+let showTrajectory = true;
+let meterControlMode = 'swipe'; // 'swipe' | 'slider'
+
+/* ================= 16-BIT ARCADE MUSIC (synthesized, no assets) ================= */
+const MUSIC_TEMPO = 128;
+const MUSIC_STEP_MS = 60000/MUSIC_TEMPO/2; // 8th notes
+const MUSIC_MELODY = [523.25,659.25,783.99,659.25, 587.33,698.46,880.00,698.46, 523.25,659.25,783.99,1046.50, 783.99,659.25,587.33,523.25];
+const MUSIC_BASS   = [130.81,null,null,null, 130.81,null,null,null, 174.61,null,null,null, 196.00,null,null,null];
+let musicTimer = null, musicStep = 0;
+function playMusicStep(i){
+  if(!musicOn || !AC) return;
+  const note = MUSIC_MELODY[i % MUSIC_MELODY.length];
+  if(note) tone(note, (MUSIC_STEP_MS/1000)*0.85, 'square', 0.045);
+  const bassNote = MUSIC_BASS[i % MUSIC_BASS.length];
+  if(bassNote) tone(bassNote, (MUSIC_STEP_MS/1000)*3.6, 'triangle', 0.05);
+  if(i % 2 === 1) noiseBurst(0.04, 0.02);
+}
+function startMusic(){
+  if(musicTimer || !musicOn) return;
+  musicStep = 0;
+  musicTimer = setInterval(()=>{ playMusicStep(musicStep); musicStep++; }, MUSIC_STEP_MS);
+}
+function stopMusic(){
+  if(musicTimer){ clearInterval(musicTimer); musicTimer = null; }
+}
+
+/* ================= MATH HELPERS ================= */
+function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+function smoothstep(e0,e1,x){ const t=clamp((x-e0)/(e1-e0),0,1); return t*t*(3-2*t); }
+function shotDir(a){ return { x:-Math.sin(a), y:Math.cos(a) }; }
+function perpDir(a){ return { x:Math.cos(a), y:Math.sin(a) }; }
+function dist(x1,y1,x2,y2){ return Math.hypot(x2-x1,y2-y1); }
+
+/* world point (+ optional height in yards) -> screen point + scale, given ball position & camera aim angle */
+function project(px,py, ballX,ballY, aim, heightYd){
+  heightYd = heightYd||0;
+  const relx = px-ballX, rely = py-ballY;
+  const f = shotDir(aim), r = perpDir(aim);
+  const forwardComp = relx*f.x + rely*f.y;
+  const rightComp   = relx*r.x + rely*r.y;
+  const d = Math.max(0.4, forwardComp + CAMERA_BACK);
+  const sc = FOCAL/(d+FOCAL);
+  const screenX = anchorX + rightComp*sc*pxPerYardNear;
+  const groundY = horizonY + (groundBaseY-horizonY)*sc;
+  const screenY = groundY - heightYd*sc*pxPerYardNear*HEIGHT_K;
+  return { x:screenX, y:screenY, groundY, scale:sc, forwardComp };
+}
+
+/* ================= COURSE GENERATION ================= */
+let course = null;
+
+function generateCourse(){
+  const holeYards = 140 + Math.floor(Math.random()*340); // 140-480
+  const par = holeYards<200?3 : holeYards<380?4:5;
+
+  const doglegRoll = Math.random();
+  const hasDogleg = holeYards>230 && doglegRoll<0.55;
+  const doglegDir = Math.random()<0.5?-1:1;
+  const doglegOffset = hasDogleg ? (18+Math.random()*28)*doglegDir : 0;
+  const doglegStart = holeYards*(0.32+Math.random()*0.16);
+  const doglegLen = holeYards*0.3;
+
+  function centerlineX(y){
+    if(!hasDogleg) return 0;
+    return doglegOffset*smoothstep(doglegStart, doglegStart+doglegLen, y);
+  }
+
+  const fairwayHalf = 13 + Math.random()*6;
+  const roughExtra = 30 + Math.random()*15;
+  const greenR = 11 + Math.random()*4;
+
+  function fairwayHalfAt(y){
+    const t = clamp(y/holeYards,0,1);
+    const taper = y > holeYards-26 ? smoothstep(holeYards-26, holeYards-4, y) : 0;
+    return fairwayHalf*(1-taper) + greenR*taper;
+  }
+
+  // hazards
+  const bunkers = [];
+  const bunkerCount = 1 + Math.floor(Math.random()*3);
+  for(let i=0;i<bunkerCount;i++){
+    const nearGreen = i===0 || Math.random()<0.5;
+    let by, bx;
+    if(nearGreen){
+      const ang = Math.random()*Math.PI*2;
+      by = holeYards + Math.sin(ang)*(greenR+6);
+      bx = centerlineX(holeYards) + Math.cos(ang)*(greenR+6);
+    } else {
+      by = holeYards*(0.45+Math.random()*0.3);
+      const side = Math.random()<0.5?-1:1;
+      bx = centerlineX(by) + side*(fairwayHalfAt(by)+4+Math.random()*8);
+    }
+    bunkers.push({ x:bx, y:by, rx:7+Math.random()*5, ry:5+Math.random()*4 });
+  }
+
+  const waters = [];
+  if(holeYards>220 && Math.random()<0.4){
+    const wy = holeYards*(0.35+Math.random()*0.25);
+    const width = fairwayHalfAt(wy)*2 + roughExtra*1.4;
+    waters.push({ x: centerlineX(wy)-width/2, y: wy-9, w: width, h: 18 });
+  } else if(Math.random()<0.25){
+    // pond beside the green
+    const ang = Math.random()*Math.PI*2;
+    const gy = holeYards + Math.sin(ang)*(greenR+10);
+    const gx = centerlineX(holeYards) + Math.cos(ang)*(greenR+10);
+    waters.push({ x:gx-9, y:gy-9, w:18, h:18 });
+  }
+
+  const obstacles = []; // trees & rocks
+  const treeClusters = 4 + Math.floor(Math.random()*6);
+  for(let i=0;i<treeClusters;i++){
+    const cy = 20 + Math.random()*(holeYards-40);
+    const side = Math.random()<0.5?-1:1;
+    const cx = centerlineX(cy) + side*(fairwayHalfAt(cy)+8+Math.random()*roughExtra*0.7);
+    const clusterSize = 1+Math.floor(Math.random()*4);
+    for(let j=0;j<clusterSize;j++){
+      obstacles.push({
+        type: Math.random()<0.85?'tree':'rock',
+        x: cx + (Math.random()-0.5)*10,
+        y: cy + (Math.random()-0.5)*10,
+        r: 2.2+Math.random()*1.6,
+        height: Math.random()<0.85?TREE_HEIGHT:ROCK_HEIGHT
+      });
+    }
+  }
+
+  const windAngle = Math.random()*Math.PI*2;
+  const windSpeed = Math.floor(Math.random()*Math.random()*20);
+
+  // --- purely decorative greenery & structures (no collision, no gameplay effect) ---
+  const bushes = [];
+  const bushSpots = 10 + Math.floor(Math.random()*10);
+  for(let i=0;i<bushSpots;i++){
+    const by = 8 + Math.random()*(holeYards+greenR-4);
+    const side = Math.random()<0.5?-1:1;
+    const edge = centerlineX(by) + side*(fairwayHalfAt(by) + 2 + Math.random()*(roughExtra*0.5));
+    bushes.push({ x:edge, y:by, r:1.1+Math.random()*1.3, tone:Math.random() });
+  }
+  const archHalfW = fairwayHalf*0.85;
+  const arch = { x: centerlineX(14), y: 14, halfW: archHalfW, height: 4.6 };
+
+  // --- topography: smooth procedural elevation (yards), used for rendering + slope physics on rolls ---
+  const elevAmp = 1.4 + Math.random()*3.2;      // how hilly this course is overall
+  const elevFreq1 = 0.022 + Math.random()*0.018;
+  const elevFreq2 = 0.055 + Math.random()*0.03;
+  const elevPhaseX = Math.random()*Math.PI*2;
+  const elevPhaseY = Math.random()*Math.PI*2;
+  const elevPhase2 = Math.random()*Math.PI*2;
+  function elevationAt(x,y){
+    const e1 = Math.sin(x*elevFreq1+elevPhaseX)*Math.cos(y*elevFreq1*0.8+elevPhaseY);
+    const e2 = Math.sin((x+y*0.6)*elevFreq2 + elevPhase2);
+    // flatten right around the green so putts aren't dominated by noise near the cup
+    const greenFlatten = smoothstep(greenR*2.2, greenR*0.9, dist(x,y,centerlineX(holeYards),holeYards));
+    return (e1*0.7+e2*0.3)*elevAmp*(0.35+0.65*greenFlatten);
+  }
+
+  return {
+    holeYards, par, hasDogleg, doglegDir,
+    centerlineX, fairwayHalfAt, roughExtra, greenR,
+    bunkers, waters, obstacles, bushes, arch, elevationAt,
+    windDir: { x:Math.cos(windAngle), y:Math.sin(windAngle) }, windSpeed,
+    teePos: { x:0, y:0 },
+    holePos: { x: centerlineX(holeYards), y: holeYards }
+  };
+}
+
+function pointInEllipse(px,py,ex,ey,rx,ry){
+  const dx=(px-ex)/rx, dy=(py-ey)/ry;
+  return dx*dx+dy*dy<=1;
+}
+function pointInRect(px,py,rx,ry,rw,rh){
+  return px>=rx && px<=rx+rw && py>=ry && py<=ry+rh;
+}
+
+function terrainAt(x,y){
+  for(const w of course.waters) if(pointInRect(x,y,w.x,w.y,w.w,w.h)) return 'water';
+  for(const b of course.bunkers) if(pointInEllipse(x,y,b.x,b.y,b.rx,b.ry)) return 'bunker';
+  if(dist(x,y,course.holePos.x,course.holePos.y) <= course.greenR) return 'green';
+  const half = course.fairwayHalfAt(y);
+  const cx = course.centerlineX(y);
+  const d = Math.abs(x-cx);
+  if(y>=0 && y<=course.holeYards+course.greenR){
+    if(d<=half) return 'fairway';
+    if(d<=half+course.roughExtra) return 'rough';
+  } else {
+    if(d<=half+course.roughExtra*0.6) return 'rough';
+  }
+  return 'ob';
+}
+
+/* ================= GAME STATE ================= */
+let game = null;
+function newGame(){
+  course = generateCourse();
+  game = {
+    strokes: 0,
+    ball: { x:0, y:0, h:0 },
+    aim: angleForDir(course.holePos.x-0, course.holePos.y-0),
+    phase: 'aiming', // aiming | flight | rolling | holed
+    flightPath: null, flightStart: 0, flightDur: 0,
+    rollVel: {x:0,y:0},
+    lastShotStart: {x:0,y:0},
+    penaltyPending: false,
+    firstShotTaken: false,
+    clubIndex: 0
+  };
+  document.getElementById('strokeNum').textContent = '0';
+  document.getElementById('parLabel').textContent = 'Par '+course.par;
+  updateWindHUD();
+  updatePinHUD();
+  updateClubHUD();
+}
+function angleForDir(dx,dy){
+  const len = Math.hypot(dx,dy)||1;
+  dx/=len; dy/=len;
+  return Math.atan2(-dx, dy);
+}
+
+function updateWindHUD(){
+  document.getElementById('windSpeed').textContent = course.windSpeed;
+  updatePinHUD();
+}
+function updatePinHUD(){
+  const d = Math.round(dist(game.ball.x,game.ball.y,course.holePos.x,course.holePos.y));
+  document.getElementById('hudYards').textContent = d;
+  document.getElementById('pinYards').textContent = d;
+}
+function updateClubHUD(){
+  const d = dist(game.ball.x,game.ball.y,course.holePos.x,course.holePos.y);
+  let suggestIdx;
+  if(d>200) suggestIdx=0;
+  else if(d>90) suggestIdx=1;
+  else if(d>25) suggestIdx=2;
+  else suggestIdx=3;
+  const suggested = CLUBS[suggestIdx];
+  document.getElementById('clubName').textContent = suggested.name;
+  document.getElementById('clubYards').textContent = Math.min(suggested.max, Math.max(3, Math.round(d*1.05)));
+  game.clubIndex = suggestIdx; // default to the suggested club; player can override via the selector
+  updateSelectedClubHUD();
+}
+function updateSelectedClubHUD(){
+  const club = CLUBS[game.clubIndex];
+  document.getElementById('selectedClubName').textContent = club.name;
+  document.getElementById('clubRange').textContent = Math.ceil(MIN_SHOT)+'-'+Math.round(club.max);
+}
+function cycleClub(dir){
+  if(!game || game.phase!=='aiming') return;
+  game.clubIndex = (game.clubIndex + dir + CLUBS.length) % CLUBS.length;
+  updateSelectedClubHUD();
+}
+
+/* ================= TOAST ================= */
+let toastTimer = null;
+function toast(msg, ms=1600){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), ms);
+}
+
+/* ================= SHOT COMPUTATION ================= */
+function computeShotPath(startX,startY, aim, power, loft, curveFactor){
+  const clubMax = Math.min(MAX_SHOT, CLUBS[game.clubIndex].max);
+  const shotYards = MIN_SHOT + Math.pow(power,1.3)*(clubMax-MIN_SHOT);
+  const apex = loft*MAX_APEX;
+  const f = shotDir(aim), r = perpDir(aim);
+  const windForward = course.windDir.x*f.x + course.windDir.y*f.y;
+  const windRight   = course.windDir.x*r.x + course.windDir.y*r.y;
+  const apexFactor = 0.4+0.6*loft;
+  function sample(t){
+    const fwd = shotYards*t;
+    const curveOff = curveFactor*CURVE_STRENGTH*shotYards*t*t;
+    const windMag = WIND_SCALE*course.windSpeed*apexFactor*(shotYards/MAX_SHOT)*t*t;
+    const rightTotal = curveOff + windMag*windRight;
+    const forwardTotal = fwd + windMag*windForward;
+    const x = startX + f.x*forwardTotal + r.x*rightTotal;
+    const y = startY + f.y*forwardTotal + r.y*rightTotal;
+    const height = apex*4*t*(1-t);
+    return { x, y, height };
+  }
+  const durationMs = clamp(480 + shotYards*3.1, 480, 1500);
+  return { sample, shotYards, apex, durationMs, aim };
+}
+
+function resolveFlightCollision(path){
+  const STEPS = 70;
+  for(let i=1;i<=STEPS;i++){
+    const t=i/STEPS;
+    const p=path.sample(t);
+    for(const ob of course.obstacles){
+      if(p.height < ob.height){
+        const dx=p.x-ob.x, dy=p.y-ob.y;
+        if(dx*dx+dy*dy < ob.r*ob.r) return { t, p, ob };
+      }
+    }
+  }
+  return null;
+}
+
+function beginShot(power, loft, curveFactor){
+  const aim = game.aim;
+  if(CLUBS[game.clubIndex].name==='Putter') loft = Math.min(loft, 0.12);
+  game.lastShotStart = { x: game.ball.x, y: game.ball.y };
+  game.strokes++;
+  document.getElementById('strokeNum').textContent = game.strokes;
+  const path = computeShotPath(game.ball.x, game.ball.y, aim, power, loft, curveFactor);
+  const collision = resolveFlightCollision(path);
+  sfx.swing();
+  if(Math.abs(curveFactor)>0.4) toast(curveFactor>0?'Sliced it! 🌀':'Hooked it! 🌀', 1100);
+
+  game.phase = 'flight';
+  game.flightStart = performance.now();
+  if(collision){
+    game.flightPath = { sample: t => {
+        const ct = collision.t*t; // compress full path into collision segment for the visible animation
+        return path.sample(ct);
+      }, durationMs: path.durationMs*collision.t, isCollision:true, collObj: collision };
+  } else {
+    game.flightPath = path; game.flightPath.isCollision=false;
+  }
+}
+
+function landAfterFlight(){
+  const path = game.flightPath;
+  if(path.isCollision){
+    const end = path.sample(1);
+    sfx.treeHit();
+    toast(path.collObj.ob.type==='tree' ? 'Hit a tree! 🌳' : 'Hit a rock! 🪨', 1300);
+    const deflect = (Math.random()-0.5)*1.2;
+    const dirAngle = Math.atan2(end.y-game.lastShotStart.y, end.x-game.lastShotStart.x) + deflect;
+    game.ball.x = end.x; game.ball.y = end.y; game.ball.h = 0;
+    resolveObstacleOverlaps();
+    const speed = 3 + Math.random()*4;
+    game.rollVel = { x: Math.cos(dirAngle)*speed, y: Math.sin(dirAngle)*speed };
+    game.phase = 'rolling';
+    return;
+  }
+  const end = path.sample(1);
+  const terrain = terrainAt(end.x, end.y);
+  if(terrain==='water'){
+    sfx.splash();
+    game.strokes++;
+    document.getElementById('strokeNum').textContent = game.strokes;
+    toast('SPLASH! +1 penalty 💦', 1700);
+    game.ball.x = game.lastShotStart.x; game.ball.y = game.lastShotStart.y; game.ball.h = 0;
+    game.phase = 'aiming';
+    game.aim = angleForDir(course.holePos.x-game.ball.x, course.holePos.y-game.ball.y);
+    updateWindHUD(); updateClubHUD();
+    return;
+  }
+  if(terrain==='ob'){
+    sfx.ob();
+    game.strokes++;
+    document.getElementById('strokeNum').textContent = game.strokes;
+    toast('OUT OF BOUNDS! +1 penalty 🚫', 1700);
+    game.ball.x = game.lastShotStart.x; game.ball.y = game.lastShotStart.y; game.ball.h = 0;
+    game.phase = 'aiming';
+    game.aim = angleForDir(course.holePos.x-game.ball.x, course.holePos.y-game.ball.y);
+    updateWindHUD(); updateClubHUD();
+    return;
+  }
+  // fairway / rough / bunker / green -> rolling
+  const p2 = path.sample(0.985);
+  const tang = Math.atan2(end.y-p2.y, end.x-p2.x);
+  let rollSpeed = path.shotYards*0.12; // proportional to shot size, so short putts stay controllable
+  if(terrain==='bunker'){ rollSpeed*=0.32; sfx.bunker(); }
+  else if(terrain==='rough'){ rollSpeed*=0.65; }
+  else if(terrain==='green'){ sfx.putt(); }
+  game.ball.x = end.x; game.ball.y = end.y; game.ball.h = 0;
+  game.rollVel = { x: Math.cos(tang)*rollSpeed, y: Math.sin(tang)*rollSpeed };
+  game.phase = 'rolling';
+}
+
+function resolveObstacleOverlaps(){
+  let anyMoved = false;
+  for(let iter=0; iter<6; iter++){
+    let moved = false;
+    for(const ob of course.obstacles){
+      const dx=game.ball.x-ob.x, dy=game.ball.y-ob.y;
+      const distSq = dx*dx+dy*dy;
+      const minR = ob.r*1.15;
+      if(distSq < minR*minR){
+        const a = Math.atan2(dy,dx);
+        game.ball.x = ob.x+Math.cos(a)*minR;
+        game.ball.y = ob.y+Math.sin(a)*minR;
+        moved = true; anyMoved = true;
+      }
+    }
+    if(!moved) break;
+  }
+  return anyMoved;
+}
+
+function updateRolling(dt){
+  const spd = Math.hypot(game.rollVel.x, game.rollVel.y);
+  const dHole = dist(game.ball.x, game.ball.y, course.holePos.x, course.holePos.y);
+
+  if(dHole < 2.6 && spd < 4.2 && dHole > HOLE_R){
+    const pull = 6.5*(dt/1000);
+    const nx = (course.holePos.x-game.ball.x)/dHole, ny=(course.holePos.y-game.ball.y)/dHole;
+    game.rollVel.x += nx*pull; game.rollVel.y += ny*pull;
+  }
+
+  // topography: slopes push a moving ball downhill. Gated by a speed floor so a
+  // resting ball always still settles (guarantees the roll always terminates).
+  if(spd > 0.6){
+    const EPS = 0.6;
+    const hC = course.elevationAt(game.ball.x, game.ball.y);
+    const hX = course.elevationAt(game.ball.x+EPS, game.ball.y);
+    const hY = course.elevationAt(game.ball.x, game.ball.y+EPS);
+    const slopeX = (hX-hC)/EPS, slopeY = (hY-hC)/EPS;
+    game.rollVel.x += -slopeX*SLOPE_ACCEL*(dt/1000);
+    game.rollVel.y += -slopeY*SLOPE_ACCEL*(dt/1000);
+  }
+
+  game.ball.x += game.rollVel.x*(dt/1000);
+  game.ball.y += game.rollVel.y*(dt/1000);
+
+  const terrain = terrainAt(game.ball.x, game.ball.y);
+  if(terrain==='water'){
+    sfx.splash(); game.strokes++; document.getElementById('strokeNum').textContent=game.strokes;
+    toast('SPLASH! +1 penalty 💦',1700);
+    game.ball.x=game.lastShotStart.x; game.ball.y=game.lastShotStart.y; game.ball.h=0;
+    game.phase='aiming'; game.aim=angleForDir(course.holePos.x-game.ball.x, course.holePos.y-game.ball.y);
+    updateWindHUD(); updateClubHUD(); return;
+  }
+  if(terrain==='ob'){
+    sfx.ob(); game.strokes++; document.getElementById('strokeNum').textContent=game.strokes;
+    toast('OUT OF BOUNDS! +1 penalty 🚫',1700);
+    game.ball.x=game.lastShotStart.x; game.ball.y=game.lastShotStart.y; game.ball.h=0;
+    game.phase='aiming'; game.aim=angleForDir(course.holePos.x-game.ball.x, course.holePos.y-game.ball.y);
+    updateWindHUD(); updateClubHUD(); return;
+  }
+  // tree/rock collision while rolling (checks ALL nearby obstacles, not just the first found)
+  if(resolveObstacleOverlaps()){
+    game.rollVel.x*=0.25; game.rollVel.y*=0.25;
+  }
+
+  const distNow = dist(game.ball.x, game.ball.y, course.holePos.x, course.holePos.y);
+  if(distNow < HOLE_R && spd < HOLE_CAPTURE_SPEED){
+    holeComplete(); return;
+  }
+
+  const fr = FRICTION_PER_SEC[terrain] ?? FRICTION_PER_SEC.rough;
+  const decay = Math.pow(fr, dt/1000);
+  game.rollVel.x*=decay; game.rollVel.y*=decay;
+
+  if(Math.hypot(game.rollVel.x,game.rollVel.y) < STOP_SPEED){
+    game.rollVel = {x:0,y:0};
+    game.phase = 'aiming';
+    game.aim = angleForDir(course.holePos.x-game.ball.x, course.holePos.y-game.ball.y);
+    const tName = terrain==='bunker'?'Bunker 🏖️': terrain==='rough'?'In the rough 🌾': terrain==='green'?'On the green! ⛳':'Fairway ✅';
+    toast(tName, 1200);
+    updateClubHUD();
+  }
+  updateWindHUD();
+}
+
+function scoreLabel(strokes, par){
+  if(strokes===1) return { label:'HOLE IN ONE!', emoji:'🎉' };
+  const diff = strokes-par;
+  if(diff<=-3) return { label:'ALBATROSS!', emoji:'🦅' };
+  if(diff===-2) return { label:'EAGLE!', emoji:'🦅' };
+  if(diff===-1) return { label:'BIRDIE!', emoji:'🐦' };
+  if(diff===0) return { label:'PAR', emoji:'⛳' };
+  if(diff===1) return { label:'BOGEY', emoji:'😅' };
+  if(diff===2) return { label:'DOUBLE BOGEY', emoji:'😬' };
+  return { label:'+'+diff, emoji:'🫠' };
+}
+
+function holeComplete(){
+  sfx.holed();
+  game.phase = 'holed';
+  const info = scoreLabel(game.strokes, course.par);
+  document.getElementById('scoreLabel').textContent = info.label;
+  document.getElementById('endEmoji').textContent = info.emoji;
+  document.getElementById('endTitle').textContent = 'Holed in';
+  document.getElementById('finalStrokes').textContent = game.strokes;
+  let best = null;
+  try{ best = localStorage.getItem('frush_best_diff'); }catch(e){}
+  const diff = game.strokes-course.par;
+  let bestDiff = best===null ? null : parseInt(best,10);
+  if(bestDiff===null || diff<bestDiff){
+    bestDiff = diff;
+    try{ localStorage.setItem('frush_best_diff', String(diff)); }catch(e){}
+  }
+  const bd = bestDiff;
+  document.getElementById('bestScore').textContent = 'Best: ' + (bd===0?'Par': bd<0? bd+' under par' : '+'+bd);
+  setTimeout(()=>{ document.getElementById('endOverlay').classList.remove('hidden'); }, 500);
+}
+
+/* ================= INPUT ================= */
+let input = { active:false, mode:null, startX:0, startY:0, startT:0, lastX:0, lastY:0, path:[] };
+let livePreviewParams = null; // {power,loft,curveFactor} while a swing/slider gesture is in progress, for the trajectory line
+
+function deriveShotParams(startX,startY,startT, endX,endY,endT, path){
+  const upDist = -(endY-startY);
+  if(upDist < SWING_MIN_PX) return null;
+  const duration = Math.max(1, endT-startT);
+  const speed = upDist/duration;
+  const distanceNorm = clamp(upDist/(H*0.6),0,1);
+  const speedNorm = clamp(speed/SPEED_FULL_PX_PER_MS,0,1);
+  const rawIntensity = clamp(0.5*speedNorm+0.5*distanceNorm,0,1);
+  const clubEffortCap = 0.75; // fixed swipe-effort threshold (matches the marker's fixed position) - same for every club
+  const power = clamp(rawIntensity/clubEffortCap, 0, 1); // swiping past the marker just clamps at max - no extra distance
+  const loft = clamp(0.35*distanceNorm+0.85*speedNorm,0,1);
+  // curve: max signed perpendicular deviation from the straight start->end line
+  let maxDev=0;
+  const lineLen = Math.hypot(endX-startX,endY-startY)||1;
+  for(const p of path){
+    const cross = ((endX-startX)*(p.y-startY) - (endY-startY)*(p.x-startX))/lineLen;
+    if(Math.abs(cross)>Math.abs(maxDev)) maxDev=cross;
+  }
+  const curveFactor = clamp(maxDev/70, -1, 1);
+  return { power, loft, curveFactor };
+}
+
+function onDown(x,y){
+  if(!game || game.phase!=='aiming' || paused) return;
+  audio();
+  input.active = true; input.mode = null;
+  input.startX=x; input.startY=y; input.startT=performance.now();
+  input.lastX=x; input.lastY=y; input.path=[{x,y,t:input.startT}];
+}
+function onMove(x,y){
+  if(!input.active) return;
+  const dx = x-input.startX, dy = y-input.startY;
+  if(input.mode===null){
+    if(Math.hypot(dx,dy) > 8){
+      if(meterControlMode==='slider'){ input.mode='rotate'; } // swinging happens via the meter itself in slider mode
+      else {
+        const startYFrac = input.startY/H;
+        if(Math.abs(dy) > Math.abs(dx)*1.15 && dy<0 && startYFrac>0.4){ input.mode='swing'; }
+        else if(Math.abs(dx) > Math.abs(dy)*1.15){ input.mode='rotate'; }
+        else { input.mode='swing'; }
+      }
+    }
+  }
+  if(input.mode==='rotate'){
+    const ddx = x-input.lastX;
+    game.aim -= ddx*ROTATE_SENSITIVITY;
+  } else if(input.mode==='swing'){
+    const distPx = clamp(-(y-input.startY), 0, H);
+    const norm = clamp(distPx/(H*0.6),0,1);
+    document.getElementById('meterFill').style.width = (norm*100)+'%';
+    input.path.push({x,y,t:performance.now()});
+    livePreviewParams = deriveShotParams(input.startX,input.startY,input.startT, x,y,performance.now(), input.path);
+    return;
+  }
+  input.lastX=x; input.lastY=y;
+  input.path.push({x,y,t:performance.now()});
+}
+function onUp(){
+  if(!input.active) return;
+  document.getElementById('meterFill').style.width='0%';
+  livePreviewParams = null;
+  if(input.mode==='swing'){
+    const params = deriveShotParams(input.startX,input.startY,input.startT, input.lastX,input.lastY,performance.now(), input.path);
+    if(params){
+      beginShot(params.power, params.loft, params.curveFactor);
+      if(!game.firstShotTaken){ game.firstShotTaken = true; document.getElementById('hint').style.opacity = '0'; }
+    }
+  }
+  input.active=false; input.mode=null; input.path=[];
+}
+
+canvas.addEventListener('pointerdown', e=>{ onDown(e.clientX,e.clientY); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('pointermove', e=>{ onMove(e.clientX,e.clientY); e.preventDefault(); }, {passive:false});
+window.addEventListener('pointerup', e=>{ onUp(); });
+window.addEventListener('pointercancel', e=>{ onUp(); });
+
+/* ---- alternate control: drag the meter itself to set power ---- */
+let meterDragging = false;
+const meterTrackEl = document.getElementById('meterTrack');
+const meterThumbEl = document.getElementById('meterThumb');
+function updateMeterFromClientX(clientX){
+  const rect = meterTrackEl.getBoundingClientRect();
+  const frac = clamp((clientX-rect.left)/Math.max(1,rect.width), 0, 1);
+  document.getElementById('meterFill').style.width = (frac*100)+'%';
+  meterThumbEl.style.left = (frac*100)+'%';
+  const power = clamp(frac/0.75, 0, 1);
+  livePreviewParams = { power, loft: frac, curveFactor: 0 };
+  return frac;
+}
+meterTrackEl.addEventListener('pointerdown', e=>{
+  if(meterControlMode!=='slider' || !game || game.phase!=='aiming' || paused) return;
+  e.preventDefault(); e.stopPropagation();
+  meterDragging = true;
+  updateMeterFromClientX(e.clientX);
+}, {passive:false});
+window.addEventListener('pointermove', e=>{
+  if(!meterDragging) return;
+  e.preventDefault();
+  updateMeterFromClientX(e.clientX);
+}, {passive:false});
+window.addEventListener('pointerup', e=>{
+  if(!meterDragging) return;
+  meterDragging = false;
+  const frac = updateMeterFromClientX(e.clientX);
+  document.getElementById('meterFill').style.width='0%';
+  livePreviewParams = null;
+  if(frac > 0.03 && game && game.phase==='aiming'){
+    const power = clamp(frac/0.75, 0, 1);
+    beginShot(power, frac, 0);
+    if(!game.firstShotTaken){ game.firstShotTaken = true; document.getElementById('hint').style.opacity = '0'; }
+  }
+});
+
+/* ================= RENDER (pseudo-3D behind-golfer view) ================= */
+function skyColorAt(frac){
+  // frac 0 = horizon, 1 = top of sky
+  const top = theme().skyTop, bot = theme().skyBottom;
+  const r = Math.round(bot[0]+(top[0]-bot[0])*frac);
+  const g = Math.round(bot[1]+(top[1]-bot[1])*frac);
+  const b = Math.round(bot[2]+(top[2]-bot[2])*frac);
+  return 'rgb('+r+','+g+','+b+')';
+}
+function seededRng(seed){
+  let s = seed>>>0;
+  return function(){ s = (s*1103515245+12345)>>>0; return (s%1000)/1000; };
+}
+
+function drawSky(){
+  const grad = ctx.createLinearGradient(0,0,0,horizonY);
+  grad.addColorStop(0, skyColorAt(1));
+  grad.addColorStop(1, skyColorAt(0));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,horizonY+2);
+
+  const baseSeed = Math.floor(course? course.holeYards*7+1 : 200) + currentThemeKey.length*911;
+  const bd = theme().backdrop;
+  if(bd==='city') drawBackdropCity(baseSeed);
+  else if(bd==='mesas') drawBackdropMesas(baseSeed);
+  else if(bd==='stars') drawBackdropStars(baseSeed);
+  else if(bd==='canopy') drawBackdropCanopy(baseSeed);
+  else if(bd==='ribs') drawBackdropRibs(baseSeed);
+
+  const amb = theme().ambient;
+  if(amb==='birds'){ drawAirplanes(); drawBirds(); }
+  else if(amb==='ufo'){ drawUFO(); }
+}
+
+function drawBackdropCity(baseSeed){
+  // pixel clouds
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  const cloudSpots = [[0.15,0.28,1],[0.62,0.18,1.3],[0.82,0.34,0.8],[0.35,0.12,0.7]];
+  for(const [cx,cy,s] of cloudSpots){
+    const x=cx*W, y=cy*horizonY, u=14*s;
+    ctx.fillRect(x-u,y,u*2,u*0.6);
+    ctx.fillRect(x-u*0.6,y-u*0.4,u*1.6,u*0.6);
+  }
+  // parallax rolling hills, farthest first
+  const hillLayers = [
+    { colorTop:'rgba(126,158,150,.55)', h:0.30, freq:1.6 },
+    { colorTop:'rgba(101,150,110,.6)',  h:0.22, freq:2.3 }
+  ];
+  for(const layer of hillLayers){
+    const rnd = seededRng(baseSeed + Math.floor(layer.freq*100));
+    const baseY = horizonY - (horizonY*0.02);
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY+2);
+    const bumps = 6;
+    const bumpW = W/bumps;
+    ctx.lineTo(0, baseY - horizonY*layer.h*0.5);
+    for(let i=0;i<=bumps;i++){
+      const x = i*bumpW;
+      const amp = horizonY*layer.h*(0.5+rnd()*0.5);
+      const y = baseY - amp;
+      ctx.quadraticCurveTo(x-bumpW*0.5, y-amp*0.15, x, y);
+    }
+    ctx.lineTo(W, horizonY+2);
+    ctx.closePath();
+    ctx.fillStyle = layer.colorTop;
+    ctx.fill();
+  }
+  // hazy skyline silhouette with lit windows
+  let bx=0; const rnd = seededRng(baseSeed);
+  let bIdx=0;
+  while(bx<W){
+    const bw = 14+rnd()*22;
+    const bh = 12+rnd()*38;
+    const shade = 145+Math.floor(rnd()*25);
+    ctx.fillStyle = 'rgba('+shade+','+(shade+18)+','+(shade+32)+',.6)';
+    ctx.fillRect(bx, horizonY-bh, bw, bh);
+    const winRng = seededRng(baseSeed + bIdx*97 + 3);
+    const cols = Math.max(1,Math.floor(bw/6));
+    const rows = Math.max(1,Math.floor(bh/7));
+    for(let cx2=0; cx2<cols; cx2++){
+      for(let cy2=0; cy2<rows; cy2++){
+        if(winRng() < 0.4){
+          const wx = bx+3+cx2*6, wy = horizonY-bh+4+cy2*7;
+          ctx.fillStyle = winRng()<0.5 ? 'rgba(255,232,150,.85)' : 'rgba(60,75,95,.6)';
+          ctx.fillRect(wx, wy, 2.5, 2.5);
+        }
+      }
+    }
+    bx += bw+2+rnd()*4;
+    bIdx++;
+  }
+  ctx.fillStyle = 'rgba(110,150,175,.65)';
+  ctx.fillRect(0, horizonY-6, W, 6);
+}
+
+function drawBackdropMesas(baseSeed){
+  // a hazy sun
+  ctx.fillStyle = 'rgba(255,235,190,.75)';
+  ctx.beginPath(); ctx.arc(W*0.78, horizonY*0.32, horizonY*0.16, 0, Math.PI*2); ctx.fill();
+  // layered flat-topped mesas
+  const layers = [
+    { color:'rgba(196,140,96,.55)', h:0.34 },
+    { color:'rgba(168,108,72,.65)', h:0.22 }
+  ];
+  let li=0;
+  for(const layer of layers){
+    const rnd = seededRng(baseSeed+li*777); li++;
+    let bx=0;
+    while(bx<W){
+      const bw = 40+rnd()*70;
+      const bh = horizonY*layer.h*(0.5+rnd()*0.6);
+      ctx.fillStyle = layer.color;
+      ctx.beginPath();
+      ctx.moveTo(bx, horizonY);
+      ctx.lineTo(bx+bw*0.18, horizonY-bh);
+      ctx.lineTo(bx+bw*0.82, horizonY-bh);
+      ctx.lineTo(bx+bw, horizonY);
+      ctx.closePath(); ctx.fill();
+      bx += bw+10+rnd()*20;
+    }
+  }
+  // a few drifting sand-haze wisps instead of clouds
+  ctx.fillStyle = 'rgba(255,255,255,.25)';
+  for(const [cx,cy,s] of [[0.2,0.2,1],[0.6,0.14,0.8]]){
+    const x=cx*W, y=cy*horizonY, u=16*s;
+    ctx.fillRect(x-u,y,u*2.2,u*0.4);
+  }
+}
+
+function drawBackdropStars(baseSeed){
+  const rnd = seededRng(baseSeed);
+  const tNow = performance.now()/1000;
+  for(let i=0;i<70;i++){
+    const x = rnd()*W, y = rnd()*horizonY*0.95;
+    const twinkle = 0.4+0.6*Math.abs(Math.sin(tNow*1.5+i*12.9));
+    ctx.fillStyle = 'rgba(255,255,255,'+(0.5*twinkle+0.2).toFixed(2)+')';
+    ctx.fillRect(x, y, i%7===0?2:1, i%7===0?2:1);
+  }
+  // a ringed planet + a moon
+  ctx.fillStyle = '#d99a5b';
+  ctx.beginPath(); ctx.arc(W*0.22, horizonY*0.28, horizonY*0.1, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'rgba(230,200,160,.8)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(W*0.22, horizonY*0.28, horizonY*0.17, horizonY*0.045, -0.4, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = '#cfd6e0';
+  ctx.beginPath(); ctx.arc(W*0.75, horizonY*0.16, horizonY*0.06, 0, Math.PI*2); ctx.fill();
+  // distant crater silhouette hills instead of city
+  const rnd2 = seededRng(baseSeed+55);
+  ctx.fillStyle = 'rgba(40,42,55,.8)';
+  let bx=0;
+  while(bx<W){
+    const bw = 30+rnd2()*40, bh = 8+rnd2()*16;
+    ctx.beginPath(); ctx.ellipse(bx+bw/2, horizonY, bw/2, bh, 0, Math.PI, 0); ctx.fill();
+    bx += bw*0.85;
+  }
+}
+
+function drawBackdropCanopy(baseSeed){
+  // low mist band
+  ctx.fillStyle = 'rgba(230,240,225,.4)';
+  ctx.fillRect(0, horizonY-horizonY*0.16, W, horizonY*0.16);
+  const layers = [ { color:'rgba(40,90,55,.55)', h:0.30 }, { color:'rgba(24,70,40,.7)', h:0.20 } ];
+  let li=0;
+  for(const layer of layers){
+    const rnd = seededRng(baseSeed+li*333); li++;
+    let bx=0;
+    ctx.fillStyle = layer.color;
+    ctx.beginPath(); ctx.moveTo(0,horizonY+2);
+    while(bx<=W){
+      const r1 = 10+rnd()*14;
+      const y = horizonY - horizonY*layer.h*(0.5+rnd()*0.6);
+      ctx.lineTo(bx, y);
+      ctx.arc(bx+r1, y, r1, Math.PI, 0);
+      bx += r1*2;
+    }
+    ctx.lineTo(W,horizonY+2); ctx.closePath(); ctx.fill();
+  }
+}
+
+function drawBackdropRibs(baseSeed){
+  // dim pulsing vein backdrop instead of open sky - we're inside something, after all
+  const t = performance.now()/1000;
+  const pulse = 0.5+0.5*Math.sin(t*1.1);
+  ctx.fillStyle = 'rgba(90,20,26,'+(0.25+0.15*pulse)+')';
+  ctx.fillRect(0,0,W,horizonY+2);
+  const rnd = seededRng(baseSeed);
+  ctx.strokeStyle = 'rgba(150,40,45,.5)';
+  ctx.lineWidth = 2;
+  for(let i=0;i<8;i++){
+    const x0 = rnd()*W;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0);
+    ctx.quadraticCurveTo(x0+ (rnd()-0.5)*60, horizonY*0.5, x0+(rnd()-0.5)*40, horizonY);
+    ctx.stroke();
+  }
+  // arched ribs closing overhead from both sides
+  ctx.strokeStyle = 'rgba(230,220,205,.5)';
+  ctx.lineWidth = 5;
+  const ribCount = 5;
+  for(let i=0;i<ribCount;i++){
+    const yFrac = 0.12+i*0.16;
+    const y = horizonY*yFrac;
+    ctx.beginPath();
+    ctx.moveTo(-10, y+18);
+    ctx.quadraticCurveTo(W*0.5, y-14, W+10, y+18);
+    ctx.stroke();
+  }
+}
+
+function drawUFO(){
+  const t = performance.now()/1000;
+  const cycleLen = 40, flightPortion=0.5;
+  const ph = (t%cycleLen)/cycleLen;
+  if(ph>flightPortion) return;
+  const travel = ph/flightPortion;
+  const x = -30 + travel*(W+60);
+  const y = horizonY*0.2 + Math.sin(travel*Math.PI*3)*8;
+  ctx.fillStyle = 'rgba(120,220,180,.25)';
+  ctx.beginPath(); ctx.moveTo(x-3,y+3); ctx.lineTo(x+3,y+3); ctx.lineTo(x,y+20); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#8fa0ac';
+  ctx.beginPath(); ctx.ellipse(x,y+2,11,3.5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#cfe8e0';
+  ctx.beginPath(); ctx.arc(x,y-1,5,Math.PI,0); ctx.fill();
+}
+
+function drawBirds(){
+  const t = performance.now()/1000;
+  const flocks = [ {spd:14,y:0.16,ph:0}, {spd:18,y:0.24,ph:2.1}, {spd:11,y:0.10,ph:4.4} ];
+  ctx.strokeStyle = 'rgba(50,55,60,.7)';
+  ctx.lineWidth = 1.6;
+  for(const f of flocks){
+    const cycle = (t*f.spd + f.ph*40) % (W+80) - 40;
+    const x = cycle, y = horizonY*f.y;
+    const flap = Math.sin(t*9+f.ph)*3;
+    ctx.beginPath();
+    ctx.moveTo(x-6, y+flap*0.4);
+    ctx.quadraticCurveTo(x-3, y-4-flap, x, y);
+    ctx.quadraticCurveTo(x+3, y-4+flap, x+6, y+flap*0.4);
+    ctx.stroke();
+  }
+}
+
+function drawAirplanes(){
+  const t = performance.now()/1000;
+  const planes = [
+    { cycleLen:55, flightPortion:0.62, yFrac:0.14, dir:1,  phase:0    },
+    { cycleLen:80, flightPortion:0.55, yFrac:0.26, dir:-1, phase:23   },
+    { cycleLen:110,flightPortion:0.48, yFrac:0.07, dir:1,  phase:61   }
+  ];
+  for(const p of planes){
+    const ph = ((t+p.phase) % p.cycleLen)/p.cycleLen;
+    if(ph > p.flightPortion) continue;
+    const travel = ph/p.flightPortion; // 0..1
+    const y = horizonY*p.yFrac;
+    const x = p.dir>0 ? (-40 + travel*(W+80)) : (W+40 - travel*(W+80));
+    const trailBack = p.dir>0 ? -70 : 70;
+    const trailX = p.dir>0 ? Math.max(-40, x+trailBack) : Math.min(W+40, x+trailBack);
+    // contrail
+    ctx.strokeStyle = 'rgba(255,255,255,.5)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(trailX, y+2);
+    ctx.lineTo(x-6*p.dir, y+0.6);
+    ctx.stroke();
+    // tiny plane body (nose points in travel direction)
+    ctx.fillStyle = '#e7edf2';
+    ctx.fillRect(x-4*p.dir, y-1, 9*p.dir, 2);
+    ctx.fillRect(x, y-3, 2, 6);
+  }
+}
+
+function groundStripColor(yBand, terr){
+  const stripe = yBand%2===0;
+  const t = theme();
+  if(terr==='green') return stripe?t.green[0]:t.green[1];
+  if(terr==='rough') return stripe?t.rough[0]:t.rough[1];
+  return stripe?t.fairway[0]:t.fairway[1]; // fairway
+}
+
+function hash2(x,y){
+  const v = Math.sin(x*127.1+y*311.7)*43758.5453;
+  return v - Math.floor(v);
+}
+function shadeHex(hex, factor){
+  const n = parseInt(hex.slice(1),16);
+  let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  r = clamp(Math.round(r*factor),0,255); g = clamp(Math.round(g*factor),0,255); b = clamp(Math.round(b*factor),0,255);
+  return 'rgb('+r+','+g+','+b+')';
+}
+
+function drawGround(){
+  ctx.fillStyle = theme().groundBase;
+  ctx.fillRect(0,horizonY,W,H-horizonY);
+
+  const startY = Math.max(-10, game.ball.y-30);
+  const endY = Math.min(course.holeYards+course.greenR+30, game.ball.y+260);
+  const step = 6;
+  for(let y=Math.floor(startY/step)*step; y<endY; y+=step){
+    const y2 = y+step;
+    const cxA = course.centerlineX(y), halfA = course.fairwayHalfAt(y);
+    const cxB = course.centerlineX(y2), halfB = course.fairwayHalfAt(y2);
+    const roughA = halfA+course.roughExtra, roughB = halfB+course.roughExtra;
+    const terrMid = terrainAt(course.centerlineX((y+y2)/2), (y+y2)/2);
+    drawGroundQuad(cxA-roughA,y,cxB-roughB,y2, cxA-halfA,y,cxB-halfB,y2, groundStripColor(Math.floor(y/step),'rough'));
+    drawGroundQuad(cxA-halfA,y,cxB-halfB,y2, cxA+halfA,y,cxB+halfB,y2, groundStripColor(Math.floor(y/step), terrMid==='green'?'green':'fairway'));
+    drawGroundQuad(cxA+halfA,y,cxB+halfB,y2, cxA+roughA,y,cxB+roughB,y2, groundStripColor(Math.floor(y/step),'rough'));
+  }
+}
+function fwdOf(px,py){
+  const relx=px-game.ball.x, rely=py-game.ball.y;
+  const f=shotDir(game.aim);
+  return relx*f.x+rely*f.y;
+}
+function drawGroundQuad(x1a,y1a,x1b,y1b, x2a,y2a,x2b,y2b, color){
+  // quad has 4 corners: (x1a,y1a)-(x1b,y1b) is the left edge (near->far), (x2a,y2a)-(x2b,y2b) is the right edge
+  if(fwdOf(x1b,y1b) + CAMERA_BACK < 0.2 && fwdOf(x1a,y1a) + CAMERA_BACK < 0.2) return;
+  const h1a = course.elevationAt(x1a,y1a), h1b = course.elevationAt(x1b,y1b);
+  const h2a = course.elevationAt(x2a,y2a), h2b = course.elevationAt(x2b,y2b);
+  const p1 = project(x1a,y1a, game.ball.x, game.ball.y, game.aim, h1a);
+  const p2 = project(x1b,y1b, game.ball.x, game.ball.y, game.aim, h1b);
+  const p3 = project(x2b,y2b, game.ball.x, game.ball.y, game.aim, h2b);
+  const p4 = project(x2a,y2a, game.ball.x, game.ball.y, game.aim, h2a);
+  ctx.beginPath();
+  ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.lineTo(p3.x,p3.y); ctx.lineTo(p4.x,p4.y);
+  ctx.closePath();
+  // terraced elevation shading, like contour bands on a topographic map
+  const avgH = (h1a+h1b+h2a+h2b)/4;
+  const band = Math.round(avgH/1.1);
+  const shade = clamp(1 + band*0.055, 0.72, 1.28);
+  ctx.fillStyle = shadeHex(color, shade);
+  ctx.fill();
+  // faint contour line where this tile crosses a band boundary
+  if(Math.round(h1a/1.1)!==Math.round(h2a/1.1) || Math.round(h1b/1.1)!==Math.round(h2b/1.1)){
+    ctx.strokeStyle = 'rgba(30,45,25,.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+  }
+
+  // subtle deterministic grass-texture speckle on foreground tiles only (cheap + no flicker)
+  if(p1.scale > 0.42){
+    const bx0 = Math.min(p1.x,p2.x,p3.x,p4.x), bx1 = Math.max(p1.x,p2.x,p3.x,p4.x);
+    const by0 = Math.min(p1.y,p2.y,p3.y,p4.y), by1 = Math.max(p1.y,p2.y,p3.y,p4.y);
+    const area = (bx1-bx0)*(by1-by0);
+    const speckleCount = Math.min(9, Math.floor(area/260));
+    for(let i=0;i<speckleCount;i++){
+      const hx = hash2(x1a*1.7+i*3.1, y1a*0.9+i*7.7);
+      const hy = hash2(x1a*0.6+i*9.3, y1a*1.3+i*2.2);
+      const sx = bx0 + hx*(bx1-bx0);
+      const sy = by0 + hy*(by1-by0);
+      const dark = hash2(x1a+i*5.3, y1a-i*4.1) > 0.5;
+      ctx.fillStyle = dark ? 'rgba(20,50,20,.13)' : 'rgba(255,255,215,.11)';
+      ctx.fillRect(sx, sy, 1.6, 1.6);
+    }
+  }
+}
+
+function drawEllipseGround(x,y,rx,ry,fill,stroke){
+  if(fwdOf(x,y)+CAMERA_BACK < 0.2) return;
+  const h = course.elevationAt(x,y);
+  const N=14;
+  ctx.beginPath();
+  for(let i=0;i<=N;i++){
+    const a = i/N*Math.PI*2;
+    const wx = x+Math.cos(a)*rx, wy = y+Math.sin(a)*ry;
+    const p = project(wx,wy, game.ball.x, game.ball.y, game.aim, h);
+    if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+}
+
+function drawHazards(){
+  const t = theme();
+  for(const b of course.bunkers) drawEllipseGround(b.x,b.y,b.rx,b.ry,t.bunkerFill,t.bunkerStroke);
+  for(const w of course.waters){
+    const cx=w.x+w.w/2, cy=w.y+w.h/2;
+    drawEllipseGround(cx,cy,w.w/2,w.h/2,t.waterFill,t.waterStroke);
+  }
+}
+
+function drawBillboard(px,py,heightYd,drawFn){
+  if(fwdOf(px,py)+CAMERA_BACK < 0.15) return;
+  const groundH = course.elevationAt(px,py);
+  const base = project(px,py, game.ball.x, game.ball.y, game.aim, groundH);
+  const top = project(px,py, game.ball.x, game.ball.y, game.aim, groundH+heightYd);
+  drawFn(base, top, base.scale);
+}
+
+function drawObstacles(){
+  const obstKind = theme().obstacle; // visual skin only - collision geometry is unchanged
+  const items = course.obstacles.map(o=>({kind:o.type, x:o.x, y:o.y, r:o.r, height:o.height, tone:0}))
+    .concat(course.bushes.map(b=>({kind:'bush', x:b.x, y:b.y, r:b.r, height:1.5+b.r*0.4, tone:b.tone})));
+  items.sort((a,b)=>fwdOf(b.x,b.y)-fwdOf(a.x,a.y));
+  for(const it of items){
+    drawBillboard(it.x,it.y, it.height, (base,top,sc)=>{
+      const w = it.r*sc*pxPerYardNear*2.1;
+      const th = (base.y-top.y);
+      if(it.kind==='tree'){
+        drawTallObstacle(obstKind, base, top, w, th);
+      } else if(it.kind==='rock'){
+        drawRockVariant(obstKind, base, w);
+      } else { // bush - low decorative greenery/scenery, no collision
+        drawBushVariant(obstKind, base, w, it.tone);
+      }
+    });
+  }
+}
+
+function drawTallObstacle(kind, base, top, w, th){
+  if(kind==='cactus'){
+    ctx.fillStyle = '#3f8f4d';
+    ctx.fillRect(base.x-w*0.09, top.y+th*0.1, w*0.18, th*0.9);
+    ctx.fillRect(base.x-w*0.09, top.y+th*0.35, w*0.32, w*0.15);
+    ctx.fillRect(base.x+w*0.05, top.y+th*0.5, w*0.15, th*0.32);
+    ctx.fillRect(base.x-w*0.34, top.y+th*0.5, w*0.15, th*0.28);
+    ctx.fillStyle = 'rgba(255,255,255,.4)';
+    ctx.fillRect(base.x-w*0.06, top.y+th*0.15, w*0.03, th*0.7);
+  } else if(kind==='crater'){
+    // a jagged dark rock spire, space-themed
+    ctx.fillStyle = '#3a3d47';
+    ctx.beginPath();
+    ctx.moveTo(base.x-w*0.32, base.y);
+    ctx.lineTo(base.x-w*0.14, top.y+th*0.25);
+    ctx.lineTo(base.x+w*0.05, top.y);
+    ctx.lineTo(base.x+w*0.28, top.y+th*0.35);
+    ctx.lineTo(base.x+w*0.34, base.y);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5de0c0';
+    ctx.beginPath(); ctx.arc(base.x+w*0.05, top.y+th*0.1, Math.max(1,w*0.05), 0, Math.PI*2); ctx.fill();
+  } else if(kind==='jungle'){
+    ctx.fillStyle='#4a3218'; ctx.fillRect(base.x-w*0.08, top.y+th*0.12, w*0.16, th*0.55);
+    ctx.beginPath(); ctx.arc(base.x, top.y+th*0.22, w*0.62, 0, Math.PI*2); ctx.fillStyle='#1f4a28'; ctx.fill();
+    ctx.beginPath(); ctx.arc(base.x-w*0.22, top.y+th*0.1, w*0.46, 0, Math.PI*2); ctx.fillStyle='#276b34'; ctx.fill();
+    ctx.beginPath(); ctx.arc(base.x+w*0.24, top.y+th*0.16, w*0.4, 0, Math.PI*2); ctx.fillStyle='#2f7d3d'; ctx.fill();
+    // hanging vine
+    ctx.strokeStyle='rgba(63,143,77,.7)'; ctx.lineWidth=Math.max(1,w*0.03);
+    ctx.beginPath(); ctx.moveTo(base.x-w*0.3, top.y+th*0.3); ctx.quadraticCurveTo(base.x-w*0.35, top.y+th*0.65, base.x-w*0.25, base.y-th*0.05); ctx.stroke();
+  } else if(kind==='rib'){
+    ctx.strokeStyle='#e8dcc8'; ctx.lineWidth=Math.max(2,w*0.14);
+    ctx.beginPath();
+    ctx.moveTo(base.x-w*0.05, base.y);
+    ctx.quadraticCurveTo(base.x+w*0.5, top.y+th*0.15, base.x-w*0.02, top.y);
+    ctx.stroke();
+    ctx.fillStyle='#d8c8ae';
+    ctx.beginPath(); ctx.arc(base.x-w*0.02, top.y, Math.max(1.5,w*0.12), 0, Math.PI*2); ctx.fill();
+  } else { // 'tree' (grassland default)
+    ctx.fillStyle='#6b4a2f'; ctx.fillRect(base.x-w*0.06, top.y+th*0.15, w*0.12, th*0.5);
+    ctx.beginPath(); ctx.arc(base.x, top.y+th*0.28, w*0.55, 0, Math.PI*2); ctx.fillStyle='#255c33'; ctx.fill();
+    ctx.beginPath(); ctx.arc(base.x-w*0.18, top.y+th*0.15, w*0.4, 0, Math.PI*2); ctx.fillStyle='#2e7a42'; ctx.fill();
+  }
+}
+
+function drawRockVariant(kind, base, w){
+  if(kind==='rib'){
+    ctx.fillStyle='#c9b79e';
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.1, w*0.32, w*0.22, 0.3,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(base.x+w*0.18, base.y-w*0.16, w*0.2, w*0.15, -0.4,0,Math.PI*2); ctx.fill();
+  } else if(kind==='crater'){
+    ctx.fillStyle='#7d8492';
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.1, w*0.5, w*0.34, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(0,0,0,.2)';
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.14, w*0.28, w*0.16, 0,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.12, w*0.5, w*0.32, 0,0,Math.PI*2); ctx.fillStyle='#9aa5ad'; ctx.fill();
+  }
+}
+
+function drawBushVariant(kind, base, w, tone){
+  if(kind==='cactus'){ // small barrel cactus / scrub clump
+    ctx.fillStyle = tone>0.5?'#4a9455':'#417f49';
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.12, w*0.3, w*0.24, 0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=1;
+    for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(base.x+i*w*0.1, base.y); ctx.lineTo(base.x+i*w*0.1, base.y-w*0.24); ctx.stroke(); }
+  } else if(kind==='crater'){ // small mineral/crystal outcrop
+    const c = tone>0.5?'#7fe0c8':'#5de0c0';
+    ctx.fillStyle='#454955';
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.08, w*0.34, w*0.2, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=c;
+    ctx.beginPath(); ctx.moveTo(base.x-w*0.08,base.y-w*0.1); ctx.lineTo(base.x,base.y-w*0.32); ctx.lineTo(base.x+w*0.09,base.y-w*0.1); ctx.closePath(); ctx.fill();
+  } else if(kind==='jungle'){ // fern clump
+    ctx.fillStyle = tone>0.5?'#3f8f4d':'#357d43';
+    for(let i=-2;i<=2;i++){
+      ctx.beginPath();
+      ctx.ellipse(base.x+i*w*0.13, base.y-w*0.1-Math.abs(i)*w*0.03, w*0.16, w*0.28, i*0.25, 0, Math.PI*2);
+      ctx.fill();
+    }
+  } else if(kind==='rib'){ // small fleshy growth/node
+    ctx.fillStyle = tone>0.5?'#c96a72':'#b85c64';
+    ctx.beginPath(); ctx.ellipse(base.x-w*0.15, base.y-w*0.1, w*0.22, w*0.18, 0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(base.x+w*0.14, base.y-w*0.08, w*0.2, w*0.16, 0,0,Math.PI*2); ctx.fill();
+  } else { // grassland flowering bush
+    const g1 = tone>0.5 ? '#3f8f4d' : '#357d43';
+    const g2 = tone>0.5 ? '#4fae5c' : '#448f52';
+    ctx.beginPath(); ctx.ellipse(base.x-w*0.22, base.y-w*0.14, w*0.32, w*0.22, 0,0,Math.PI*2); ctx.fillStyle=g1; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(base.x+w*0.2, base.y-w*0.12, w*0.34, w*0.24, 0,0,Math.PI*2); ctx.fillStyle=g1; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(base.x, base.y-w*0.22, w*0.4, w*0.28, 0,0,Math.PI*2); ctx.fillStyle=g2; ctx.fill();
+    if(tone>0.75){
+      ctx.fillStyle='#f2d9e8';
+      ctx.fillRect(base.x-w*0.05, base.y-w*0.26, 2, 2);
+      ctx.fillRect(base.x+w*0.12, base.y-w*0.2, 2, 2);
+    }
+  }
+}
+
+function drawArch(){
+  const a = course.arch;
+  const t = theme();
+  if(fwdOf(a.x,a.y)+CAMERA_BACK < 0.1) return;
+  const hL = course.elevationAt(a.x-a.halfW, a.y), hR = course.elevationAt(a.x+a.halfW, a.y);
+  const leftBase = project(a.x-a.halfW, a.y, game.ball.x, game.ball.y, game.aim, hL);
+  const leftTop  = project(a.x-a.halfW, a.y, game.ball.x, game.ball.y, game.aim, hL+a.height);
+  const rightBase= project(a.x+a.halfW, a.y, game.ball.x, game.ball.y, game.aim, hR);
+  const rightTop = project(a.x+a.halfW, a.y, game.ball.x, game.ball.y, game.aim, hR+a.height);
+  const sc = leftBase.scale;
+  const postW = Math.max(1.5, 3.2*sc*pxPerYardNear*0.5);
+  ctx.strokeStyle = t.archPost;
+  ctx.lineWidth = postW;
+  ctx.beginPath(); ctx.moveTo(leftBase.x,leftBase.y); ctx.lineTo(leftTop.x,leftTop.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rightBase.x,rightBase.y); ctx.lineTo(rightTop.x,rightTop.y); ctx.stroke();
+  // curved top beam
+  ctx.strokeStyle = t.archBeam;
+  ctx.lineWidth = Math.max(2, postW*1.1);
+  ctx.beginPath();
+  ctx.moveTo(leftTop.x, leftTop.y);
+  ctx.quadraticCurveTo((leftTop.x+rightTop.x)/2, Math.min(leftTop.y,rightTop.y)-14*sc, rightTop.x, rightTop.y);
+  ctx.stroke();
+  // decorative tufts along the beam (vines / lights / bone knobs / crystals depending on theme)
+  ctx.fillStyle = t.archDecor;
+  for(let i=0;i<5;i++){
+    const tt = i/4;
+    const vx = leftTop.x + (rightTop.x-leftTop.x)*tt;
+    const vy = leftTop.y + (rightTop.y-leftTop.y)*tt - 10*sc*tt*(1-tt)*4;
+    ctx.beginPath(); ctx.arc(vx, vy+3*sc, Math.max(1.5,4*sc), 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawFlagAndHole(){
+  drawEllipseGround(course.holePos.x, course.holePos.y, HOLE_R, HOLE_R*0.55, '#1a1a1a', '#000');
+  drawBillboard(course.holePos.x, course.holePos.y, 3.6, (base,top,sc)=>{
+    ctx.strokeStyle='#ddd'; ctx.lineWidth=Math.max(1,2*sc);
+    ctx.beginPath(); ctx.moveTo(base.x,base.y); ctx.lineTo(top.x,top.y); ctx.stroke();
+    const flagW = 16*sc, flagH=8*sc;
+    ctx.beginPath(); ctx.moveTo(top.x,top.y); ctx.lineTo(top.x+flagW,top.y+flagH*0.5); ctx.lineTo(top.x,top.y+flagH); ctx.closePath();
+    ctx.fillStyle=theme().flagColor; ctx.fill();
+  });
+}
+
+function drawBall(){
+  let bx=game.ball.x, by=game.ball.y, bh=game.ball.h;
+  if(game.phase==='flight'){
+    const t = clamp((performance.now()-game.flightStart)/game.flightPath.durationMs,0,1);
+    const s = game.flightPath.sample(t);
+    bx=s.x; by=s.y; bh=s.height;
+  }
+  const groundH = course.elevationAt(bx,by);
+  const base = project(bx,by, game.ball.x, game.ball.y, game.aim, groundH);
+  const lifted = project(bx,by, game.ball.x, game.ball.y, game.aim, groundH+bh);
+  const r = Math.max(2, 4.5*base.scale + bh*0.15);
+  ctx.beginPath(); ctx.ellipse(base.x, base.y, r*1.1, r*0.5, 0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(lifted.x, lifted.y, r, 0, Math.PI*2);
+  ctx.fillStyle='#fff'; ctx.fill(); ctx.strokeStyle='rgba(0,0,0,.2)'; ctx.lineWidth=1; ctx.stroke();
+}
+
+function drawGolfer(){
+  if(game.phase!=='aiming') return;
+  const groundH = course.elevationAt(game.ball.x, game.ball.y);
+  const p = project(game.ball.x, game.ball.y, game.ball.x, game.ball.y, game.aim, groundH);
+  const s = p.scale;
+  const gx = p.x - 46*s, gy = p.y;
+  const u = 62*s; // unit scale for the figure
+  ctx.save();
+  // legs
+  ctx.fillStyle = '#d8cba3';
+  ctx.fillRect(gx-u*0.16, gy-u*0.52, u*0.14, u*0.52);
+  ctx.fillRect(gx+u*0.02, gy-u*0.5, u*0.14, u*0.5);
+  // shoes
+  ctx.fillStyle='#f2f2f2';
+  ctx.fillRect(gx-u*0.2, gy-u*0.06, u*0.2, u*0.08);
+  ctx.fillRect(gx-u*0.0, gy-u*0.06, u*0.2, u*0.08);
+  // torso (bent forward)
+  ctx.fillStyle = '#2b3a5c';
+  ctx.save();
+  ctx.translate(gx-u*0.02, gy-u*0.55);
+  ctx.rotate(-0.35);
+  ctx.fillRect(-u*0.16, -u*0.42, u*0.34, u*0.42);
+  ctx.restore();
+  // head + cap
+  ctx.beginPath(); ctx.arc(gx-u*0.28, gy-u*0.92, u*0.14, 0, Math.PI*2); ctx.fillStyle='#c48a5f'; ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(gx-u*0.3, gy-u*0.98, u*0.15, Math.PI, Math.PI*1.85); ctx.fill();
+  ctx.fillRect(gx-u*0.44, gy-u*0.99, u*0.34, u*0.06);
+  // arms + club
+  ctx.strokeStyle='#2b3a5c'; ctx.lineWidth=u*0.09; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(gx-u*0.1, gy-u*0.78); ctx.lineTo(gx+u*0.22, gy-u*0.28); ctx.stroke();
+  ctx.strokeStyle='#333'; ctx.lineWidth=u*0.045;
+  ctx.beginPath(); ctx.moveTo(gx+u*0.22, gy-u*0.28); ctx.lineTo(gx+u*0.34, gy-u*0.02); ctx.stroke();
+  ctx.fillStyle='#222'; ctx.fillRect(gx+u*0.3, gy-u*0.06, u*0.1, u*0.06);
+  ctx.restore();
+}
+
+function drawMinimap(){
+  mctx.clearRect(0,0,76,118);
+  mctx.fillStyle=theme().groundBase; mctx.fillRect(0,0,76,118);
+  const s = 108/course.holeYards;
+  const ox=38, oy=6;
+  function tx(x,y){ return { x: ox+x*s, y: oy+y*s }; }
+  mctx.strokeStyle='rgba(255,255,255,.5)'; mctx.lineWidth=7; mctx.lineCap='round';
+  mctx.beginPath();
+  for(let y=0;y<=course.holeYards;y+=8){
+    const p = tx(course.centerlineX(y), y);
+    if(y===0) mctx.moveTo(p.x,p.y); else mctx.lineTo(p.x,p.y);
+  }
+  mctx.stroke();
+  for(const w of course.waters){ mctx.fillStyle='#4FA8E0'; const p=tx(w.x,w.y); mctx.fillRect(p.x,p.y,w.w*s,w.h*s); }
+  for(const b of course.bunkers){ mctx.fillStyle='#E9D8A6'; const p=tx(b.x,b.y); mctx.beginPath(); mctx.ellipse(p.x,p.y,b.rx*s+1,b.ry*s+1,0,0,7); mctx.fill(); }
+  const hp = tx(course.holePos.x, course.holePos.y);
+  mctx.fillStyle='#111'; mctx.beginPath(); mctx.arc(hp.x,hp.y,3,0,7); mctx.fill();
+  const bp = tx(game.ball.x, game.ball.y);
+  mctx.fillStyle='#e0483f'; mctx.beginPath(); mctx.arc(bp.x,bp.y,3.2,0,7); mctx.fill();
+}
+
+function drawWindArrow(){
+  const f = shotDir(game.aim), r = perpDir(game.aim);
+  const wf = course.windDir.x*f.x+course.windDir.y*f.y;
+  const wr = course.windDir.x*r.x+course.windDir.y*r.y;
+  const ang = Math.atan2(wr, -wf);
+  document.getElementById('windArrow').style.transform = 'rotate('+(ang)+'rad)';
+}
+
+function updatePinBubble(){
+  const bubble = document.getElementById('pinBubble');
+  const p = project(course.holePos.x, course.holePos.y, game.ball.x, game.ball.y, game.aim, 3.6);
+  if(fwdOf(course.holePos.x,course.holePos.y)+CAMERA_BACK < 0.2 || p.y < 6 || p.y > H*0.75 || p.x < -40 || p.x > W+40){
+    bubble.classList.add('hidden');
+  } else {
+    bubble.classList.remove('hidden');
+    bubble.style.left = p.x+'px';
+    bubble.style.top = (p.y-6)+'px';
+  }
+}
+
+function drawTrajectoryPreview(){
+  if(!showTrajectory || !livePreviewParams || game.phase!=='aiming') return;
+  const path = computeShotPath(game.ball.x, game.ball.y, game.aim, livePreviewParams.power, livePreviewParams.loft, livePreviewParams.curveFactor);
+  ctx.save();
+  ctx.setLineDash([5,6]);
+  ctx.strokeStyle = 'rgba(255,232,120,.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const N = 22;
+  for(let i=0;i<=N;i++){
+    const t = i/N;
+    const s = path.sample(t);
+    const groundH = course.elevationAt(s.x,s.y);
+    const p = project(s.x,s.y, game.ball.x, game.ball.y, game.aim, groundH+s.height);
+    if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+  // landing marker
+  const end = path.sample(1);
+  const endH = course.elevationAt(end.x,end.y);
+  const ep = project(end.x,end.y, game.ball.x, game.ball.y, game.aim, endH);
+  ctx.beginPath(); ctx.arc(ep.x, ep.y, 4, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,232,120,.85)'; ctx.fill();
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  drawSky();
+  drawGround();
+  drawHazards();
+  drawArch();
+  drawFlagAndHole();
+  drawObstacles();
+  drawGolfer();
+  drawTrajectoryPreview();
+  drawBall();
+  drawWindArrow();
+  drawMinimap();
+  updatePinBubble();
+  updatePinHUD();
+}
+
+/* ================= MAIN LOOP ================= */
+let lastT = performance.now();
+function frame(now){
+  if(paused){ lastT = now; requestAnimationFrame(frame); return; }
+  const dt = Math.min(50, now-lastT); lastT = now;
+
+  if(game.phase==='flight'){
+    const t = clamp((now-game.flightStart)/game.flightPath.durationMs,0,1);
+    if(t>=1) landAfterFlight();
+  } else if(game.phase==='rolling'){
+    updateRolling(dt);
+  }
+
+  render();
+
+  requestAnimationFrame(frame);
+}
+
+/* ================= TERRAIN PICKER ================= */
+function buildThemeRows(){
+  document.querySelectorAll('.themeRow').forEach(row=>{
+    Object.keys(THEMES).forEach(key=>{
+      const t = THEMES[key];
+      const btn = document.createElement('div');
+      btn.className = 'themeBtn'+(key===currentThemeKey?' active':'');
+      btn.dataset.theme = key;
+      btn.innerHTML = '<div class="te">'+t.emoji+'</div><div class="tl">'+t.label+'</div>';
+      btn.addEventListener('click', ()=>{
+        currentThemeKey = key;
+        document.querySelectorAll('.themeBtn').forEach(b=>b.classList.toggle('active', b.dataset.theme===key));
+      });
+      row.appendChild(btn);
+    });
+  });
+}
+buildThemeRows();
+
+/* ================= START / RESTART ================= */
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  audio();
+  document.getElementById('startOverlay').classList.add('hidden');
+  newGame();
+  startMusic();
+});
+document.getElementById('againBtn').addEventListener('click', ()=>{
+  document.getElementById('endOverlay').classList.add('hidden');
+  newGame();
+});
+document.getElementById('clubPrev').addEventListener('click', e=>{ e.stopPropagation(); cycleClub(-1); });
+document.getElementById('clubNext').addEventListener('click', e=>{ e.stopPropagation(); cycleClub(1); });
+
+/* ================= PAUSE / SETTINGS ================= */
+function setSegToggle(settingName, value){
+  document.querySelectorAll('.segToggle[data-setting="'+settingName+'"] .seg').forEach(seg=>{
+    seg.classList.toggle('on', seg.dataset.val===value);
+  });
+}
+function applySettingsUI(){
+  setSegToggle('music', musicOn?'on':'off');
+  setSegToggle('sfx', sfxOn?'on':'off');
+  setSegToggle('trajectory', showTrajectory?'on':'off');
+  setSegToggle('meter', meterControlMode);
+  meterTrackEl.classList.toggle('slider-mode', meterControlMode==='slider');
+  meterThumbEl.classList.toggle('show', meterControlMode==='slider');
+}
+document.getElementById('pauseBtn').addEventListener('click', ()=>{
+  if(!game || game.phase==='holed') return;
+  paused = true;
+  applySettingsUI();
+  document.getElementById('pauseOverlay').classList.remove('hidden');
+});
+document.getElementById('resumeBtn').addEventListener('click', ()=>{
+  paused = false;
+  lastT = performance.now();
+  document.getElementById('pauseOverlay').classList.add('hidden');
+});
+document.querySelectorAll('.segToggle .seg').forEach(seg=>{
+  seg.addEventListener('click', ()=>{
+    const row = seg.parentElement;
+    const setting = row.dataset.setting;
+    const val = seg.dataset.val;
+    if(setting==='music'){ musicOn = val==='on'; if(musicOn) startMusic(); else stopMusic(); }
+    else if(setting==='sfx'){ sfxOn = val==='on'; }
+    else if(setting==='trajectory'){ showTrajectory = val==='on'; }
+    else if(setting==='meter'){ meterControlMode = val; }
+    applySettingsUI();
+  });
+});
+
+resize();
+newGame();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
