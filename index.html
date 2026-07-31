@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evermore Arcade — Build Shelf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0E1420;
+    --panel:#18202F;
+    --panel-hi:#1F2A3C;
+    --edge:#2A3648;
+    --amber:#F5B93F;
+    --mint:#5AD1A6;
+    --paper:#E8ECF3;
+    --muted:#8593AB;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Archivo',system-ui,sans-serif;
+    min-height:100vh;
+    padding:0 20px 80px;
+    background-image:radial-gradient(1200px 500px at 50% -180px,rgba(245,185,63,.07),transparent 70%);
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+
+  /* ---------- masthead ---------- */
+  header{
+    padding:52px 0 30px;
+    border-bottom:1px solid var(--edge);
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:24px;
+    flex-wrap:wrap;
+  }
+  .title{
+    font-size:clamp(30px,5.2vw,50px);
+    font-weight:900;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    line-height:1;
+  }
+  .title span{color:var(--amber)}
+  .sub{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12.5px;
+    color:var(--muted);
+    margin-top:12px;
+    letter-spacing:.02em;
+  }
+  .count{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12.5px;
+    color:var(--mint);
+    border:1px solid var(--edge);
+    border-radius:999px;
+    padding:7px 15px;
+    white-space:nowrap;
+  }
+
+  /* ---------- search ---------- */
+  .bar{margin:28px 0 34px}
+  input[type=search]{
+    width:100%;
+    background:var(--panel);
+    border:1px solid var(--edge);
+    color:var(--paper);
+    border-radius:var(--radius);
+    padding:14px 18px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:14px;
+  }
+  input[type=search]::placeholder{color:var(--muted)}
+  input[type=search]:focus{outline:2px solid var(--amber);outline-offset:2px;border-color:transparent}
+
+  /* ---------- grid ---------- */
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+    gap:20px;
+  }
+  .card{
+    background:var(--panel);
+    border:1px solid var(--edge);
+    border-radius:var(--radius);
+    overflow:hidden;
+    text-decoration:none;
+    color:inherit;
+    display:flex;
+    flex-direction:column;
+    transition:transform .18s ease,border-color .18s ease,background .18s ease;
+  }
+  .card:hover,.card:focus-visible{
+    transform:translateY(-4px);
+    border-color:var(--amber);
+    background:var(--panel-hi);
+  }
+  .card:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+
+  /* the "screen" — signature element */
+  .screen{
+    aspect-ratio:4/3;
+    position:relative;
+    display:grid;
+    place-items:center;
+    overflow:hidden;
+  }
+  .screen img{width:100%;height:100%;object-fit:cover;display:block}
+  .mono-mark{
+    font-size:44px;
+    font-weight:900;
+    letter-spacing:.06em;
+    color:rgba(255,255,255,.92);
+    text-shadow:0 2px 14px rgba(0,0,0,.35);
+  }
+  .screen::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,.22) 0 1px,
+      transparent 1px 3px
+    );
+    opacity:0;
+    transition:opacity .18s ease;
+    pointer-events:none;
+  }
+  .card:hover .screen::after,.card:focus-visible .screen::after{opacity:1}
+
+  .plate{
+    padding:14px 15px 16px;
+    border-top:1px solid var(--edge);
+  }
+  .name{font-size:16px;font-weight:700;letter-spacing:.01em}
+  .desc{
+    font-size:13px;
+    color:var(--muted);
+    margin-top:5px;
+    line-height:1.45;
+    display:-webkit-box;
+    -webkit-line-clamp:2;
+    -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .path{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    color:var(--muted);
+    margin-top:10px;
+    opacity:.75;
+  }
+
+  /* ---------- states ---------- */
+  .note{
+    border:1px dashed var(--edge);
+    border-radius:var(--radius);
+    padding:34px 26px;
+    text-align:center;
+    color:var(--muted);
+    font-size:14.5px;
+    line-height:1.6;
+  }
+  .note strong{color:var(--paper);display:block;margin-bottom:8px;font-size:16px}
+  .note code{
+    font-family:'JetBrains Mono',monospace;
+    background:var(--panel);
+    padding:2px 7px;
+    border-radius:5px;
+    color:var(--amber);
+    font-size:13px;
+  }
+
+  /* attract-mode load reveal */
+  @media (prefers-reduced-motion:no-preference){
+    .card{animation:rise .42s cubic-bezier(.2,.7,.3,1) backwards}
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+  @media(max-width:520px){
+    header{padding:36px 0 24px}
+    .grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+    .mono-mark{font-size:32px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1 class="title">Evermore <span>Arcade</span></h1>
+      <p class="sub" id="sub">reading /games …</p>
+    </div>
+    <div class="count" id="count">—</div>
+  </header>
+
+  <div class="bar">
+    <input type="search" id="q" placeholder="filter games…" autocomplete="off" aria-label="Filter games">
+  </div>
+
+  <div id="out"></div>
+
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+   CONFIG — leave blank to auto-detect from the GitHub Pages URL.
+   Only fill these in if auto-detect misses (e.g. custom domain).
+------------------------------------------------------------------ */
+const CONFIG = {
+  owner:  "",      // e.g. "legend-evermore"
+  repo:   "",      // e.g. "arcade-games"
+  branch: "main",
+  dir:    "games"  // folder that holds one subfolder per game
+};
+
+const out   = document.getElementById('out');
+const qEl   = document.getElementById('q');
+const subEl = document.getElementById('sub');
+const cntEl = document.getElementById('count');
+let GAMES = [];
+
+/* Work out owner/repo from the URL when possible. */
+function detectRepo(){
+  if (CONFIG.owner && CONFIG.repo) return {owner:CONFIG.owner, repo:CONFIG.repo};
+  const host = location.hostname;
+  const m = host.match(/^([^.]+)\.github\.io$/i);
+  if (!m) return null;
+  const owner = m[1];
+  const seg = location.pathname.split('/').filter(Boolean);
+  const repo = seg.length ? seg[0] : `${owner}.github.io`;
+  return {owner, repo};
+}
+
+/* Deterministic colour per game name — no thumbnail assets required. */
+function hueOf(str){
+  let h = 0;
+  for (let i=0;i<str.length;i++) h = (h*31 + str.charCodeAt(i)) % 360;
+  return h;
+}
+function prettify(slug){
+  return slug.replace(/[-_]+/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/* Try each folder's optional meta.json for a nicer title/blurb/thumbnail. */
+async function loadMeta(slug){
+  const base = `${CONFIG.dir}/${slug}`;
+  const fallback = {slug, base, title:prettify(slug), desc:'', thumb:''};
+  try{
+    const r = await fetch(`${base}/meta.json`, {cache:'no-store'});
+    if (!r.ok) return fallback;
+    const m = await r.json();
+    return {
+      slug, base,
+      title: m.title || fallback.title,
+      desc:  m.desc  || '',
+      thumb: m.thumb ? `${base}/${m.thumb}` : ''
+    };
+  }catch{ return fallback; }
+}
+
+async function discover(){
+  /* Path A — a games.json manifest at the repo root always wins if present. */
+  try{
+    const r = await fetch('games.json', {cache:'no-store'});
+    if (r.ok){
+      const list = await r.json();
+      subEl.textContent = 'source: games.json';
+      return Promise.all(list.map(async g => {
+        const slug = typeof g === 'string' ? g : g.slug;
+        const meta = await loadMeta(slug);
+        return typeof g === 'string' ? meta : {...meta, ...g, base:`${CONFIG.dir}/${slug}`};
+      }));
+    }
+  }catch{}
+
+  /* Path B — ask GitHub what folders exist. Nothing to maintain by hand. */
+  const R = detectRepo();
+  if (!R) throw new Error('local');
+  const url = `https://api.github.com/repos/${R.owner}/${R.repo}/contents/${CONFIG.dir}?ref=${CONFIG.branch}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.status === 403 ? 'ratelimit' : 'api');
+  const items = await res.json();
+  const dirs = items.filter(i => i.type === 'dir' && !i.name.startsWith('_') && !i.name.startsWith('.'));
+  subEl.textContent = `source: github.com/${R.owner}/${R.repo}`;
+  return Promise.all(dirs.map(d => loadMeta(d.name)));
+}
+
+function render(list){
+  cntEl.textContent = `${list.length} game${list.length===1?'':'s'}`;
+  if (!list.length){
+    out.innerHTML = `<div class="note"><strong>Nothing on the shelf yet</strong>
+      Add a folder under <code>games/</code> with an <code>index.html</code> inside, and it appears here.</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="grid">` + list.map((g,i) => {
+    const h = hueOf(g.slug);
+    const art = g.thumb
+      ? `<img src="${g.thumb}" alt="" loading="lazy">`
+      : `<span class="mono-mark">${g.title.slice(0,2).toUpperCase()}</span>`;
+    const bg = g.thumb ? '' :
+      `background:linear-gradient(150deg,hsl(${h} 46% 32%),hsl(${(h+38)%360} 52% 20%))`;
+    return `<a class="card" href="${g.base}/" style="animation-delay:${Math.min(i*38,600)}ms">
+        <div class="screen" style="${bg}">${art}</div>
+        <div class="plate">
+          <div class="name">${g.title}</div>
+          ${g.desc ? `<div class="desc">${g.desc}</div>` : ''}
+          <div class="path">${g.base}/</div>
+        </div>
+      </a>`;
+  }).join('') + `</div>`;
+}
+
+qEl.addEventListener('input', () => {
+  const q = qEl.value.trim().toLowerCase();
+  render(GAMES.filter(g =>
+    g.title.toLowerCase().includes(q) || g.slug.toLowerCase().includes(q)
+  ));
+});
+
+discover()
+  .then(list => {
+    GAMES = list.sort((a,b) => a.title.localeCompare(b.title));
+    render(GAMES);
+  })
+  .catch(err => {
+    cntEl.textContent = '—';
+    subEl.textContent = 'listing unavailable';
+    const why = {
+      local:'This page is open from your computer rather than from GitHub Pages, so folder listing is off.',
+      ratelimit:'GitHub is rate-limiting anonymous requests from this network right now.',
+      api:'GitHub did not return the folder listing.'
+    }[err.message] || 'Something went wrong reading the folder listing.';
+    out.innerHTML = `<div class="note"><strong>Can't list the games folder</strong>${why}<br><br>
+      Add a <code>games.json</code> file at the repo root — a plain list like
+      <code>["bingo","pool","skeeball"]</code> — and this page will use that instead.</div>`;
+  });
+</script>
+</body>
+</html>
