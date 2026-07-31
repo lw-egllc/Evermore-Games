@@ -295,9 +295,192 @@
     0%, 100% { filter: drop-shadow(0 0 2px #F0507F) drop-shadow(0 0 4px rgba(240,80,127,0.55)); }
     50% { filter: drop-shadow(0 0 9px #F0507F) drop-shadow(0 0 16px rgba(240,80,127,0.7)); }
   }
+
+  /* ================= 3D CARTOON LAYER ================= */
+  :root{
+    --lift-1: 0 2px 0 rgba(90,66,130,.20), 0 6px 14px rgba(60,40,100,.16);
+    --lift-2: 0 4px 0 rgba(90,66,130,.18), 0 12px 26px rgba(60,40,100,.20);
+    --rim: inset 0 2px 0 rgba(255,255,255,.55);
+    --rim-low: inset 0 -3px 0 rgba(0,0,0,.10);
+    --spring: cubic-bezier(.34,1.56,.64,1);
+  }
+  body{
+    background:
+      radial-gradient(120% 70% at 50% -10%, #B9F0FF 0%, transparent 60%),
+      linear-gradient(160deg, var(--page-a), var(--page-b));
+  }
+  body::after{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(20,60,110,.20) 100%);
+  }
+
+  /* buttons gain volume: gradient face, lit top edge, shaded base, cast shadow */
+  button, .playBtn, .pill{
+    background-image: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,0) 45%,
+                                              rgba(0,0,0,.06) 100%);
+    box-shadow: var(--rim), var(--rim-low), var(--lift-1);
+    transition: transform .13s var(--spring), box-shadow .13s ease;
+  }
+  .playBtn{ box-shadow: var(--rim), var(--rim-low), var(--lift-2); position:relative; overflow:hidden; }
+  /* light sweeping across the primary action */
+  .playBtn::after{
+    content:""; position:absolute; top:-60%; left:-70%; width:40%; height:220%;
+    background:linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+    transform:rotate(18deg); animation:sheen 3.4s ease-in-out infinite;
+  }
+  @keyframes sheen{ 0%,72%{left:-70%} 100%{left:130%} }
+
+  /* pressing squashes the button and drops it onto its shadow */
+  button:active, .playBtn:active, .pill:active{
+    transform: translateY(3px) scaleY(.95) !important;
+    box-shadow: var(--rim), inset 0 -1px 0 rgba(0,0,0,.10), 0 1px 0 rgba(90,66,130,.22);
+  }
+
+  .card{
+    background-image:linear-gradient(180deg,#FFFFFF 0%, #FBF7FE 70%, #F3ECFA 100%);
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.9), 0 14px 30px rgba(20,60,100,.20),
+                0 3px 0 rgba(140,120,175,.18);
+  }
+  .modeToggle{ box-shadow: var(--rim), 0 3px 0 rgba(20,60,100,.14), 0 8px 18px rgba(20,60,100,.14); }
+  .coinbar, .tagline, .badge-brand{ box-shadow: var(--rim), var(--lift-1); }
+  .coinicon{ box-shadow: inset 0 2px 0 rgba(255,255,255,.7), 0 2px 3px rgba(0,0,0,.25); }
+
+  /* extruded title */
+  .t-can, .t-match{
+    text-shadow:
+      0 1px 0 rgba(255,255,255,.85),
+      0 3px 0 rgba(0,0,0,.10), 0 4px 0 rgba(0,0,0,.09), 0 5px 0 rgba(0,0,0,.08),
+      0 8px 14px rgba(40,20,80,.30);
+  }
+
+  /* every item on the board sits on the shelf and casts a shadow */
+  #board g[data-kind]{
+    filter: drop-shadow(0 2px 1px rgba(42,33,64,.22)) drop-shadow(0 7px 6px rgba(42,33,64,.14));
+    transition: filter .18s ease;
+  }
+  #board g[data-kind]:hover{
+    filter: drop-shadow(0 4px 2px rgba(42,33,64,.20)) drop-shadow(0 12px 10px rgba(42,33,64,.18));
+  }
+
+  /* ambient drift on the confetti so the scene is never fully still */
+  .spark{ animation: drift 7s ease-in-out infinite; }
+  .spark:nth-of-type(2n){ animation-duration:9s; animation-delay:-2s; }
+  .spark:nth-of-type(3n){ animation-duration:11s; animation-delay:-4s; }
+  @keyframes drift{
+    0%,100%{ transform:translateY(0) rotate(0deg) }
+    50%    { transform:translateY(-12px) rotate(14deg) }
+  }
+
+  /* squash and stretch — weight, not just a size pop */
+  @keyframes bounce-pop{
+    0%   { transform: scale(1,1) }
+    18%  { transform: scale(1.22,.82) }
+    38%  { transform: scale(.90,1.16) }
+    58%  { transform: scale(1.08,.95) }
+    78%  { transform: scale(.98,1.03) }
+    100% { transform: scale(1,1) }
+  }
+  /* keep the grounding shadow while the selection glow pulses */
+  @keyframes glow-pulse{
+    0%,100%{ filter: drop-shadow(0 2px 1px rgba(42,33,64,.22)) drop-shadow(0 0 3px #F0507F) }
+    50%    { filter: drop-shadow(0 3px 2px rgba(42,33,64,.20)) drop-shadow(0 0 12px #F0507F)
+                     drop-shadow(0 0 20px rgba(240,80,127,.65)) }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .spark, .playBtn::after{ animation:none }
+  }
+  /* =============== END 3D CARTOON LAYER =============== */
+
+  /* ============ DEPTH BACKGROUND + DESKTOP SCALE ============ */
+  body{
+    background:
+      radial-gradient(140% 100% at 50% -20%, #CFF6FF 0%, #8FE3FF 34%, #4FB6EE 72%, #2E86C4 100%);
+    perspective: 1200px;
+  }
+  #bgfx{ position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+
+  /* far-field colour masses, heavily blurred = depth of field */
+  .blob{
+    position:absolute; border-radius:50%; will-change:transform;
+    filter: blur(64px); opacity:.55;
+  }
+  .b1{ width:52vw; height:52vw; left:-12vw; top:-10vw;  background:#B98BFF; animation:float1 26s ease-in-out infinite; }
+  .b2{ width:46vw; height:46vw; right:-10vw; top:4vh;   background:#59E0C6; animation:float2 32s ease-in-out infinite; }
+  .b3{ width:60vw; height:60vw; left:8vw; bottom:-22vw; background:#FF8FC0; animation:float3 29s ease-in-out infinite; opacity:.42; }
+  .b4{ width:34vw; height:34vw; right:6vw; bottom:-6vw; background:#FFD86B; animation:float1 35s ease-in-out infinite reverse; opacity:.45; }
+  .b5{ width:28vw; height:28vw; left:38vw; top:26vh;    background:#7FD8FF; animation:float2 24s ease-in-out infinite reverse; opacity:.38; }
+  @keyframes float1{ 0%,100%{transform:translate3d(0,0,0) scale(1)}  50%{transform:translate3d(6vw,7vh,0) scale(1.14)} }
+  @keyframes float2{ 0%,100%{transform:translate3d(0,0,0) scale(1)}  50%{transform:translate3d(-7vw,5vh,0) scale(1.1)} }
+  @keyframes float3{ 0%,100%{transform:translate3d(0,0,0) scale(1)}  50%{transform:translate3d(4vw,-6vh,0) scale(1.18)} }
+
+  /* atmospheric haze — distant things wash out, near things stay saturated */
+  .haze{
+    position:absolute; inset:0;
+    background:linear-gradient(180deg, rgba(255,255,255,.34) 0%, rgba(255,255,255,0) 42%),
+               radial-gradient(120% 90% at 50% 42%, transparent 52%, rgba(12,52,102,.34) 100%);
+  }
+  /* ground pool the game sits on */
+  .floor{
+    position:absolute; left:50%; bottom:-6vh; transform:translateX(-50%);
+    width:min(1100px,96vw); height:36vh; border-radius:50%;
+    background:radial-gradient(ellipse at center, rgba(10,48,96,.30) 0%, transparent 68%);
+    filter:blur(22px);
+  }
+  body::after{ display:none; }
+  .stage{ z-index:2; }
+  .spark{ z-index:1; }
+
+  /* the game panel floats above the scene */
+  .card{
+    box-shadow:
+      inset 0 2px 0 rgba(255,255,255,.95),
+      0 2px 0 rgba(120,100,160,.22),
+      0 18px 34px rgba(12,48,96,.26),
+      0 46px 70px rgba(12,48,96,.24);
+  }
+
+  /* ---- use the screen on a laptop instead of a phone-width column ---- */
+  @media (min-width: 760px){
+    body{ padding:18px 20px 22px; align-items:flex-start; }
+    .stage{ max-width:min(680px, 82vh); }
+    h1{ font-size:52px; }
+    .tagline{ font-size:14.5px; padding:8px 20px; }
+    .badge-brand{ font-size:12.5px; padding:8px 13px; }
+    .pill{ font-size:14px; padding:9px 18px; }
+    .modebtn{ font-size:15px; padding:10px 26px; }
+    .setupLabel{ font-size:15px; }
+    .modeHint{ font-size:13.5px; }
+    .playBtn{ font-size:22px; max-width:300px; padding:18px; }
+    button{ font-size:16.5px; padding:16px; }
+    .statusrow{ font-size:14px; }
+    #feedback{ font-size:15.5px; }
+    .card{ border-radius:26px; padding:18px 18px 20px; }
+    .footerline{ font-size:13.5px; }
+  }
+  @media (min-width: 1180px){
+    .stage{ max-width:min(760px, 84vh); }
+    h1{ font-size:58px; }
+    .playBtn{ font-size:23px; max-width:320px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .blob{ animation:none }
+  }
+  /* ========== END DEPTH BACKGROUND + DESKTOP SCALE ========== */
 </style>
 </head>
 <body>
+
+<div id="bgfx" aria-hidden="true">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="blob b4"></div>
+  <div class="blob b5"></div>
+  <div class="haze"></div>
+  <div class="floor"></div>
+</div>
 
 <svg class="spark" style="top:6%;left:3%;width:20px;" viewBox="0 0 24 24"><path d="M12 0 L14 10 L24 12 L14 14 L12 24 L10 14 L0 12 L10 10 Z" fill="#F0507F"></path></svg>
 <svg class="spark" style="top:14%;left:22%;width:12px;" viewBox="0 0 24 24"><path d="M12 0 L14 10 L24 12 L14 14 L12 24 L10 14 L0 12 L10 10 Z" fill="#FFC93C"></path></svg>
@@ -544,7 +727,7 @@
     var anims = [];
     if (isSel) anims.push('glow-pulse 1.2s ease-in-out infinite');
     if (bounced) anims.push('bounce-pop 0.4s cubic-bezier(.36,1.4,.4,1) both');
-    return anims.length ? ('transform-box:fill-box;transform-origin:center;animation:'+anims.join(', ')+';') : '';
+    return anims.length ? ('transform-box:fill-box;transform-origin:center bottom;animation:'+anims.join(', ')+';') : '';
   }
 
   function drawHintCan(x,y,w,h,isSel,bounced,kind,idx){
@@ -600,7 +783,18 @@
 
   function drawScene(){
     var s = '';
-    s += '<rect x="0" y="0" width="480" height="'+COUNTER_Y+'" fill="#FFFFFF" rx="16"></rect>';
+    s += '<defs>'
+      + '<linearGradient id="shelfGrad" x1="0" y1="0" x2="0" y2="1">'
+      +   '<stop offset="0" stop-color="#FFFFFF"/><stop offset="0.62" stop-color="#F7F2FA"/>'
+      +   '<stop offset="1" stop-color="#E7DEF0"/></linearGradient>'
+      + '<linearGradient id="lipGrad" x1="0" y1="0" x2="0" y2="1">'
+      +   '<stop offset="0" stop-color="#D9CCE8"/><stop offset="1" stop-color="#B9A6D0"/></linearGradient>'
+      + '<radialGradient id="shelfPool" cx="0.5" cy="0.1" r="0.9">'
+      +   '<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>'
+      +   '<stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>'
+      + '</defs>';
+    s += '<rect x="0" y="0" width="480" height="'+COUNTER_Y+'" fill="url(#shelfGrad)" rx="16"></rect>';
+    s += '<ellipse cx="240" cy="'+(COUNTER_Y*0.30)+'" rx="250" ry="'+(COUNTER_Y*0.55)+'" fill="url(#shelfPool)" pointer-events="none"></ellipse>';
     for (var vx=0; vx<=480; vx+=48){
       s += '<line x1="'+vx+'" y1="0" x2="'+vx+'" y2="'+COUNTER_Y+'" stroke="#F5E7EF" stroke-width="1"></line>';
     }
@@ -613,6 +807,8 @@
     for (var gy=COUNTER_Y+16; gy<VB_H; gy+=14){
       s += '<line x1="0" y1="'+gy+'" x2="480" y2="'+gy+'" stroke="#D99B3E" stroke-width="1" opacity="0.35"></line>';
     }
+    s += '<rect x="0" y="'+(COUNTER_Y-7)+'" width="480" height="7" fill="url(#lipGrad)"></rect>';
+    s += '<rect x="0" y="'+(COUNTER_Y-7)+'" width="480" height="2" fill="#FFFFFF" opacity="0.55"></rect>';
     s += '<text x="240" y="'+(COUNTER_Y+16)+'" text-anchor="middle" font-family="Baloo 2, sans-serif" font-weight="700" style="font-size:13px;fill:#2F63D6;">PICK A CONTAINER FROM THE SHELF</text>';
     return s;
   }
