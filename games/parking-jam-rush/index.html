@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Parking Jam Rush</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#8ED081; touch-action:none;
+    font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; user-select:none; -webkit-user-select:none; }
+  #game { display:block; width:100%; height:100%; }
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(30,42,54,.72); backdrop-filter:blur(4px); z-index:10; text-align:center; padding:24px; }
+  .hidden { display:none; }
+  .card { background:#fff; border-radius:24px; padding:32px 40px; box-shadow:0 12px 40px rgba(0,0,0,.35); max-width:340px; width:100%; }
+  h1 { font-size:32px; color:#2B3A4A; letter-spacing:-.5px; line-height:1.1; }
+  h1 span { color:#FF6B6B; }
+  .sub { color:#7A8A99; font-size:15px; margin:12px 0 22px; line-height:1.45; }
+  .big-score { font-size:56px; font-weight:800; color:#2B3A4A; margin:6px 0 2px; }
+  .best { color:#7A8A99; font-size:14px; margin-bottom:20px; }
+  button { border:none; cursor:pointer; background:#FF6B6B; color:#fff; font-size:20px; font-weight:700;
+    padding:16px 44px; border-radius:16px; box-shadow:0 5px 0 #D14D4D; transition:transform .06s; }
+  button:active { transform:translateY(4px); box-shadow:0 1px 0 #D14D4D; }
+  .car-emoji { font-size:44px; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="startOverlay" class="overlay">
+  <div class="card">
+    <div class="car-emoji">🚗💨</div>
+    <h1>Parking <span>Jam</span> Rush</h1>
+    <p class="sub">Tap a car to drive it out — but only if its path is clear!<br>Clear as many cars as you can in <b>60 seconds</b>.<br>Empty the whole lot for <b>+10</b> — and use 🛻 <b>TOW</b> on stuck cars!</p>
+    <button id="startBtn">PLAY</button>
+  </div>
+</div>
+
+<div id="endOverlay" class="overlay hidden">
+  <div class="card">
+    <div class="car-emoji">🏁</div>
+    <h1 id="endTitle">Time's Up!</h1>
+    <div class="big-score" id="finalScore">0</div>
+    <div class="best" id="bestScore">Best: 0</div>
+    <button id="againBtn">PLAY AGAIN</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ================= CONFIG ================= */
+const COLS = 6, ROWS = 9;
+const ROUND_TIME = 60;
+const TARGET_CARS = 14;
+const SPAWN_BASE = 1.5;         // normal respawn (seconds)
+const SPAWN_STREAK_STEP = 0.5;  // each streak level adds this
+const SPAWN_CAP = 3.5;          // slowest respawn during a streak
+const COMBO_WINDOW = 2.2;       // streak window at x1
+const COMBO_SHRINK = 0.15;      // window lost per streak level
+const COMBO_MIN = 1.2;          // smallest window at high streaks
+const COLORS = [
+  ['#FF6B6B','#D14D4D'], ['#4D96FF','#3572CF'], ['#FFD93D','#D9B21E'],
+  ['#6BCB77','#4CA658'], ['#B983FF','#9463D9'], ['#FF9F45','#D97E2A'],
+  ['#2EC4B6','#1E9E92'], ['#FF8FAB','#D96C89']
+];
+
+/* ================= CANVAS ================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W=0, H=0, DPR=1, cell=0, gx=0, gy=0; // grid pixel origin & cell size
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W*DPR; canvas.height = H*DPR;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  const hudH = 86, botH = 78, pad = 14;
+  cell = Math.floor(Math.min((W - pad*2)/COLS, (H - hudH - botH - pad*2)/ROWS));
+  gx = Math.round((W - cell*COLS)/2);
+  gy = Math.round(hudH + (H - hudH - botH - cell*ROWS)/2);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ================= AUDIO ================= */
+let AC = null;
+function audio(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(AC&&AC.state==='suspended') AC.resume(); }
+function tone(freq, dur, type='sine', vol=0.15, slideTo=null){
+  if(!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, AC.currentTime);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, AC.currentTime+dur);
+  g.gain.setValueAtTime(vol, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime+dur);
+  o.connect(g); g.connect(AC.destination);
+  o.start(); o.stop(AC.currentTime+dur);
+}
+const sfx = {
+  go(){ tone(300, .35, 'sawtooth', .08, 900); tone(600, .25, 'sine', .1, 1200); },
+  honk(){ tone(220, .12, 'square', .12); setTimeout(()=>tone(220,.16,'square',.12), 140); },
+  combo(n){ tone(500 + n*120, .18, 'sine', .14, 700 + n*140); },
+  tick(){ tone(880, .06, 'square', .07); },
+  end(){ tone(520,.25,'sine',.15); setTimeout(()=>tone(390,.3,'sine',.15),200); setTimeout(()=>tone(260,.5,'sine',.15),420); },
+  poof(){ tone(150, .3, 'triangle', .12, 60); }
+};
+
+/* ================= STATE ================= */
+let grid=null, cars=[], nextId=1, score=0, timeLeft=ROUND_TIME, playing=false;
+let spawnTimer=0, comboTimer=0, comboMax=COMBO_WINDOW, combo=0, deadlockTimer=0, lastTickSec=99;
+let floats=[], particles=[], exiting=[];
+let shakeMag=0;
+let tows=2, towArmed=false, towRect=null;
+
+function cellFree(x,y){ return x>=0 && x<COLS && y>=0 && y<ROWS && grid[y][x]===0; }
+function carCells(c){
+  const out=[];
+  for(let i=0;i<c.len;i++) out.push(c.axis==='h' ? [c.cx+i, c.cy] : [c.cx, c.cy+i]);
+  return out;
+}
+function setCells(c, val){ for(const [x,y] of carCells(c)) grid[y][x] = val; }
+
+function pathClear(c){
+  // front cell then step dir until off-grid; all cells must be free
+  let fx, fy;
+  if(c.axis==='h'){ fx = c.dir>0 ? c.cx+c.len : c.cx-1; fy = c.cy; }
+  else { fx = c.cx; fy = c.dir>0 ? c.cy+c.len : c.cy-1; }
+  let x=fx, y=fy;
+  while(x>=0 && x<COLS && y>=0 && y<ROWS){
+    if(grid[y][x]!==0) return false;
+    if(c.axis==='h') x+=c.dir; else y+=c.dir;
+  }
+  return true;
+}
+
+// A car "can escape" if every car blocking its path can itself escape (no circular blocks).
+// Guarantees cars pointing at each other, or any deadlock cycle, never spawn.
+function canEscape(c, visiting){
+  visiting = visiting || new Set();
+  if(visiting.has(c.id)) return false; // circular dependency = trapped
+  visiting.add(c.id);
+  let x, y;
+  if(c.axis==='h'){ x = c.dir>0 ? c.cx+c.len : c.cx-1; y = c.cy; }
+  else { x = c.cx; y = c.dir>0 ? c.cy+c.len : c.cy-1; }
+  let ok = true;
+  while(x>=0 && x<COLS && y>=0 && y<ROWS){
+    const id = grid[y][x];
+    if(id && id!==c.id){
+      const b = cars.find(k=>k.id===id);
+      if(!b || !canEscape(b, visiting)){ ok = false; break; }
+    }
+    if(c.axis==='h') x+=c.dir; else y+=c.dir;
+  }
+  visiting.delete(c.id);
+  return ok;
+}
+
+function nextSpawnDelay(){
+  if(combo>1 && comboTimer>0){
+    // streak: respawn slows by .5s per streak level, capped at 3.5s
+    return Math.min(SPAWN_CAP, SPAWN_BASE + (combo-1)*SPAWN_STREAK_STEP);
+  }
+  return SPAWN_BASE;
+}
+
+function trySpawn(){
+  for(let a=0;a<40;a++){
+    const axis = Math.random()<.5?'h':'v';
+    const len = Math.random()<.68?2:3;
+    const maxX = axis==='h' ? COLS-len : COLS-1;
+    const maxY = axis==='v' ? ROWS-len : ROWS-1;
+    const cx = (Math.random()*(maxX+1))|0, cy = (Math.random()*(maxY+1))|0;
+    const c = { cx, cy, axis, len, dir: Math.random()<.5?1:-1,
+      id: nextId++, color: COLORS[(Math.random()*COLORS.length)|0],
+      state:'spawn', t:0, shakeT:0, ox:0, oy:0 };
+    if(!carCells(c).every(([x,y])=>cellFree(x,y))) continue;
+    // place tentatively, then verify every car (incl. the new one) still has a way out
+    cars.push(c); setCells(c, c.id);
+    if(cars.every(k=>canEscape(k))) return true;
+    setCells(c, 0); cars.pop(); // would trap someone — undo and retry
+  }
+  return false;
+}
+
+function startGame(){
+  grid = Array.from({length:ROWS},()=>new Array(COLS).fill(0));
+  cars=[]; exiting=[]; floats=[]; particles=[];
+  nextId=1; score=0; timeLeft=ROUND_TIME; combo=0; comboTimer=0; comboMax=COMBO_WINDOW;
+  spawnTimer=SPAWN_BASE; deadlockTimer=0; lastTickSec=99; shakeMag=0;
+  tows=2; towArmed=false;
+  for(let i=0;i<TARGET_CARS;i++) trySpawn();
+  // guarantee at least one movable car at start
+  if(!cars.some(pathClear)) { const c=cars.pop(); setCells(c,0); }
+  playing=true;
+  sfx.go();
+}
+
+/* ================= INPUT ================= */
+function towCar(c, label){
+  setCells(c, 0);
+  cars.splice(cars.indexOf(c), 1);
+  const [mx,my] = carCenter(c);
+  burst(mx, my, '#B0BEC5', 14);
+  floats.push({x:mx, y:my, txt: label, t:0, big:false});
+  sfx.poof();
+}
+
+function onTap(px,py){
+  audio();
+  if(!playing) return;
+  // tow button
+  if(towRect && px>=towRect.x && px<=towRect.x+towRect.w && py>=towRect.y && py<=towRect.y+towRect.h){
+    if(tows>0){ towArmed=!towArmed; tone(towArmed?600:350,.1,'sine',.12); }
+    else sfx.honk();
+    return;
+  }
+  const x = Math.floor((px-gx)/cell), y = Math.floor((py-gy)/cell);
+  if(x<0||x>=COLS||y<0||y>=ROWS){ towArmed=false; return; }
+  const id = grid[y][x];
+  if(!id) return;
+  const c = cars.find(c=>c.id===id);
+  if(!c || c.state!=='idle') return;
+  if(towArmed){
+    towCar(c, 'towed! 🛻');
+    tows--; towArmed=false;
+    return;
+  }
+  if(pathClear(c)){
+    // exit!
+    setCells(c, 0);
+    cars.splice(cars.indexOf(c),1);
+    c.state='exit'; c.speed=cell*4; c.t=0;
+    exiting.push(c);
+    combo = comboTimer>0 ? Math.min(combo+1,8) : 1;
+    comboMax = Math.max(COMBO_MIN, COMBO_WINDOW - (combo-1)*COMBO_SHRINK);
+    comboTimer = comboMax;
+    const pts = combo;
+    score += pts;
+    const [mx,my] = carCenter(c);
+    floats.push({x:mx, y:my, txt: combo>1 ? `+${pts}  x${combo}!` : '+1', t:0, big: combo>1});
+    burst(mx,my,c.color[0],10);
+    sfx.combo(combo);
+  } else {
+    c.shakeT = .35;
+    shakeMag = 4;
+    sfx.honk();
+    const [mx,my] = carCenter(c);
+    floats.push({x:mx, y:my, txt:'🚫', t:0, big:false});
+  }
+}
+canvas.addEventListener('pointerdown', e=>onTap(e.clientX, e.clientY));
+
+/* ================= FX ================= */
+function burst(x,y,color,n){
+  for(let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, s = 60+Math.random()*140;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,t:0,life:.5+Math.random()*.3,color,r:3+Math.random()*4});
+  }
+}
+function carCenter(c){
+  const cells = carCells(c);
+  const [lx,ly]=cells[0], [hx,hy]=cells[cells.length-1];
+  return [gx + (lx+hx+1)/2*cell + (c.ox||0), gy + (ly+hy+1)/2*cell + (c.oy||0)];
+}
+
+/* ================= UPDATE ================= */
+function update(dt){
+  if(playing){
+    timeLeft -= dt;
+    if(comboTimer>0){ comboTimer-=dt; if(comboTimer<=0) combo=0; }
+    // countdown ticks
+    const sec = Math.ceil(timeLeft);
+    if(sec<=5 && sec>=1 && sec!==lastTickSec){ lastTickSec=sec; sfx.tick(); }
+    if(timeLeft<=0){ timeLeft=0; endGame(); }
+
+    // spawning: 1.5s normally; streaks slow the next respawn (up to 3.5s)
+    spawnTimer -= dt;
+    if(spawnTimer<=0){
+      if(cars.length<TARGET_CARS) trySpawn();
+      spawnTimer = nextSpawnDelay();
+    }
+
+    // deadlock safety net: if nothing can move and no tows left, poof a random car
+    deadlockTimer -= dt;
+    if(deadlockTimer<=0){
+      deadlockTimer = .8;
+      if(cars.length>0 && tows===0 && !cars.some(pathClear)){
+        towCar(cars[(Math.random()*cars.length)|0], 'tow! 🛻');
+      }
+    }
+
+    // board cleared: +10, bonus tow, refill
+    if(cars.length===0){
+      score += 10;
+      tows = Math.min(tows+1, 5);
+      floats.push({x:W/2, y:gy+ROWS*cell*.45, txt:'BOARD CLEARED! +10', t:0, big:true});
+      floats.push({x:W/2, y:gy+ROWS*cell*.45+34, txt:'+1 tow 🛻', t:0, big:false});
+      sfx.go();
+      for(let i=0;i<TARGET_CARS;i++) trySpawn();
+      if(cars.length && !cars.some(pathClear)){ const c=cars[cars.length-1]; setCells(c,0); cars.pop(); }
+      spawnTimer = nextSpawnDelay();
+    }
+  }
+
+  // car animations
+  for(const c of cars){
+    if(c.state==='spawn'){ c.t+=dt*4; if(c.t>=1){ c.t=1; c.state='idle'; } }
+    if(c.shakeT>0){ c.shakeT-=dt; c.ox = Math.sin(c.shakeT*60)*4*(c.shakeT/.35); c.oy=0; }
+    else c.ox=0;
+  }
+  // exiting cars
+  for(let i=exiting.length-1;i>=0;i--){
+    const c = exiting[i];
+    c.speed += cell*14*dt;
+    const d = c.speed*dt;
+    if(c.axis==='h') c.ox=(c.ox||0)+d*c.dir; else c.oy=(c.oy||0)+d*c.dir;
+    const [mx,my]=carCenter(c);
+    if(mx<-cell*3||mx>W+cell*3||my<-cell*3||my>H+cell*3) exiting.splice(i,1);
+  }
+  // floats & particles
+  for(let i=floats.length-1;i>=0;i--){ const f=floats[i]; f.t+=dt; f.y-=40*dt; if(f.t>1) floats.splice(i,1); }
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i]; p.t+=dt;
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.92; p.vy*=0.92;
+    if(p.t>p.life) particles.splice(i,1);
+  }
+  if(shakeMag>0) shakeMag = Math.max(0, shakeMag - dt*20);
+}
+
+function endGame(){
+  playing=false;
+  sfx.end();
+  let best = 0;
+  try{ best = +localStorage.getItem('pjr_best')||0; }catch(e){}
+  if(score>best){ best=score; try{ localStorage.setItem('pjr_best', best); }catch(e){} }
+  document.getElementById('finalScore').textContent = score;
+  document.getElementById('bestScore').textContent = 'Best: '+best;
+  document.getElementById('endTitle').textContent = score>best-1 && score===best ? 'New Best! 🎉' : "Time's Up!";
+  setTimeout(()=>document.getElementById('endOverlay').classList.remove('hidden'), 500);
+}
+
+/* ================= DRAW ================= */
+function rr(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+function drawLot(){
+  // grass background
+  ctx.fillStyle = '#8ED081'; ctx.fillRect(0,0,W,H);
+  // asphalt
+  const m = cell*.28;
+  ctx.fillStyle = '#5C6B7A';
+  rr(gx-m, gy-m, cell*COLS+m*2, cell*ROWS+m*2, 18); ctx.fill();
+  ctx.fillStyle = '#66788A';
+  rr(gx-m*.4, gy-m*.4, cell*COLS+m*.8, cell*ROWS+m*.8, 12); ctx.fill();
+  // parking lines
+  ctx.strokeStyle = 'rgba(255,255,255,.28)'; ctx.lineWidth = 2; ctx.setLineDash([cell*.35, cell*.3]);
+  for(let x=1;x<COLS;x++){ ctx.beginPath(); ctx.moveTo(gx+x*cell, gy+4); ctx.lineTo(gx+x*cell, gy+ROWS*cell-4); ctx.stroke(); }
+  for(let y=1;y<ROWS;y++){ ctx.beginPath(); ctx.moveTo(gx+4, gy+y*cell); ctx.lineTo(gx+COLS*cell-4, gy+y*cell); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // exit arrows around edges
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.font = `700 ${Math.round(cell*.34)}px sans-serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('EXIT →', gx+COLS*cell - cell*1.05, gy - m*1.7);
+}
+
+function drawCar(c){
+  const cells = carCells(c);
+  const [lx,ly]=cells[0];
+  const horiz = c.axis==='h';
+  const wCells = horiz?c.len:1, hCells = horiz?1:c.len;
+  const pad = cell*.09;
+  let x = gx + lx*cell + pad + (c.ox||0);
+  let y = gy + ly*cell + pad + (c.oy||0);
+  let w = wCells*cell - pad*2, h = hCells*cell - pad*2;
+  const scale = c.state==='spawn' ? 0.4 + 0.6*easeOut(c.t) : 1;
+  ctx.save();
+  ctx.translate(x+w/2, y+h/2); ctx.scale(scale, scale); ctx.translate(-(x+w/2), -(y+h/2));
+  // shadow
+  ctx.fillStyle='rgba(0,0,0,.22)';
+  rr(x+3, y+4, w, h, cell*.22); ctx.fill();
+  // body
+  ctx.fillStyle=c.color[0];
+  rr(x, y, w, h, cell*.22); ctx.fill();
+  ctx.lineWidth=2.5; ctx.strokeStyle=c.color[1];
+  rr(x, y, w, h, cell*.22); ctx.stroke();
+  // roof
+  const ri = cell*.16;
+  ctx.fillStyle='rgba(255,255,255,.25)';
+  rr(x+ri, y+ri, w-ri*2, h-ri*2, cell*.14); ctx.fill();
+  // windshield at front
+  ctx.fillStyle='#BFE3F5';
+  const ws = cell*.18, wl = cell*.5;
+  if(horiz){
+    const fx = c.dir>0 ? x+w-cell*.34 : x+cell*.34-ws;
+    rr(fx, y+(h-wl)/2, ws, wl, 4); ctx.fill();
+    // headlights
+    ctx.fillStyle='#FFF3B0';
+    const hx = c.dir>0 ? x+w-5 : x+1;
+    ctx.fillRect(hx, y+h*.18, 4, h*.14); ctx.fillRect(hx, y+h*.68, 4, h*.14);
+  } else {
+    const fy = c.dir>0 ? y+h-cell*.34 : y+cell*.34-ws;
+    rr(x+(w-wl)/2, fy, wl, ws, 4); ctx.fill();
+    ctx.fillStyle='#FFF3B0';
+    const hy = c.dir>0 ? y+h-5 : y+1;
+    ctx.fillRect(x+w*.18, hy, w*.14, 4); ctx.fillRect(x+w*.68, hy, w*.14, 4);
+  }
+  // direction chevron
+  ctx.fillStyle='rgba(255,255,255,.75)';
+  ctx.save();
+  ctx.translate(x+w/2, y+h/2);
+  const ang = horiz ? (c.dir>0?0:Math.PI) : (c.dir>0?Math.PI/2:-Math.PI/2);
+  ctx.rotate(ang);
+  const s = cell*.14;
+  ctx.beginPath(); ctx.moveTo(-s*.4,-s); ctx.lineTo(s*.6,0); ctx.lineTo(-s*.4,s);
+  ctx.lineTo(0,0); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawHUD(){
+  const pad=14;
+  // score pill
+  ctx.fillStyle='rgba(255,255,255,.92)';
+  rr(pad, pad, 118, 52, 16); ctx.fill();
+  ctx.fillStyle='#2B3A4A'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.font='700 13px sans-serif'; ctx.fillText('CARS OUT', pad+14, pad+16);
+  ctx.font='800 24px sans-serif'; ctx.fillText(score, pad+14, pad+37);
+  // timer
+  const tw=118, tx=W-pad-tw;
+  const urgent = timeLeft<=10;
+  ctx.fillStyle = urgent ? '#FF6B6B' : 'rgba(255,255,255,.92)';
+  rr(tx, pad, tw, 52, 16); ctx.fill();
+  ctx.fillStyle = urgent ? '#fff' : '#2B3A4A';
+  ctx.font='700 13px sans-serif'; ctx.fillText('TIME', tx+14, pad+16);
+  ctx.font='800 24px sans-serif';
+  ctx.fillText(Math.ceil(timeLeft)+'s', tx+14, pad+37);
+  // timer bar
+  ctx.fillStyle='rgba(0,0,0,.18)'; rr(tx+58, pad+30, 48, 10, 5); ctx.fill();
+  ctx.fillStyle = urgent ? '#fff' : '#6BCB77';
+  const frac = Math.max(0.02, timeLeft/ROUND_TIME);
+  rr(tx+58, pad+30, 48*frac, 10, 5); ctx.fill();
+  // streak (top center) with shrinking-window bar
+  if(playing && comboTimer>0){
+    const sw=110, sx=(W-sw)/2;
+    ctx.fillStyle='rgba(255,255,255,.92)';
+    rr(sx, pad, sw, 52, 16); ctx.fill();
+    ctx.fillStyle='#FF6B6B'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='700 12px sans-serif'; ctx.fillText('STREAK', sx+sw/2, pad+13);
+    ctx.font='800 21px sans-serif'; ctx.fillText('x'+combo, sx+sw/2, pad+30);
+    ctx.fillStyle='rgba(0,0,0,.15)'; rr(sx+14, pad+42, sw-28, 5, 2.5); ctx.fill();
+    ctx.fillStyle='#FF9F45';
+    const cf = Math.max(0, Math.min(1, comboTimer/comboMax));
+    if(cf>0.02){ rr(sx+14, pad+42, (sw-28)*cf, 5, 2.5); ctx.fill(); }
+  }
+}
+
+function drawTowBtn(){
+  const bw=170, bh=54;
+  const x=(W-bw)/2, y=H-bh-14;
+  towRect={x, y, w:bw, h:bh};
+  const enabled = tows>0 && playing;
+  const pulse = towArmed ? 1 + Math.sin(performance.now()/120)*.03 : 1;
+  ctx.save();
+  ctx.translate(x+bw/2, y+bh/2); ctx.scale(pulse,pulse); ctx.translate(-(x+bw/2), -(y+bh/2));
+  ctx.fillStyle='rgba(0,0,0,.18)'; rr(x+2, y+4, bw, bh, 18); ctx.fill();
+  ctx.fillStyle = towArmed ? '#FFD93D' : (enabled ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.45)');
+  rr(x, y, bw, bh, 18); ctx.fill();
+  if(towArmed){ ctx.lineWidth=3; ctx.strokeStyle='#D9B21E'; rr(x, y, bw, bh, 18); ctx.stroke(); }
+  ctx.fillStyle = enabled ? '#2B3A4A' : '#9AA7B4';
+  ctx.font='800 19px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(towArmed ? 'TAP A CAR!' : '🛻 TOW ×'+tows, x+bw/2, y+bh/2+1);
+  ctx.restore();
+}
+
+function easeOut(t){ return 1-(1-t)*(1-t); }
+
+function draw(){
+  ctx.save();
+  if(shakeMag>0.2) ctx.translate((Math.random()-.5)*shakeMag, (Math.random()-.5)*shakeMag);
+  drawLot();
+  for(const c of cars) drawCar(c);
+  for(const c of exiting) drawCar(c);
+  // particles
+  for(const p of particles){
+    ctx.globalAlpha = 1 - p.t/p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r*(1-p.t/p.life*.5), 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  // floating texts
+  for(const f of floats){
+    ctx.globalAlpha = 1 - f.t;
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth=4; ctx.lineJoin='round';
+    ctx.font = `800 ${f.big?26:20}px sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.strokeText(f.txt, f.x, f.y); ctx.fillText(f.txt, f.x, f.y);
+  }
+  ctx.globalAlpha=1;
+  ctx.restore();
+  if(grid){ drawHUD(); drawTowBtn(); }
+}
+
+/* ================= LOOP ================= */
+let last = performance.now();
+function loop(now){
+  requestAnimationFrame(loop); // schedule first so one bad frame can't kill the loop
+  const dt = Math.min((now-last)/1000, .05); last = now;
+  if(grid) update(dt);
+  draw();
+}
+requestAnimationFrame(loop);
+
+/* ================= UI ================= */
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  audio();
+  document.getElementById('startOverlay').classList.add('hidden');
+  startGame();
+});
+document.getElementById('againBtn').addEventListener('click', ()=>{
+  audio();
+  document.getElementById('endOverlay').classList.add('hidden');
+  startGame();
+});
+</script>
+</body>
+</html>
