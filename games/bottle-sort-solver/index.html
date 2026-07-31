@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bottle sort — generator + solver logic</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #05070f;
+    color: #fff;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .screen {
+    --bw: clamp(34px, 9vw, 56px); /* base bottle width — everything else derives from this */
+    width: 100%;
+    max-width: 480px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: linear-gradient(180deg, #1a2a6c 0%, #142055 100%);
+    padding:
+      calc(env(safe-area-inset-top, 0px) + 18px)
+      calc(env(safe-area-inset-right, 0px) + clamp(14px, 4vw, 22px))
+      calc(env(safe-area-inset-bottom, 0px) + 14px)
+      calc(env(safe-area-inset-left, 0px) + clamp(14px, 4vw, 22px));
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .home-screen {
+    position: absolute; z-index: 30; inset: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: #061a4c;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+  }
+  .home-screen.visible { opacity: 1; visibility: visible; pointer-events: auto; }
+  .title-art-stage { position: relative; height: 100%; aspect-ratio: 941 / 1672; flex: 0 0 auto; }
+  .home-title-art {
+    display: block; width: 100%; height: 100%; object-fit: fill;
+    user-select: none; -webkit-user-drag: none;
+  }
+  .title-hotspot {
+    position: absolute; z-index: 2; border: 0; padding: 0; background: transparent;
+    color: transparent; cursor: pointer; font-size: 0; -webkit-tap-highlight-color: transparent;
+  }
+  .title-hotspot:focus-visible {
+    outline: 4px solid #fff; outline-offset: 4px; box-shadow: 0 0 22px #29b6f6;
+  }
+  .title-play {
+    left: 22.4%; top: 79.2%; width: 55.2%; height: 10.2%; border-radius: 999px;
+  }
+  .title-play:hover { box-shadow: 0 0 28px rgba(255,210,63,0.5) inset; }
+  .title-settings {
+    left: 56.4%; top: 90.9%; width: 12.7%; aspect-ratio: 1; border-radius: 50%;
+  }
+  .title-settings:hover { box-shadow: 0 0 22px rgba(41,182,246,0.55); }
+  .title-menu {
+    position: absolute; z-index: 4; right: 9%; bottom: 4.5%; left: 9%;
+    padding: 20px; border: 1px solid rgba(255,255,255,0.28); border-radius: 22px;
+    background: rgba(7,24,69,0.96); box-shadow: 0 18px 45px rgba(0,0,0,0.5);
+    color: #fff; text-align: center; backdrop-filter: blur(12px);
+  }
+  .title-menu[hidden] { display: none; }
+  .title-menu-close {
+    position: absolute; top: 8px; right: 10px; width: 32px; height: 32px;
+    border: 0; border-radius: 50%; background: rgba(255,255,255,0.1);
+    color: #fff; cursor: pointer; font-size: 20px;
+  }
+  .title-menu h2 { margin: 0 0 15px; font-size: 20px; }
+  .home-progress { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+  .home-stat {
+    padding: 10px; border: 1px solid rgba(255,255,255,0.12); border-radius: 13px;
+    background: rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 3px;
+  }
+  .home-stat span { color: rgba(255,255,255,0.55); font-size: 9px; letter-spacing: 1px; text-transform: uppercase; }
+  .home-stat strong { font-size: 17px; }
+  .score-rules {
+    margin: 0 0 14px; padding: 11px 12px; border-radius: 13px;
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.72);
+    display: grid; gap: 4px; font-size: 10px; line-height: 1.35; text-align: left;
+  }
+  .score-rules strong { color: #ffd23f; font-size: 11px; text-align: center; }
+  .home-secondary {
+    width: 100%; min-height: 48px; border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 13px; background: linear-gradient(180deg, #ffe17b, #f5aa38);
+    box-shadow: 0 4px 0 #af7024; color: #65400f; cursor: pointer;
+    font-size: 13px; font-weight: 700;
+  }
+  .home-secondary[hidden] { display: none; }
+  @media (max-aspect-ratio: 941 / 1672) {
+    .title-art-stage { width: 100%; height: auto; }
+  }
+  /* On phone-width viewports the screen fills the device edge-to-edge.
+     Past that it becomes a centered, framed card instead of stretching
+     into an ungainly wide panel on tablets/desktops. */
+  @media (min-width: 520px) {
+    .screen {
+      border-radius: 24px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+      height: min(100vh, 840px);
+      height: min(100dvh, 840px);
+      min-height: 0;
+      margin: 24px 0;
+    }
+  }
+  .topbar { display: flex; align-items: center; justify-content: center; position: relative; margin-bottom: 8px; flex-shrink: 0; }
+  .home-btn {
+    position: absolute; left: 0; top: -2px; width: 40px; height: 40px; border-radius: 50%;
+    background: #fff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .level-pill {
+    background: rgba(255,255,255,0.12); border-radius: 20px; padding: 6px 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .level-pill span { font-size: 14px; font-weight: 600; }
+  .timer-pill {
+    background: rgba(255,255,255,0.12); border-radius: 20px; padding: 6px 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .timer-pill span { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .timer-pill.urgent { background: rgba(224,80,58,0.35); }
+  .timer-pill.urgent span, .timer-pill.urgent svg { color: #ff8a7a; stroke: #ff8a7a; }
+  #status { text-align: center; font-size: 12px; color: #ffd23f; min-height: 16px; margin: 8px 0 4px; }
+  #bottles {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(var(--bw), max-content));
+    align-content: center;
+    justify-content: center;
+    justify-items: center;
+    row-gap: clamp(14px, 4vh, 30px);
+    column-gap: clamp(4px, 2vw, 12px);
+    width: 100%;
+    padding: 8px 2px;
+  }
+  .bottle-wrap {
+    appearance: none; -webkit-appearance: none; border: 0; padding: 0; margin: 0;
+    background: transparent; color: inherit; font: inherit; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; position: relative;
+  }
+  .bottle-wrap:disabled { cursor: default; }
+  .bottle-wrap:focus-visible { outline: none; }
+  .bottle-wrap:focus-visible .bottle {
+    box-shadow: 0 0 0 4px #ffd23f, 0 0 0 8px rgba(255,255,255,0.75), 0 6px 10px rgba(0,0,0,0.4);
+  }
+  .collar {
+    width: calc(var(--bw) * 0.42); height: calc(var(--bw) * 0.15); border-radius: 4px;
+    background: linear-gradient(90deg, #fff 0%, #d7d9e2 30%, #f4f5f9 55%, #b7b9c4 85%, #eceef3 100%);
+    border: calc(var(--bw) * 0.055) solid #fff; z-index: 2;
+  }
+  .neck {
+    width: calc(var(--bw) * 0.38); height: calc(var(--bw) * 0.22); background: rgba(255,255,255,0.15);
+    border-left: calc(var(--bw) * 0.07) solid #fff; border-right: calc(var(--bw) * 0.07) solid #fff; margin-top: -3px;
+  }
+  .bottle {
+    width: var(--bw); height: calc(var(--bw) * 2.05);
+    border-radius: calc(var(--bw) * 0.42) calc(var(--bw) * 0.42) calc(var(--bw) * 0.46) calc(var(--bw) * 0.46);
+    border: calc(var(--bw) * 0.075) solid #fff;
+    margin-top: -2px; position: relative; background: rgba(255,255,255,0.08);
+    display: flex; flex-direction: column-reverse; overflow: hidden; cursor: pointer;
+    box-shadow: 0 6px 10px rgba(0,0,0,0.4); transition: box-shadow 0.15s, transform 0.35s ease;
+  }
+  .bottle.selected { box-shadow: 0 0 0 4px #fff, 0 6px 10px rgba(0,0,0,0.4); }
+  .bottle.hint-from { box-shadow: 0 0 0 4px #29B6F6, 0 6px 10px rgba(0,0,0,0.4); }
+  .bottle.hint-to { box-shadow: 0 0 0 4px #5cff8f, 0 6px 10px rgba(0,0,0,0.4); }
+  .screen.input-locked #bottles { pointer-events: none; }
+  .layer { width: 100%; position: relative; }
+  .shine {
+    position: absolute; top: 2px; bottom: 2px; left: calc(var(--bw) * 0.16); width: calc(var(--bw) * 0.14);
+    border-radius: 4px; background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0.15)); z-index: 3;
+  }
+  .top-highlight { position: absolute; top: 0; left: 0; right: 0; height: 30%; background: rgba(255,255,255,0.3); border-radius: 0 0 50% 50%/0 0 8px 8px; }
+  .shadow-ellipse {
+    width: calc(var(--bw) * 0.84); height: 9px; border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0) 75%); margin-top: -3px;
+  }
+  .hint-badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); width: 22px; height: 22px; border-radius: 50%; background: #ffd23f; display: flex; align-items: center; justify-content: center; z-index: 4; }
+
+  .toolbar { display: flex; align-items: stretch; gap: 10px; margin-top: 12px; flex-shrink: 0; }
+  .toolbar button {
+    flex: 1; border: none; border-radius: 14px; padding: 10px 4px 8px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+  }
+  .toolbar button:disabled { opacity: 0.45; cursor: default; }
+  #undoBtn { background: linear-gradient(180deg, #eceef5, #cdd0dd); color: #4a4d5e; box-shadow: 0 4px 0 #9a9db0; }
+  #scoreBox {
+    flex: 1; min-width: 0; background: rgba(255,255,255,0.1); color: #fff;
+    border-radius: 14px; padding: 7px 5px; display: flex; align-items: center; justify-content: space-evenly;
+  }
+  #scoreBox .metric { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #scoreBox .metric + .metric { border-left: 1px solid rgba(255,255,255,0.16); padding-left: 8px; }
+  #scoreBox span.label { font-size: 10px; color: rgba(255,255,255,0.65); letter-spacing: 0.3px; }
+  #scoreBox span.value { font-size: 16px; font-weight: 600; white-space: nowrap; }
+  #scoreBox.at-limit #moveValue { color: #ff8a7a; font-size: 13px; }
+  #hintBtn { background: linear-gradient(180deg, #ffd873, #f2a83c); color: #6b3f10; box-shadow: 0 4px 0 #b9762a; position: relative; }
+  #hintBtn .count {
+    position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%;
+    background: #2b3a67; color: #fff; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="screen">
+  <section class="home-screen visible" id="homeScreen" aria-label="Bottle Sort title screen">
+    <div class="title-art-stage">
+      <img
+        class="home-title-art"
+        src="bottle-sort-title.png"
+        alt="Evermore Arcade Bottle Sort — Pour, Match, Win"
+      >
+      <button class="title-hotspot title-play" id="playBtn" type="button">Start game</button>
+      <button
+        class="title-hotspot title-settings"
+        id="settingsBtn"
+        type="button"
+        aria-label="Open game menu"
+        aria-expanded="false"
+      ></button>
+      <div class="title-menu" id="titleMenu" hidden>
+        <button class="title-menu-close" id="menuCloseBtn" type="button" aria-label="Close game menu">×</button>
+        <h2>Game menu</h2>
+        <div class="home-progress" id="homeProgress">
+          <div class="home-stat"><span>Current board</span><strong id="homeLevel">—</strong></div>
+          <div class="home-stat"><span>Boards solved</span><strong id="homeBoards">0</strong></div>
+          <div class="home-stat"><span>Current score</span><strong id="homeScore">0</strong></div>
+          <div class="home-stat"><span>High score</span><strong id="homeBestScore">0</strong></div>
+          <div class="home-stat"><span>Flawless streak</span><strong id="homeStreak">0</strong></div>
+          <div class="home-stat"><span>Best streak</span><strong id="homeBestStreak">0</strong></div>
+        </div>
+        <div class="score-rules">
+          <strong>Flawless boards build your score streak</strong>
+          <span>Difficulty + time remaining + 500 flawless bonus</span>
+          <span>Undo −250 · incorrect pour −100 · hint −200 · each extra move −150</span>
+        </div>
+        <button class="home-secondary" id="newGameBtn" type="button" hidden>Start a new run</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="topbar">
+    <button class="home-btn" id="homeBtn" type="button" aria-label="Open home screen">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2b3a67" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/>
+      </svg>
+    </button>
+    <div class="level-pill">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffd23f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 3h6M10 3v6l-5.5 9a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/>
+      </svg>
+      <span id="levelLabel">Board 1 / 10</span>
+    </div>
+    <div class="timer-pill" id="timerPill" style="margin-left: 8px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/>
+      </svg>
+      <span id="timerValue">1:30</span>
+    </div>
+  </div>
+
+  <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="bottles" role="group" aria-label="Color sorting bottles"></div>
+
+  <div class="toolbar">
+    <button id="undoBtn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4a4d5e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      Undo −250
+    </button>
+    <div id="scoreBox">
+      <div class="metric">
+        <span class="label">SCORE</span>
+        <span class="value" id="scoreValue">0</span>
+      </div>
+      <div class="metric">
+        <span class="label">MOVES</span>
+        <span class="value" id="moveValue">0 / —</span>
+      </div>
+    </div>
+    <button id="hintBtn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6b3f10" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8 1 .8 1.7v.5h5.6v-.5c0-.7.3-1.3.8-1.7A6 6 0 0 0 12 3Z"/></svg>
+      <span id="hintLabel">Hint −200</span>
+      <span class="count" id="hintCount">3</span>
+    </button>
+  </div>
+</div>
+
+<script>
+const CAPACITY = 4;
+const PALETTE = ['#FFD23F', '#29B6F6', '#5B2C8F', '#FF8C1A', '#1c9e8a', '#e0508a', '#8fce3a', '#e0733f'];
+const COLOR_NAMES = ['yellow', 'blue', 'purple', 'orange', 'teal', 'pink', 'green', 'coral'];
+const MAX_LEVELS = 10;
+const LEVEL_TIME = 90; // one continuous countdown for the whole run
+const SCORE_RULES = Object.freeze({
+  baseBoard: 500,
+  perColor: 125,
+  perMinimumMove: 75,
+  perSecondRemaining: 10,
+  flawlessBonus: 500,
+  streakStep: 0.25,
+  maximumMultiplier: 3,
+  incorrectPourPenalty: 100,
+  undoPenalty: 250,
+  hintPenalty: 200,
+  overLimitMovePenalty: 150
+});
+
+let state = [];
+let originalState = [];
+let selected = null;
+let moveCount = 0;
+let score = 0;
+let boardsSolved = 0;
+let flawlessStreak = 0;
+let bestStreak = loadRecord('bottleSortBestStreak');
+let boardIsFlawless = true;
+let bestScore = loadRecord('bottleSortBestScore');
+let hintsRemaining = 3;
+let history = []; // stack of {state, moveCount} snapshots for undo
+let level = 1;
+let gamePhase = 'playing'; // playing | transitioning | complete
+let transitionTimeout = null;
+let levelLoadToken = 0;
+let homeOpen = true;
+let gameStarted = false;
+let timeRemaining = LEVEL_TIME;
+let timerInterval = null;
+let solverBusy = false;
+let hintMove = null;
+let solutionCache = new Map();
+let minimumMoves = 0;
+let optimalSolution = [];
+
+const SOLVER_VISITED_LIMIT = 50000;
+const SOLVER_TIME_BUDGET_MS = 1400;
+const SOLVER_YIELD_EVERY = 300;
+
+// Difficulty is tracked as running counters, not derived from the level
+// number — the player never chooses either value directly. Completing a
+// level bumps exactly one of them: colors first (up to what the palette
+// supports), then empty bottles once colors are maxed out, alternating
+// from there so the puzzle keeps growing every single level.
+let numColors = 3;
+let numEmptyBottles = 2;
+let growColorsNext = true;
+
+function loadRecord(key) {
+  try {
+    const value = Number.parseInt(localStorage.getItem(key), 10);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveRecords() {
+  try {
+    localStorage.setItem('bottleSortBestScore', String(bestScore));
+    localStorage.setItem('bottleSortBestStreak', String(bestStreak));
+  } catch {
+    // The game still works when storage is blocked or unavailable.
+  }
+}
+
+function changeScore(amount) {
+  score = Math.max(0, score + amount);
+  if (score > bestScore) bestScore = score;
+  saveRecords();
+}
+
+function recordFault(penalty) {
+  boardIsFlawless = false;
+  flawlessStreak = 0;
+  changeScore(-penalty);
+}
+
+function advanceDifficulty() {
+  if (growColorsNext && numColors < PALETTE.length) {
+    numColors++;
+  } else {
+    numEmptyBottles++;
+  }
+  growColorsNext = !growColorsNext;
+}
+
+// ---------- timer ----------
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+}
+
+function clearPendingTransition() {
+  if (transitionTimeout !== null) {
+    clearTimeout(transitionTimeout);
+    transitionTimeout = null;
+  }
+}
+
+function scheduleTransition(callback, delay) {
+  clearPendingTransition();
+  transitionTimeout = setTimeout(() => {
+    transitionTimeout = null;
+    callback();
+  }, delay);
+}
+
+function startTimer(reset = false) {
+  if (reset) timeRemaining = LEVEL_TIME;
+  updateTimerDisplay();
+  if (timerInterval || timeRemaining <= 0) return;
+
+  timerInterval = setInterval(() => {
+    timeRemaining = Math.max(0, timeRemaining - 1);
+    updateTimerDisplay();
+    if (timeRemaining <= 0) {
+      endTimedRun();
+    }
+  }, 1000);
+}
+
+function endTimedRun() {
+  if (!gameStarted || gamePhase === 'complete') return;
+
+  clearPendingTransition();
+  levelLoadToken++;
+  stopTimer();
+  timeRemaining = 0;
+  gamePhase = 'complete';
+  solverBusy = false;
+  selected = null;
+  hintMove = null;
+  boardIsFlawless = false;
+  flawlessStreak = 0;
+  saveRecords();
+  render();
+  if (homeOpen) updateHomeScreen();
+  document.getElementById('status').textContent =
+    `Time's up! ${boardsSolved} board${boardsSolved === 1 ? '' : 's'} solved · ${score.toLocaleString()} points.`;
+}
+
+function updateTimerDisplay() {
+  const pill = document.getElementById('timerPill');
+  document.getElementById('timerValue').textContent = formatTime(Math.max(timeRemaining, 0));
+  pill.classList.toggle('urgent', timeRemaining <= 10);
+}
+
+// ---------- core solver logic ----------
+
+function cloneState(s) { return s.map(b => b.slice()); }
+function serializeExact(s) { return s.map(b => b.join(',')).join('|'); }
+function describeBottle(bottle) {
+  if (bottle.length === 0) return 'empty';
+  return `${bottle
+    .slice()
+    .reverse()
+    .map(color => COLOR_NAMES[color] || `color ${color + 1}`)
+    .join(', ')}, from top to bottom`;
+}
+// Bottle positions are interchangeable for solving purposes. Sorting their
+// serialized contents collapses equivalent board permutations and removes a
+// large source of duplicate search work at higher levels.
+function serialize(s) { return s.map(b => b.join(',')).sort().join('|'); }
+
+function isSolved(s) {
+  return s.every(b => b.length === 0 || (b.length === CAPACITY && b.every(c => c === b[0])));
+}
+
+// Skip pours that can't help: source empty, target full, colors mismatched,
+// or moving an already-solid full bottle onto an empty one (pure shuffle).
+function getValidMoves(s) {
+  const moves = [];
+  for (let i = 0; i < s.length; i++) {
+    const from = s[i];
+    if (from.length === 0) continue;
+    const topColor = from[from.length - 1];
+    const isSolidFull = from.length === CAPACITY && from.every(c => c === topColor);
+
+    for (let j = 0; j < s.length; j++) {
+      if (i === j) continue;
+      const to = s[j];
+      if (to.length >= CAPACITY) continue;
+      if (isSolidFull && to.length === 0) continue;
+
+      if (to.length === 0 || to[to.length - 1] === topColor) {
+        let pourable = 0;
+        for (let k = from.length - 1; k >= 0 && from[k] === topColor; k--) pourable++;
+        const amount = Math.min(pourable, CAPACITY - to.length);
+        if (amount > 0) moves.push({ from: i, to: j, amount, color: topColor });
+      }
+    }
+  }
+  return moves;
+}
+
+// Search only needs one representative move between equivalent source/target
+// bottle shapes. Manual play still uses the complete move list above.
+function getSearchMoves(s) {
+  const seen = new Set();
+  return getValidMoves(s).filter(move => {
+    const key = `${s[move.from].join(',')}>${s[move.to].join(',')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function applyMove(s, move) {
+  const next = cloneState(s);
+  const from = next[move.from];
+  const to = next[move.to];
+  for (let k = 0; k < move.amount; k++) to.push(from.pop());
+  return next;
+}
+
+// Cache the known reverse-scramble solution at every point along its route.
+// Higher-level hints are then instant as long as the player remains on that
+// route; the cooperative search is only needed after an off-route move.
+function cacheGeneratedSolution(startState, solution) {
+  solutionCache = new Map();
+  let cursor = cloneState(startState);
+
+  for (let index = 0; index < solution.length; index++) {
+    solutionCache.set(serializeExact(cursor), solution.slice(index));
+    cursor = applyMove(cursor, solution[index]);
+  }
+  solutionCache.set(serializeExact(cursor), []);
+}
+
+// Cooperative BFS for player-requested hints. Parent pointers avoid copying a
+// complete path into every queued node, and periodic yields let input, paint,
+// and the timer continue while a difficult position is searched.
+async function solveAsync(
+  startState,
+  maxVisited = SOLVER_VISITED_LIMIT,
+  timeBudgetMs = SOLVER_TIME_BUDGET_MS
+) {
+  if (isSolved(startState)) return { status: 'solved', path: [] };
+
+  const startedAt = performance.now();
+  const visited = new Set([serialize(startState)]);
+  const queue = [{ s: cloneState(startState), parent: -1, move: null }];
+  let head = 0;
+  let processedSinceYield = 0;
+
+  while (head < queue.length) {
+    if (
+      visited.size >= maxVisited ||
+      performance.now() - startedAt >= timeBudgetMs
+    ) {
+      return { status: 'limit', path: null };
+    }
+
+    if (processedSinceYield >= SOLVER_YIELD_EVERY) {
+      processedSinceYield = 0;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    const parentIndex = head;
+    const { s } = queue[head++];
+    processedSinceYield++;
+
+    for (const move of getSearchMoves(s)) {
+      const next = applyMove(s, move);
+      const key = serialize(next);
+      if (visited.has(key)) continue;
+
+      visited.add(key);
+      const nodeIndex = queue.length;
+      queue.push({ s: next, parent: parentIndex, move });
+
+      if (isSolved(next)) {
+        const path = [];
+        let cursor = nodeIndex;
+        while (queue[cursor].parent !== -1) {
+          path.push(queue[cursor].move);
+          cursor = queue[cursor].parent;
+        }
+        path.reverse();
+        return { status: 'solved', path };
+      }
+    }
+  }
+
+  return { status: 'unsolvable', path: null };
+}
+
+// ---------- level generator ----------
+
+// Starts solved and applies moves that are guaranteed to be legally
+// reversible. This makes every generated board solvable by construction,
+// eliminating the expensive BFS verification that used to freeze later levels.
+function scrambleFromSolved(numColors, numEmpty, shuffleSteps) {
+  const state = [];
+  for (let c = 0; c < numColors; c++) state.push(new Array(CAPACITY).fill(c));
+  for (let e = 0; e < numEmpty; e++) state.push([]);
+  const seen = new Set([serialize(state)]);
+  const solution = [];
+
+  for (let step = 0; step < shuffleSteps; step++) {
+    const candidates = [];
+
+    for (let src = 0; src < state.length; src++) {
+      const bottle = state[src];
+      if (bottle.length === 0) continue;
+
+      const color = bottle[bottle.length - 1];
+      let runLen = 0;
+      for (let k = bottle.length - 1; k >= 0 && bottle[k] === color; k--) runLen++;
+
+      for (let take = 1; take <= runLen; take++) {
+        const exposesDifferentColor = take === runLen && bottle.length > runLen;
+        if (exposesDifferentColor) continue;
+
+        for (let dst = 0; dst < state.length; dst++) {
+          if (src === dst || CAPACITY - state[dst].length < take) continue;
+
+          // Do not merge with the same color. Keeping the moved chunk separate
+          // ensures that its inverse will pour exactly this amount back.
+          const dstTop = state[dst][state[dst].length - 1];
+          if (dstTop === color) continue;
+
+          const next = cloneState(state);
+          const moved = next[src].splice(next[src].length - take, take);
+          next[dst].push(...moved);
+          const key = serialize(next);
+          if (seen.has(key)) continue;
+
+          candidates.push({ src, dst, take, color, next, key });
+        }
+      }
+    }
+
+    if (candidates.length === 0) break;
+
+    // Prefer moves that create or deepen mixed bottles so the puzzle remains
+    // interesting rather than merely scattering solid stacks into empty jars.
+    const mixedCandidates = candidates.filter(candidate => {
+      const target = candidate.next[candidate.dst];
+      return new Set(target).size > 1;
+    });
+    const pool = mixedCandidates.length > 0 ? mixedCandidates : candidates;
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+
+    state.splice(0, state.length, ...chosen.next);
+    seen.add(chosen.key);
+    solution.unshift({
+      from: chosen.dst,
+      to: chosen.src,
+      amount: chosen.take,
+      color: chosen.color
+    });
+  }
+
+  return { state, solution };
+}
+
+// Generation is now bounded, linear work. No state-space search runs here.
+function generateLevel(numColors, numEmpty, shuffleSteps, maxAttempts = 16) {
+  let best = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const candidate = scrambleFromSolved(numColors, numEmpty, shuffleSteps);
+    if (isSolved(candidate.state)) continue;
+
+    const mixedBottles = candidate.state.filter(
+      bottle => new Set(bottle).size > 1
+    ).length;
+
+    if (!best || mixedBottles > best.mixedBottles) {
+      best = { ...candidate, mixedBottles };
+    }
+
+    if (mixedBottles >= Math.min(3, numColors)) {
+      return candidate;
+    }
+  }
+
+  return best;
+}
+
+// ---------- rendering ----------
+
+function render() {
+  const wrap = document.getElementById('bottles');
+  const inputLocked = homeOpen || gamePhase !== 'playing' || solverBusy;
+  document.querySelector('.screen').classList.toggle('input-locked', inputLocked);
+  wrap.setAttribute('aria-busy', inputLocked ? 'true' : 'false');
+  wrap.innerHTML = '';
+  state.forEach((bottle, idx) => {
+    const outer = document.createElement('button');
+    outer.type = 'button';
+    outer.className = 'bottle-wrap';
+    outer.dataset.index = idx;
+    outer.disabled = inputLocked;
+    outer.setAttribute('aria-label', `Bottle ${idx + 1}: ${describeBottle(bottle)}`);
+    outer.setAttribute('aria-pressed', idx === selected ? 'true' : 'false');
+    outer.onclick = () => handleClick(idx);
+
+    const collar = document.createElement('div');
+    collar.className = 'collar';
+    const neck = document.createElement('div');
+    neck.className = 'neck';
+
+    const el = document.createElement('div');
+    el.className = 'bottle';
+    if (idx === selected) el.classList.add('selected');
+    if (hintMove && idx === hintMove.from) el.classList.add('hint-from');
+    if (hintMove && idx === hintMove.to) el.classList.add('hint-to');
+
+    const topIndex = bottle.length - 1;
+    for (let slot = 0; slot < CAPACITY; slot++) {
+      const seg = document.createElement('div');
+      seg.className = 'layer';
+      seg.style.height = '25%';
+      if (bottle[slot] !== undefined) {
+        seg.style.background = PALETTE[bottle[slot]];
+        if (slot === topIndex) {
+          const hi = document.createElement('div');
+          hi.className = 'top-highlight';
+          seg.appendChild(hi);
+        }
+      }
+      el.appendChild(seg);
+    }
+    const shine = document.createElement('div');
+    shine.className = 'shine';
+    el.appendChild(shine);
+
+    const shadow = document.createElement('div');
+    shadow.className = 'shadow-ellipse';
+
+    outer.appendChild(collar);
+    outer.appendChild(neck);
+    outer.appendChild(el);
+    outer.appendChild(shadow);
+    wrap.appendChild(outer);
+  });
+
+  document.getElementById('scoreValue').textContent = score.toLocaleString();
+  const extraMoves = Math.max(0, moveCount - minimumMoves);
+  document.getElementById('moveValue').textContent = minimumMoves > 0
+    ? extraMoves > 0
+      ? `${moveCount} / ${minimumMoves} (+${extraMoves})`
+      : `${moveCount} / ${minimumMoves}`
+    : `${moveCount} / —`;
+  document.getElementById('scoreBox').classList.toggle(
+    'at-limit',
+    minimumMoves > 0 && moveCount > minimumMoves
+  );
+  document.getElementById('hintCount').textContent = hintsRemaining;
+  document.getElementById('hintBtn').disabled =
+    hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy;
+  document.getElementById('undoBtn').disabled =
+    history.length === 0 || gamePhase !== 'playing' || solverBusy;
+  document.getElementById('hintLabel').textContent =
+    solverBusy ? 'Thinking…' : `Hint −${SCORE_RULES.hintPenalty}`;
+
+  const streakText = flawlessStreak > 0 ? ` · 🔥 ${flawlessStreak}` : '';
+  document.getElementById('levelLabel').textContent =
+    `Board ${level} / ${MAX_LEVELS}${streakText}`;
+
+  if (gamePhase === 'playing' && !isSolved(state)) {
+    document.getElementById('status').textContent = '';
+  }
+}
+
+function pushHistory() {
+  history.push({ state: cloneState(state), moveCount });
+}
+
+function completeLevel() {
+  if (gamePhase !== 'playing' || !isSolved(state)) return;
+
+  const runFinished = level >= MAX_LEVELS;
+  gamePhase = runFinished ? 'complete' : 'transitioning';
+  selected = null;
+  hintMove = null;
+  if (runFinished) stopTimer();
+
+  const wasFlawless = boardIsFlawless;
+  boardsSolved++;
+  if (wasFlawless) {
+    flawlessStreak++;
+    bestStreak = Math.max(bestStreak, flawlessStreak);
+  } else {
+    flawlessStreak = 0;
+  }
+
+  const difficultyPoints =
+    SCORE_RULES.baseBoard +
+    numColors * SCORE_RULES.perColor +
+    minimumMoves * SCORE_RULES.perMinimumMove;
+  const timePoints = timeRemaining * SCORE_RULES.perSecondRemaining;
+  const flawlessPoints = wasFlawless ? SCORE_RULES.flawlessBonus : 0;
+  const streakMultiplier = wasFlawless
+    ? Math.min(
+        SCORE_RULES.maximumMultiplier,
+        1 + (flawlessStreak - 1) * SCORE_RULES.streakStep
+      )
+    : 1;
+  // Difficulty keeps later boards valuable, speed breaks ties, and the
+  // multiplier rewards consistency without allowing an unlimited runaway score.
+  const levelScore = Math.round(
+    (difficultyPoints + timePoints + flawlessPoints) * streakMultiplier
+  );
+  changeScore(levelScore);
+  render();
+
+  if (gamePhase === 'complete') {
+    document.getElementById('status').textContent =
+      `Run complete! ${boardsSolved} boards · ${score.toLocaleString()} points · best streak ${bestStreak}.`;
+    return;
+  }
+
+  const streakMessage = wasFlawless
+    ? ` · flawless x${streakMultiplier.toFixed(2).replace(/\.00$/, '')}`
+    : '';
+  const extraMoves = Math.max(0, moveCount - minimumMoves);
+  const extraMoveMessage = extraMoves > 0
+    ? ` · ${extraMoves} extra move${extraMoves === 1 ? '' : 's'}`
+    : '';
+  document.getElementById('status').textContent =
+    `Board cleared — +${levelScore.toLocaleString()} pts${streakMessage}${extraMoveMessage}`;
+  advanceDifficulty();
+  scheduleTransition(() => {
+    level++;
+    startLevel();
+  }, 1200);
+}
+
+// ---------- manual play: tap to select, tap again to pour ----------
+
+// First click selects a source bottle; a second click on a different
+// bottle attempts to pour into it.
+function handleClick(idx) {
+  if (gamePhase !== 'playing' || solverBusy) return;
+  hintMove = null;
+
+  if (selected === null) {
+    if (state[idx].length === 0) return; // nothing to pour from an empty bottle
+    selected = idx;
+    render();
+    return;
+  }
+  const from = selected;
+  selected = null;
+  if (from === idx) { render(); return; }
+  attemptMove(from, idx);
+}
+
+function attemptMove(fromIdx, toIdx) {
+  hintMove = null;
+  const moves = getValidMoves(state).filter(m => m.from === fromIdx && m.to === toIdx);
+  if (moves.length === 0) {
+    recordFault(SCORE_RULES.incorrectPourPenalty);
+    render();
+    document.getElementById('status').textContent =
+      `Incorrect pour — −${SCORE_RULES.incorrectPourPenalty} points. Streak reset.`;
+    return;
+  }
+  pushHistory();
+  const move = moves[0];
+  state = applyMove(state, move);
+  moveCount++;
+
+  const isExtraMove = moveCount > minimumMoves;
+  if (isExtraMove) {
+    recordFault(SCORE_RULES.overLimitMovePenalty);
+  }
+
+  if (isSolved(state)) {
+    completeLevel();
+  } else {
+    render();
+    if (isExtraMove) {
+      const extraMoves = moveCount - minimumMoves;
+      document.getElementById('status').textContent =
+        `Extra move ${extraMoves} — −${SCORE_RULES.overLimitMovePenalty} points.`;
+    }
+  }
+}
+
+// Creates a responsive candidate, then uses BFS to prove its exact minimum.
+// If proof is too expensive, scramble depth is reduced and another candidate
+// is tried rather than allowing a long search to block level loading.
+async function startLevel() {
+  clearPendingTransition();
+  const loadToken = ++levelLoadToken;
+  gamePhase = 'transitioning';
+  solverBusy = true;
+  selected = null;
+  hintMove = null;
+  render();
+  document.getElementById('status').textContent =
+    'Calculating the minimum move challenge…';
+
+  let scrambleSteps = Math.min(12, Math.max(6, numColors + 4));
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = generateLevel(numColors, numEmptyBottles, scrambleSteps);
+    if (!candidate) {
+      scrambleSteps = Math.max(5, scrambleSteps - 1);
+      continue;
+    }
+
+    const verification = await solveAsync(candidate.state, 300000, 2000);
+    if (loadToken !== levelLoadToken) return;
+
+    if (verification.status === 'solved' && verification.path.length > 0) {
+      state = cloneState(candidate.state);
+      originalState = cloneState(candidate.state);
+      optimalSolution = verification.path;
+      minimumMoves = optimalSolution.length;
+      cacheGeneratedSolution(state, optimalSolution);
+      moveCount = 0;
+      hintsRemaining = 3;
+      history = [];
+      boardIsFlawless = true;
+      selected = null;
+      hintMove = null;
+      solverBusy = false;
+      gamePhase = 'playing';
+      gameStarted = true;
+      if (!homeOpen) {
+        startTimer(false);
+      } else {
+        updateTimerDisplay();
+      }
+      render();
+      if (homeOpen) updateHomeScreen();
+      document.getElementById('status').textContent =
+        `Target: ${minimumMoves} moves. Each extra move costs ${SCORE_RULES.overLimitMovePenalty} points.`;
+      return;
+    }
+
+    scrambleSteps = Math.max(5, scrambleSteps - 1);
+    document.getElementById('status').textContent =
+      'Simplifying the board so its minimum can be verified…';
+  }
+
+  // An extremely defensive retry. Generation remains asynchronous and the
+  // previous load token prevents an older attempt from replacing a new level.
+  solverBusy = false;
+  scheduleTransition(startLevel, 50);
+}
+
+function updateHomeScreen() {
+  document.getElementById('homeLevel').textContent =
+    gameStarted ? `${level} / ${MAX_LEVELS}` : '—';
+  document.getElementById('homeScore').textContent = score.toLocaleString();
+  document.getElementById('homeBoards').textContent = boardsSolved.toLocaleString();
+  document.getElementById('homeBestScore').textContent = bestScore.toLocaleString();
+  document.getElementById('homeStreak').textContent = flawlessStreak.toLocaleString();
+  document.getElementById('homeBestStreak').textContent = bestStreak.toLocaleString();
+  document.getElementById('playBtn').textContent = !gameStarted
+    ? 'Start game'
+    : gamePhase === 'complete'
+      ? 'View completed run'
+      : `Resume level ${level}`;
+  document.getElementById('newGameBtn').hidden = !gameStarted;
+}
+
+function closeTitleMenu() {
+  document.getElementById('titleMenu').hidden = true;
+  document.getElementById('settingsBtn').setAttribute('aria-expanded', 'false');
+}
+
+function showHome() {
+  homeOpen = true;
+  stopTimer();
+  selected = null;
+  hintMove = null;
+  closeTitleMenu();
+  document.getElementById('homeScreen').classList.add('visible');
+  document.getElementById('homeScreen').setAttribute('aria-hidden', 'false');
+  updateHomeScreen();
+  render();
+  document.getElementById('playBtn').focus();
+}
+
+function closeHome() {
+  homeOpen = false;
+  closeTitleMenu();
+  document.getElementById('homeScreen').classList.remove('visible');
+  document.getElementById('homeScreen').setAttribute('aria-hidden', 'true');
+}
+
+function startNewRun() {
+  clearPendingTransition();
+  stopTimer();
+  levelLoadToken++;
+  level = 1;
+  score = 0;
+  boardsSolved = 0;
+  flawlessStreak = 0;
+  boardIsFlawless = true;
+  timeRemaining = LEVEL_TIME;
+  updateTimerDisplay();
+  numColors = 3;
+  numEmptyBottles = 2;
+  growColorsNext = true;
+  minimumMoves = 0;
+  optimalSolution = [];
+  history = [];
+  gamePhase = 'transitioning';
+  gameStarted = true;
+  closeHome();
+  return startLevel();
+}
+
+document.getElementById('homeBtn').onclick = showHome;
+
+document.getElementById('settingsBtn').onclick = () => {
+  const menu = document.getElementById('titleMenu');
+  const willOpen = menu.hidden;
+  menu.hidden = !willOpen;
+  document.getElementById('settingsBtn').setAttribute(
+    'aria-expanded',
+    willOpen ? 'true' : 'false'
+  );
+  if (willOpen) document.getElementById('menuCloseBtn').focus();
+};
+
+document.getElementById('menuCloseBtn').onclick = () => {
+  closeTitleMenu();
+  document.getElementById('settingsBtn').focus();
+};
+
+document.getElementById('playBtn').onclick = () => {
+  if (!gameStarted) {
+    return startNewRun();
+  }
+
+  closeHome();
+  render();
+  if (gamePhase === 'playing') startTimer(false);
+};
+
+document.getElementById('newGameBtn').onclick = startNewRun;
+
+document.getElementById('undoBtn').onclick = () => {
+  if (history.length === 0 || gamePhase !== 'playing' || solverBusy) return;
+  const prev = history.pop();
+  state = prev.state;
+  moveCount = prev.moveCount;
+  recordFault(SCORE_RULES.undoPenalty);
+  selected = null;
+  hintMove = null;
+  render();
+  document.getElementById('status').textContent =
+    `Undo used — −${SCORE_RULES.undoPenalty} points. Streak reset.`;
+};
+
+document.getElementById('hintBtn').onclick = async () => {
+  if (hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy) return;
+
+  hintMove = null;
+
+  const cachedPath = solutionCache.get(serializeExact(state));
+  if (cachedPath && cachedPath.length > 0) {
+    hintsRemaining--;
+    recordFault(SCORE_RULES.hintPenalty);
+    hintMove = cachedPath[0];
+    render();
+    document.getElementById('status').textContent =
+      `−${SCORE_RULES.hintPenalty} points · try bottle ${hintMove.from + 1} → bottle ${hintMove.to + 1}.`;
+    return;
+  }
+
+  solverBusy = true;
+  render();
+  document.getElementById('status').textContent = 'Finding a helpful pour…';
+
+  const searchedState = serialize(state);
+  const result = await solveAsync(state);
+  solverBusy = false;
+
+  // Discard a stale result if game state changed while the search yielded.
+  if (searchedState !== serialize(state) || gamePhase !== 'playing') {
+    render();
+    return;
+  }
+
+  if (result.status === 'limit') {
+    render();
+    document.getElementById('status').textContent =
+      'This position is complex — try a move or Undo, then ask again.';
+    return;
+  }
+
+  if (result.status === 'unsolvable') {
+    render();
+    document.getElementById('status').textContent =
+      'No solution was found from here — try Undo.';
+    return;
+  }
+
+  if (result.path.length === 0) {
+    render();
+    return;
+  }
+
+  hintsRemaining--;
+  recordFault(SCORE_RULES.hintPenalty);
+  hintMove = result.path[0];
+  render();
+  document.getElementById('status').textContent =
+    `−${SCORE_RULES.hintPenalty} points · try bottle ${hintMove.from + 1} → bottle ${hintMove.to + 1}.`;
+};
+
+showHome();
+</script>
+</body>
+</html>
