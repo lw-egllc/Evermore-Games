@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>PLUMMET — laser shaft descent</title>
+<style>
+  :root{
+    --void:#05060f;
+    --void-2:#0d0a20;
+    --strut:#2b3f7a;
+    --strut-hot:#6fd6ff;
+    --idle:#ffb020;
+    --armed:#ff3d7f;
+    --pod:#b8ffe8;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--void);}
+  body{
+    font-family:var(--mono);
+    color:#e8f4ff;
+    -webkit-user-select:none;user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:none;
+    overscroll-behavior:none;
+  }
+  #c{display:block;position:fixed;inset:0;}
+
+  .layer{position:fixed;inset:0;pointer-events:none;}
+
+  /* ---- depth gauge: the signature element ---- */
+  #gauge{
+    position:fixed;left:0;top:0;bottom:0;width:58px;
+    pointer-events:none;
+    mask-image:linear-gradient(to bottom,transparent,#000 18%,#000 82%,transparent);
+    -webkit-mask-image:linear-gradient(to bottom,transparent,#000 18%,#000 82%,transparent);
+  }
+
+  /* ---- readouts ---- */
+  #hud{position:fixed;top:calc(env(safe-area-inset-top) + 14px);right:16px;text-align:right;pointer-events:none}
+  .k{font-size:9px;letter-spacing:.28em;color:#5b6a9a;text-transform:uppercase}
+  .v{font-size:30px;font-weight:600;letter-spacing:.02em;line-height:1;font-variant-numeric:tabular-nums}
+  .v small{font-size:11px;color:#5b6a9a;letter-spacing:.2em;margin-left:3px}
+  #vel{margin-top:12px}
+  #vel .v{font-size:15px;color:var(--idle)}
+  #core{margin-top:12px}
+  #core .v{font-size:15px}
+
+  /* ---- panels ---- */
+  #ui{position:fixed;inset:0;display:grid;place-items:center;padding:28px;text-align:center;}
+  #ui.hide{display:none}
+  .panel{max-width:min(420px,88vw)}
+  h1{
+    font-family:var(--mono);
+    font-size:clamp(38px,13vw,72px);
+    font-weight:700;letter-spacing:.16em;
+    color:#fff;
+    text-shadow:0 0 34px rgba(111,214,255,.5);
+  }
+  .rule{height:1px;background:linear-gradient(90deg,transparent,var(--strut-hot),transparent);margin:14px 0 16px;opacity:.55}
+  .sub{font-size:11px;line-height:2;letter-spacing:.18em;color:#7f8fbe;text-transform:uppercase}
+  .sub b{color:var(--idle);font-weight:600}
+  .big{font-size:clamp(46px,16vw,84px);font-weight:700;line-height:1;font-variant-numeric:tabular-nums;color:var(--armed);text-shadow:0 0 40px rgba(255,61,127,.45)}
+  .best{margin-top:10px;font-size:11px;letter-spacing:.22em;color:#7f8fbe}
+  .go{margin-top:26px;font-size:11px;letter-spacing:.34em;color:#fff;opacity:.9;animation:blink 1.5s steps(2,end) infinite}
+  @keyframes blink{50%{opacity:.22}}
+  .fail{font-size:11px;letter-spacing:.3em;color:var(--armed);margin-bottom:8px}
+  @media (prefers-reduced-motion:reduce){.go{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<svg id="gauge" class="layer"></svg>
+
+<div id="hud">
+  <div class="k">Depth</div>
+  <div class="v"><span id="depth">0</span><small>M</small></div>
+  <div id="vel"><div class="k">Velocity</div><div class="v"><span id="spd">0.0</span><small>M/S</small></div></div>
+  <div id="core"><div class="k">Core</div><div class="v" id="coreV"><span id="mult">1.00</span><small>×</small></div></div>
+</div>
+
+<div id="ui">
+  <div class="panel" id="panel"></div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// ───────────────────────────── setup ─────────────────────────────
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const ui = document.getElementById('ui');
+const panel = document.getElementById('panel');
+const elDepth = document.getElementById('depth');
+const elSpd = document.getElementById('spd');
+const gauge = document.getElementById('gauge');
+const elMult = document.getElementById('mult');
+const elCore = document.getElementById('coreV');
+
+let W=0,H=0,CX=0,CY=0,S=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
+  cv.style.width = W+'px'; cv.style.height = H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  CX = W/2; CY = H*0.5;
+  S  = Math.min(W*0.46, H*0.36);   // radius of the shaft at the pod's plane
+}
+addEventListener('resize', resize, {passive:true});
+resize();
+
+// perspective: things at z=0 sit on the pod's plane and are full size
+const CAM = 2.2;
+const proj = z => CAM/(z+CAM);
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const lerp = (a,b,t) => a+(b-a)*t;
+const rnd = (a,b) => a+Math.random()*(b-a);
+
+// ───────────────────────────── state ─────────────────────────────
+const POD_R = 0.058;      // pod radius, in shaft units (shaft radius = 1)
+const BEAM_R = 0.030;     // beam half-thickness
+const GRAZE = 0.075;      // extra margin that counts as a graze
+
+let state='menu', t=0, best=0;
+let pod, target, travel, speed, score, bonus, grazes, closes, hazards, sparks, pulses, trail,
+    shake, flash, deadFor, nextZ, popup, popupText, popupCol,
+    surgeT, sinceSpawn, band, banner, bannerText, queued, burst, depthScore, mult,
+    sinceCollar, collarEvery, pulseZ;
+
+function reset(){
+  pod={x:0,y:0}; target={x:0,y:0};
+  travel=0; speed=3.4; score=0; bonus=0; grazes=0; closes=0; depthScore=0; mult=1;
+  hazards=[]; sparks=[]; pulses=[]; trail=[];
+  shake=0; flash=0; deadFor=0; nextZ=8;
+  popup=0; popupText=''; popupCol='#ffb020';
+  surgeT=0; sinceSpawn=0; band=0; curZone=0; prevZone=0; zoneMix=1;
+  sinceCollar=0; collarEvery=3; pulseZ=-99; banner=0; bannerText=''; queued=0; burst=0;
+  slowT=0; slowLen=1;
+}
+
+// difficulty ramps on depth, not time — so it's the same climb every run
+const diff = () => clamp(travel/380, 0, 1);
+
+// Past the top of the difficulty curve the shaft stops getting much faster and
+// starts getting denser instead. Speed has a readability ceiling; spacing doesn't.
+const over = () => clamp((band-4)/8, 0, 1);
+
+// The shaft passes through strata. Each has its own light and its own habits:
+// the deep tunnels run on rotating hazards and violet light, the vein on
+// sweeping ones and hot orange. Zone changes land on a surge, two bands apart.
+const ZONES = [
+  {name:'UPPER SHAFT',  bg0:[5,6,15],  bg1:[13,10,32], struct:[111,214,255],
+   idle:[255,176,32], armed:[255,61,127], streak:[184,255,232], lamp:[206,242,255], bias:[]},
+  {name:'DEEP TUNNELS', bg0:[6,10,26], bg1:[10,26,52], struct:[96,168,255],
+   idle:[206,74,198],  armed:[255,112,232], streak:[196,196,255], lamp:[150,204,255],
+   bias:['web6','web8','spin','wheel4','wheel5','pinwheel']},
+  {name:'THE VEIN',     bg0:[14,5,10], bg1:[34,9,18],  struct:[255,142,120],
+   idle:[255,124,58],  armed:[255,64,64],  streak:[255,204,172], lamp:[255,222,184],
+   bias:['sweep','crosssweep','tracker','iris','collar','blades']},
+];
+const ZONE_FADE = 1.6;                       // seconds to cross-fade the palette
+let curZone=0, prevZone=0, zoneMix=1;
+
+function zc(key){
+  const a=ZONES[prevZone][key], b=ZONES[curZone][key], t=clamp(zoneMix,0,1);
+  return [lerp(a[0],b[0],t)|0, lerp(a[1],b[1],t)|0, lerp(a[2],b[2],t)|0];
+}
+// fixtures must hang off the ring's absolute index, not the loop index, or they
+// swim toward the camera instead of rushing past
+function hash(n){
+  n=(n^61)^(n>>>16); n=n+(n<<3); n=n^(n>>>4);
+  n=Math.imul(n,0x27d4eb2d); n=n^(n>>>15);
+  return (n>>>0)/4294967296;
+}
+const mix2 = (a,b,t) => [lerp(a[0],b[0],t)|0, lerp(a[1],b[1],t)|0, lerp(a[2],b[2],t)|0];
+const rgb  = c => 'rgb('+c[0]+','+c[1]+','+c[2]+')';
+const rgba = (c,a) => 'rgba('+c[0]+','+c[1]+','+c[2]+','+a+')';
+
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Surges run on the clock, not on depth. Depth-based marks look fine on paper
+// but at 150 m/s a 200 m band lasts two seconds, so the breather ends up longer
+// than the band it sits in and spawning starves permanently.
+const CORE_R    = 0.55;   // radius of the scoring core
+const CORE_MULT = 1.2;    // bonus rate at dead centre
+const SURGE_EVERY = 16;    // seconds between surges
+const BREATHER    = 1.9;   // seconds of clear shaft after each one
+const STARVE_MAX  = 2.8;   // hard ceiling on silence, whatever the tuning says
+
+// ── haptics ──
+// Android Chrome honours this; iOS Safari has no vibration API at all, so on
+// iPhone the graze reads through the flash + shake instead. A native wrapper
+// (Capacitor Haptics) is what gets you the taptic engine on iOS.
+function buzz(pattern){
+  if(!('vibrate' in navigator)) return;
+  try{ navigator.vibrate(pattern); }catch(e){}
+}
+
+// ── slow-motion beat ──
+// Drops to SLOW_MIN instantly, holds there, then eases back to real time.
+// The hold is what makes it read as a beat rather than a stutter.
+const SLOW_MIN = 0.26, SLOW_HOLD = 0.14;
+let slowT = 0, slowLen = 1;
+
+function slowmo(dur){
+  if(REDUCED) dur *= 0.5;
+  if(slowT > 0 && dur <= slowT) return;   // don't cut an existing beat short
+  slowLen = dur; slowT = dur;
+}
+function timeScale(){
+  if(slowT <= 0) return 1;
+  const p = slowT/slowLen;                       // 1 → 0
+  const hold = SLOW_HOLD/slowLen;
+  const e = p > 1-hold ? 1 : p/(1-hold);         // full slow, then ramp out
+  return lerp(1, SLOW_MIN, e*e*(3-2*e));
+}
+const slowAmt = () => slowT>0 ? (1-timeScale())/(1-SLOW_MIN) : 0;
+
+// ───────────────────────────── hazards ─────────────────────────────
+// a hazard is a set of chords across the shaft's cross-section, plus
+// an optional deadly ring. it rushes up at you and only bites at z=0.
+function spawn(z){
+  const d = diff();
+  const h = {z, pz:z, life:0, bars:[], spokes:[], hub:0, cx:0, cy:0, nodes:false, gap:0, gapA:0,
+             ang:Math.random()*6.283, spin:0, sweepA:0, sweepF:0,
+             ph:Math.random()*6.283, ring:0, ringAmp:0, ringF:0};
+  const flip = () => Math.random()<0.5?-1:1;
+
+  const pool = ['bar','gate'];
+  if(d>0.06) pool.push('bar','sweep');
+  if(d>0.14) pool.push('cross','spin');
+  if(d>0.18) pool.push('wheel3');
+  if(d>0.20) pool.push('collar');
+  if(d>0.24) pool.push('sweep','gate','lanes');
+  if(d>0.30) pool.push('web6');
+  if(d>0.34) pool.push('ring','spin','pinwheel');
+  if(d>0.30) pool.push('blades');
+  if(d>0.38) pool.push('wheel4','wheel3','collar');
+  if(d>0.46) pool.push('star','crosssweep','iris');
+  if(d>0.50) pool.push('web8','web6');
+  if(d>0.58) pool.push('pinwheel','trap','lanes','wheel5');
+  if(d>0.70) pool.push('tracker','star','iris','wheel4','wheel5','blades');
+  if(d>0.82) pool.push('tracker','trap','crosssweep');
+  const zb = ZONES[curZone].bias.filter(k => pool.includes(k));
+  pool.push(...zb, ...zb);                            // double-weight the local flavour
+
+  // The rim has to be contested on a schedule, not by luck — leaving it to the
+  // random pool put collars at 9% of spawns, which camping simply outlasts.
+  let kind;
+  sinceCollar++;
+  if(d>0.20 && sinceCollar>=collarEvery){
+    kind='collar'; sinceCollar=0; collarEvery=3+((Math.random()*3)|0);
+  } else {
+    kind = pool[(Math.random()*pool.length)|0];
+    if(kind==='collar'){ sinceCollar=0; collarEvery=3+((Math.random()*3)|0); }
+  }
+
+  switch(kind){
+    case 'bar':
+      h.bars=[{a:0,o:rnd(-0.65,0.65)}]; break;
+    case 'gate': {
+      const g = lerp(0.76,0.36,d);                     // the walls close in on you
+      h.bars=[{a:0,o:-g},{a:0,o:g}]; break;
+    }
+    case 'lanes': {
+      const g = lerp(0.64,0.46,d);                     // two narrow lanes — commit early
+      h.bars=[{a:0,o:-g},{a:0,o:0},{a:0,o:g}]; break;
+    }
+    case 'cross':
+      h.bars=[{a:0,o:rnd(-0.3,0.3)},{a:Math.PI/2,o:rnd(-0.3,0.3)}]; break;
+    case 'crosssweep':                                  // scissors — the safe quadrant moves
+      h.bars=[{a:0,o:0,amp:0.5,ph:0},{a:Math.PI/2,o:0,amp:0.5,ph:Math.PI/2}];
+      h.sweepF=rnd(1.1,1.1+1.3*d); break;
+    case 'spin':
+      h.bars=[{a:0,o:0}]; h.spin=rnd(1.1,1.1+2.0*d)*flip(); break;
+    case 'pinwheel': {
+      const g = lerp(0.60,0.40,d);                      // rotating gate: safe band turns
+      h.bars=[{a:0,o:-g},{a:0,o:g}]; h.spin=rnd(0.8,0.8+1.2*d)*flip(); break;
+    }
+    case 'sweep':
+      h.bars=[{a:0,o:0}]; h.sweepA=rnd(0.45,0.68); h.sweepF=rnd(1.2,1.2+1.6*d); break;
+    case 'star':
+      h.bars=[{a:0,o:0},{a:Math.PI/3,o:0},{a:2*Math.PI/3,o:0}];
+      h.spin=rnd(0.6,0.6+1.4*d)*flip(); break;
+    case 'ring':
+      h.ring=rnd(0.32,0.68); break;
+    case 'iris':                                        // breathing ring — in or out, decide
+      h.ring=rnd(0.30,0.55); h.ringAmp=rnd(0.12,0.22); h.ringF=rnd(0.9,1.6); break;
+    case 'trap':
+      h.ring=rnd(0.40,0.62); h.bars=[{a:0,o:0}]; h.spin=rnd(0.9,0.9+1.6*d)*flip(); break;
+    case 'wheel3': case 'wheel4': case 'wheel5': {
+      const n = +kind.slice(-1);                        // 3, 4 or 5 spokes
+      for(let i=0;i<n;i++) h.spokes.push({a:i*6.283/n});
+      // more spokes = narrower wedges, so spin them slower to stay readable
+      const sp = lerp(1.15, 0.62, (n-3)/2);
+      h.spin = rnd(sp*0.55, sp*(0.55+0.9*d))*flip();
+      // sometimes the hub is open — sit dead centre instead of riding a wedge
+      if(n>3 && Math.random()<0.35) h.hub = rnd(0.22,0.34);
+      break;
+    }
+    case 'web6': case 'web8': {
+      const N = +kind.slice(-1), k = (N===6 ? 2 : 3);   // star polygon {N/k}
+      h.nodes = true;
+      const off = Math.cos(k*Math.PI/N);                // every chord sits this far out
+      for(let i=0;i<N;i++) h.bars.push({a:(2*i+k)*Math.PI/N, o:off});
+      h.spin = rnd(0.35, 0.35+0.70*d)*flip();
+      if(d>0.35){                                       // later webs drift off-axis
+        const da=Math.random()*6.283, dr=rnd(0.10,0.30);
+        h.cx=Math.cos(da)*dr; h.cy=Math.sin(da)*dr;
+      }
+      break;
+    }
+    case 'collar': {                                   // contests the rim itself
+      h.ring = rnd(0.76,0.90);
+      if(Math.random() < 0.72){                        // gapped: ride the rim, but *here*
+        h.gap  = rnd(0.30,0.46);
+        h.gapA = Math.random()*6.283;
+        h.spin = rnd(0.25, 0.25+0.75*d)*flip();
+      }
+      break;                                           // else solid: get inside or die
+    }
+    case 'blades': {                                   // wheel inverted — outer band only
+      const n = 3 + ((Math.random()*3)|0);
+      for(let i=0;i<n;i++) h.spokes.push({a:i*6.283/n});
+      h.hub = rnd(0.42,0.58);
+      h.spin = rnd(0.5, 0.5+1.0*d)*flip();
+      break;
+    }
+    case 'tracker': {                                   // aims at where you sit when it spawns
+      h.ang=Math.random()*6.283;
+      const aim = pod.x*Math.cos(h.ang) + pod.y*Math.sin(h.ang);
+      h.bars=[{a:0,o:clamp(aim+rnd(-0.06,0.06),-0.8,0.8)}]; break;
+    }
+  }
+  hazards.push(h);
+}
+
+// bar geometry at the current moment
+function barAt(h, b){
+  const a = h.ang + h.spin*h.life + b.a;
+  const amp = b.amp!==undefined ? b.amp : h.sweepA;
+  const nx = Math.cos(a), ny = Math.sin(a);
+  let o = b.o + (amp ? amp*Math.sin(h.sweepF*h.life + h.ph + (b.ph||0)) : 0);
+  // translating the whole assembly by (cx,cy) shifts each chord by c·n, so an
+  // off-centre web's safe cell orbits the shaft instead of sitting at the middle
+  if(h.cx || h.cy) o += h.cx*nx + h.cy*ny;
+  return {a, o, nx, ny};
+}
+const ringAt = h => h.ring + (h.ringAmp ? h.ringAmp*Math.sin(h.ringF*h.life + h.ph) : 0);
+
+// distance to a ring, which may carry a rotating gap. Inside the gap the nearest
+// lethal point is an arc end, so threading it still demands precision.
+function ringDist(h, px, py){
+  const r = ringAt(h);
+  const radial = Math.abs(Math.hypot(px,py) - r);
+  if(!h.gap) return radial;
+  const ga = h.gapA + h.spin*h.life;
+  let d = Math.atan2(py,px) - ga;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  if(Math.abs(d) <= h.gap){
+    const ea = ga + Math.sign(d||1)*h.gap;
+    return Math.hypot(px - r*Math.cos(ea), py - r*Math.sin(ea));
+  }
+  return radial;
+}
+
+// a spoke runs from h.hub to the shaft wall at the given angle
+function spokeAt(h, s){
+  const a = h.ang + h.spin*h.life + s.a;
+  return {a, dx:Math.cos(a), dy:Math.sin(a)};
+}
+// closest approach from the pod to that segment — clamping t is what makes the
+// open-hub variant safe in the middle instead of lethal
+function spokeDist(h, s, px, py){
+  const g = spokeAt(h, s);
+  const t = clamp(px*g.dx + py*g.dy, h.hub, 1);
+  return Math.hypot(px - t*g.dx, py - t*g.dy);
+}
+
+// ───────────────────────────── input ─────────────────────────────
+let dragging=false, lastX=0, lastY=0;
+const keys={};
+
+function moveTargetTo(x,y){
+  target.x=x; target.y=y;
+  const m=Math.hypot(target.x,target.y), lim=1-POD_R-0.02;
+  if(m>lim){ target.x=target.x/m*lim; target.y=target.y/m*lim; }
+}
+
+cv.addEventListener('pointerdown', e=>{
+  cv.setPointerCapture(e.pointerId);
+  if(state!=='play'){ start(); return; }
+  dragging=true; lastX=e.clientX; lastY=e.clientY;
+});
+cv.addEventListener('pointermove', e=>{
+  if(state!=='play') return;
+  if(e.pointerType==='mouse' && !dragging){
+    moveTargetTo((e.clientX-CX)/S, (e.clientY-CY)/S);   // desktop: hover to steer
+    return;
+  }
+  if(!dragging) return;
+  const k = 1.55/S;                                     // touch: relative drag
+  moveTargetTo(target.x + (e.clientX-lastX)*k, target.y + (e.clientY-lastY)*k);
+  lastX=e.clientX; lastY=e.clientY;
+});
+const endDrag = ()=>{dragging=false;};
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+addEventListener('keydown', e=>{
+  keys[e.key.toLowerCase()]=true;
+  if(e.key===' '||e.key==='Enter'){ if(state!=='play') start(); e.preventDefault(); }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+});
+addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
+addEventListener('blur', ()=>{ for(const k in keys) keys[k]=false; dragging=false; });
+
+// ───────────────────────────── screens ─────────────────────────────
+function showMenu(){
+  state='menu';
+  ui.classList.remove('hide');
+  panel.innerHTML =
+    '<h1>PLUMMET</h1><div class="rule"></div>' +
+    '<div class="sub">You are falling down a live laser shaft.<br>' +
+    'Steer the pod through the gaps.<br>Every 200 m the shaft surges.<br>You do not slow down.</div>' +
+    '<div class="go">TAP OR PRESS SPACE TO DROP</div>';
+}
+function showDead(){
+  ui.classList.remove('hide');
+  const isBest = score>=best && score>0;
+  panel.innerHTML =
+    '<div class="fail">POD DESTROYED</div>' +
+    '<div class="big">'+score+'</div>' +
+    '<div class="best">'+Math.floor(travel*10)+' M &nbsp;·&nbsp; '+(isBest?'NEW BEST':'BEST '+best)+
+      '<br>'+grazes+' GRAZES'+(closes?' &nbsp;·&nbsp; '+closes+' CLOSE':'')+
+      ' &nbsp;·&nbsp; CORE ×'+(depthScore/Math.max(1,travel*10)).toFixed(2)+'</div>' +
+    '<div class="go">TAP TO DROP AGAIN</div>';
+}
+function start(){ reset(); state='play'; ui.classList.add('hide'); }
+
+// ───────────────────────────── update ─────────────────────────────
+function update(dt, real){
+  t+=dt;
+  shake=Math.max(0,shake-dt*5);
+  flash=Math.max(0,flash-dt*4);
+  popup=Math.max(0,popup-dt*1.6);
+
+  if(state==='dead'){
+    deadFor+=real;                                    // real seconds, not slowed
+    updateSparks(dt);
+    if(deadFor>0.75 && ui.classList.contains('hide')) showDead();
+    return;
+  }
+  if(state!=='play'){ updateSparks(dt); return; }
+
+  // fall — each surge band adds a permanent kick on top of the depth ramp
+  speed = Math.min(3.4 + travel*0.012 + band*0.55, 15.0 + over()*3.0);
+  travel += speed*dt;
+
+  // The rim is the safe answer to most hazards, so make it the cheap one:
+  // depth banks faster the nearer the axis you hold. Wall-riding survives,
+  // it just doesn't score.
+  const pr = Math.hypot(pod.x,pod.y);
+  mult = 1 + CORE_MULT*Math.pow(clamp(1-pr/CORE_R,0,1),1.5);
+  depthScore += speed*dt*10*mult;
+  score = Math.floor(depthScore) + bonus;
+  banner = Math.max(0, banner - dt*0.7);
+  if(pulseZ>-90){ pulseZ += 26*dt; if(pulseZ>22) pulseZ=-99; }
+
+  // surge: clear the shaft, let them re-centre, then hit harder
+  surgeT += dt;
+  zoneMix = Math.min(1, zoneMix + dt/ZONE_FADE);
+  if(surgeT >= SURGE_EVERY){
+    surgeT = 0; band++;
+    const z = Math.floor(band/2) % ZONES.length;
+    if(z !== curZone){
+      prevZone = curZone; curZone = z; zoneMix = 0;
+      bannerText = ZONES[z].name + '  ·  ' + Math.floor(travel*10) + ' M';
+    } else {
+      bannerText = Math.floor(travel*10) + ' M  ·  SURGE';
+    }
+    banner = 1.0;
+    queued = 0; burst = 4;                              // denser run once the calm ends
+    nextZ = Math.max(nextZ, speed*BREATHER);            // the breather itself
+    pulseZ = 0;                                         // light races ahead of you
+    buzz([0,14,70,14]);
+  }
+
+  // keyboard nudge
+  const kv = 1.35*dt;
+  if(keys.arrowleft ||keys.a) moveTargetTo(target.x-kv, target.y);
+  if(keys.arrowright||keys.d) moveTargetTo(target.x+kv, target.y);
+  if(keys.arrowup   ||keys.w) moveTargetTo(target.x, target.y-kv);
+  if(keys.arrowdown ||keys.s) moveTargetTo(target.x, target.y+kv);
+
+  // pod eases toward the target — gives the thing a little mass
+  const k = 1-Math.exp(-19*dt);
+  pod.x += (target.x-pod.x)*k;
+  pod.y += (target.y-pod.y)*k;
+
+  trail.unshift({x:pod.x,y:pod.y});
+  if(trail.length>14) trail.pop();
+
+  // spawn ahead, spaced by reaction time rather than distance,
+  // so the shaft stays fair as you speed up
+  nextZ -= speed*dt;
+  sinceSpawn += dt;
+  if(nextZ<=0 || sinceSpawn>STARVE_MAX){                 // second clause: starvation guard
+    spawn(15);
+    sinceSpawn = 0;
+    const d = diff(), o = over();
+    const tight  = Math.max(0.27, lerp(0.58,0.34,d) * lerp(1,0.82,o));  // gap inside a cluster
+    const normal = () => Math.max(0.32, lerp(1.00,0.42,d)*rnd(0.85,1.15) * lerp(1,0.76,o));
+    let react;
+    if(queued>0){
+      queued--;
+      react = queued>0 ? tight : normal();
+    } else {
+      react = normal();
+      if(d>0.26 && Math.random() < 0.12 + 0.40*d + 0.25*o){
+        queued = (d>0.62 && Math.random() < 0.30+0.40*o)
+                   ? ((o>0.6 && Math.random()<0.35) ? 3 : 2)             // pairs, then triples
+                   : 1;
+        react = tight;
+      }
+    }
+    if(burst>0){ burst--; react *= 0.80; }
+    nextZ = speed*react;
+  }
+
+  // advance hazards + check the moment each crosses the pod's plane
+  for(let i=hazards.length-1;i>=0;i--){
+    const h=hazards[i];
+    h.pz=h.z; h.z-=speed*dt; h.life+=dt;
+
+    if(h.pz>0 && h.z<=0) resolve(h);
+    if(h.z<-0.6) hazards.splice(i,1);
+  }
+
+  updateSparks(dt);
+}
+
+function resolve(h){
+  let min=Infinity;
+  for(const b of h.bars){
+    const g=barAt(h,b);
+    if(Math.abs(g.o)>=0.995) continue;
+    min=Math.min(min, Math.abs(pod.x*g.nx + pod.y*g.ny - g.o) - BEAM_R);
+  }
+  for(const sp of h.spokes){
+    min=Math.min(min, spokeDist(h, sp, pod.x, pod.y) - BEAM_R);
+  }
+  if(h.ring){
+    min=Math.min(min, ringDist(h, pod.x, pod.y) - BEAM_R);
+  }
+  if(min<POD_R){ die(); return; }
+  if(min>=POD_R+GRAZE) return;
+
+  const clearance = min-POD_R;                  // how much shaft you left yourself
+  grazes++;
+
+  if(clearance < GRAZE*0.34){
+    // near death — the beat
+    closes++; bonus += 60;
+    shake=Math.min(shake+0.6,1.0);
+    popup=1; popupText='CLOSE +60'; popupCol='#ff3d7f';
+    pulses.push({x:pod.x, y:pod.y, r:POD_R*1.2, life:1});
+    pulseZ = 0;                                   // the shaft flares on a close call
+    for(let i=0;i<22;i++) spark(pod.x,pod.y, Math.random()<0.5?'#ff3d7f':'#ffffff', 2.0);
+    slowmo(0.55);
+    buzz([0,16,45,26]);                         // two taps: hit, then release
+  } else {
+    bonus += 25;
+    shake=Math.min(shake+0.3,0.8);
+    popup=1; popupText='GRAZE +25'; popupCol='#ffb020';
+    for(let i=0;i<10;i++) spark(pod.x,pod.y,'#ffb020',1.4);
+    buzz(11);                                   // one short tick
+  }
+}
+
+function die(){
+  state='dead'; deadFor=0; shake=1.5; flash=1;
+  best=Math.max(best,score);
+  for(let i=0;i<80;i++) spark(pod.x,pod.y, Math.random()<0.5?'#ff3d7f':'#b8ffe8', 3.2);
+  pulses.push({x:pod.x, y:pod.y, r:POD_R, life:1});
+  slowLen=1; slowT=0; slowmo(0.42);             // shorter beat so the panel isn't slow to land
+  buzz([0,50,60,90]);
+}
+
+function spark(x,y,col,pw){
+  const a=Math.random()*6.283, s=rnd(0.15,1)*pw;
+  sparks.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col});
+}
+function updateSparks(dt){
+  for(let i=sparks.length-1;i>=0;i--){
+    const p=sparks[i];
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.94; p.vy*=0.94;
+    p.life-=dt*1.5;
+    if(p.life<=0) sparks.splice(i,1);
+  }
+  for(let i=pulses.length-1;i>=0;i--){
+    const p=pulses[i];
+    p.r += dt*1.9*(0.2+p.life);
+    p.life -= dt*1.25;
+    if(p.life<=0) pulses.splice(i,1);
+  }
+}
+
+// ───────────────────────────── render ─────────────────────────────
+function draw(){
+  const sx=(Math.random()-0.5)*shake*16, sy=(Math.random()-0.5)*shake*16;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+
+  // void
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,rgb(zc('bg0'))); g.addColorStop(1,rgb(zc('bg1')));
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  ctx.save();
+  ctx.translate(CX+sx, CY+sy);
+
+  drawShaft();
+
+  // far → near so the near stuff sits on top
+  const sorted = hazards.slice().sort((a,b)=>b.z-a.z);
+  for(const h of sorted) drawHazard(h);
+
+  drawPulses();
+  if(state!=='dead') drawPod();
+  drawSparks();
+
+  ctx.restore();
+
+  // vignette, tightened while time is slow
+  const amt = slowAmt();
+  const v=ctx.createRadialGradient(CX,CY,S*(0.7-0.22*amt),CX,CY,Math.max(W,H)*0.78);
+  v.addColorStop(0,'rgba(0,0,0,0)');
+  v.addColorStop(1,'rgba(0,0,0,'+(0.85+0.1*amt).toFixed(3)+')');
+  ctx.fillStyle=v; ctx.fillRect(0,0,W,H);
+
+  if(amt>0 && !REDUCED){
+    ctx.fillStyle=rgba(zc('struct'),(0.07*amt).toFixed(3));
+    ctx.fillRect(0,0,W,H);
+  }
+  if(banner>0){
+    const a=Math.min(1,banner*1.6);
+    ctx.globalAlpha=a;
+    ctx.textAlign='center';
+    ctx.letterSpacing='6px';
+    ctx.font='600 13px '+getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle=rgb(zc('struct'));
+    ctx.fillText(bannerText, CX, H*0.24 - (1-a)*10);
+    ctx.letterSpacing='0px';
+    ctx.strokeStyle=rgba(zc('struct'),(a*0.5).toFixed(3));
+    ctx.lineWidth=1;
+    const w=Math.min(W*0.34, 190)*a;
+    ctx.beginPath();
+    ctx.moveTo(CX-w, H*0.24+12); ctx.lineTo(CX+w, H*0.24+12);
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  if(flash>0){ ctx.fillStyle='rgba(255,61,127,'+(flash*0.42)+')'; ctx.fillRect(0,0,W,H); }
+}
+
+function drawPulses(){
+  for(const p of pulses){
+    ctx.globalAlpha=clamp(p.life,0,1)*0.7;
+    ctx.strokeStyle='#ffffff';
+    ctx.lineWidth=Math.max(0.8, 3.5*p.life);
+    ctx.beginPath(); ctx.arc(p.x*S, p.y*S, p.r*S, 0, 6.283); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawShaft(){
+  const RING=1.0, FAR=16;
+  const z0 = RING - (travel % RING);
+
+  const st=zc('struct'), lp=zc('lamp');
+  const roll = travel*0.05;
+  const near=proj(z0)*S, far=proj(FAR)*S;
+  // brightness of the surge wave at a given depth
+  const wave = z => pulseZ>-90 ? 1 + 1.7*Math.exp(-((z-pulseZ)*(z-pulseZ))/1.3) : 1;
+
+  // struts, every eighth a lit strip running the length of the shaft.
+  // All 24 are the same gradient at different angles, so build two and rotate
+  // the canvas rather than allocating a gradient object per strut per frame.
+  const gStrut=ctx.createLinearGradient(far,0,near,0);
+  gStrut.addColorStop(0,rgba(st,0)); gStrut.addColorStop(1,rgba(st,0.20));
+  const gStrip=ctx.createLinearGradient(far,0,near,0);
+  gStrip.addColorStop(0,rgba(lp,0)); gStrip.addColorStop(1,rgba(lp,0.42));
+  for(let i=0;i<24;i++){
+    const strip=(i%8)===0;
+    ctx.save();
+    ctx.rotate((i/24)*6.283 + roll);
+    ctx.strokeStyle = strip?gStrip:gStrut;
+    ctx.lineWidth   = strip?2:1;
+    ctx.beginPath(); ctx.moveTo(far,0); ctx.lineTo(near,0); ctx.stroke();
+    ctx.restore();
+  }
+
+  // rings — colour ripples along the shaft so the tunnel reads as moving light
+  const ring0 = Math.floor(travel/RING)+1;
+  for(let i=0;i<FAR;i++){
+    const z=z0+i*RING; if(z>FAR) break;
+    const r=proj(z)*S, p=proj(z);
+    const fade=(1-z/FAR)*0.5;
+    const band=0.5+0.5*Math.sin(t*0.9 - z*0.55);          // travelling colour band
+    ctx.strokeStyle=rgba(mix2(st,lp,band*0.65), clamp(fade*0.55*wave(z),0,1).toFixed(3));
+    ctx.lineWidth=Math.max(0.6, 2.4*p);
+    ctx.beginPath(); ctx.arc(0,0,r,0,6.283); ctx.stroke();
+
+    // wall fixtures, bolted to this ring's absolute index
+    if(z>11) continue;
+    const R=ring0+i, h1=hash(R);
+    const nl=2+((h1*3)|0);
+    const base=hash(R*7)*6.283 + roll;
+    const dud=hash(R*29)<0.07;                            // the occasional bad lamp
+    for(let j=0;j<nl;j++){
+      const a=base + j*6.283/nl;
+      const lx=Math.cos(a)*r, ly=Math.sin(a)*r;
+      let br=0.55+0.45*Math.sin(t*1.5 - z*0.8 + h1*6.283);
+      if(dud) br*=0.30+0.70*Math.abs(Math.sin(t*13+R));
+      br*=wave(z)*(1-z/13);
+      const sz=Math.max(1.1, 3.4*p);
+      ctx.fillStyle=rgb(lp);
+      if(z<6.5){                                          // halo only where it reads
+        ctx.globalAlpha=clamp(br*0.22,0,1);
+        ctx.beginPath(); ctx.arc(lx,ly,sz*2.8,0,6.283); ctx.fill();
+      }
+      ctx.globalAlpha=clamp(br,0,1);
+      ctx.beginPath(); ctx.arc(lx,ly,sz,0,6.283); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // the scoring core, drawn so the reward is legible
+  ctx.setLineDash([5,9]);
+  ctx.strokeStyle=rgba(zc('streak'), (0.09+0.30*(mult-1)/CORE_MULT).toFixed(3));
+  ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.arc(0,0,CORE_R*S,0,6.283); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // speed streaks, only once you're really moving
+  const sp=clamp((speed-5)/8,0,1);
+  if(sp>0 && state==='play'){
+    ctx.lineWidth=1;
+    for(let i=0;i<40;i++){
+      const a=Math.random()*6.283, c=Math.cos(a), s=Math.sin(a);
+      const r1=lerp(far,near,Math.random()), r2=r1*lerp(1.05,1.5,sp);
+      ctx.strokeStyle=rgba(zc('streak'),(0.05+0.14*sp).toFixed(3));
+      ctx.beginPath(); ctx.moveTo(c*r1,s*r1); ctx.lineTo(c*r2,s*r2); ctx.stroke();
+    }
+  }
+}
+
+function drawHazard(h){
+  if(h.z<-0.55) return;
+  const p=proj(Math.max(h.z,-0.5)), sc=p*S;
+  const armed = h.z<2.4;                       // snaps hot just before it reaches you
+  const fade = clamp(1-h.z/15,0,1);
+  const heat = armed ? clamp(1-h.z/2.4,0,1) : 0;
+  const col = rgb(zc(armed ? 'armed' : 'idle'));
+  const alpha = (0.22+0.68*fade) * (h.z<0 ? clamp(1+h.z/0.55,0,1) : 1);
+
+  ctx.lineCap='round';
+
+  const stroke=(path,w,a,color)=>{
+    ctx.strokeStyle=color; ctx.globalAlpha=a; ctx.lineWidth=w;
+    ctx.beginPath(); path(); ctx.stroke();
+  };
+
+  for(const b of h.bars){
+    const g=barAt(h,b);
+    if(Math.abs(g.o)>=0.995) continue;
+    const hl=Math.sqrt(Math.max(0,1-g.o*g.o));
+    const dx=-Math.sin(g.a), dy=Math.cos(g.a);
+    const x0=(g.o*g.nx - hl*dx)*sc, y0=(g.o*g.ny - hl*dy)*sc;
+    const x1=(g.o*g.nx + hl*dx)*sc, y1=(g.o*g.ny + hl*dy)*sc;
+    const path=()=>{ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);};
+    stroke(path, BEAM_R*2*sc*3.2, alpha*0.14*(0.5+heat), col);   // bloom
+    stroke(path, BEAM_R*2*sc,      alpha,                 col);   // beam
+    if(heat>0.25) stroke(path, BEAM_R*0.7*sc, alpha*heat, '#ffffff'); // core
+  }
+
+  if(h.nodes){
+    for(const b of h.bars){
+      const g=barAt(h,b);
+      if(Math.abs(g.o)>=0.995) continue;
+      const hl=Math.sqrt(Math.max(0,1-g.o*g.o));
+      const dx=-Math.sin(g.a), dy=Math.cos(g.a);
+      for(const sgn of [-1,1]){
+        const nx=(g.o*g.nx + sgn*hl*dx)*sc, ny=(g.o*g.ny + sgn*hl*dy)*sc;
+        ctx.globalAlpha=alpha; ctx.fillStyle=col;
+        ctx.beginPath(); ctx.arc(nx,ny,BEAM_R*1.7*sc,0,6.283); ctx.fill();
+        if(heat>0.25){
+          ctx.globalAlpha=alpha*heat; ctx.fillStyle='#ffffff';
+          ctx.beginPath(); ctx.arc(nx,ny,BEAM_R*0.8*sc,0,6.283); ctx.fill();
+        }
+      }
+    }
+    ctx.globalAlpha=1;
+  }
+
+  for(const sp of h.spokes){
+    const g=spokeAt(h,sp);
+    const x0=g.dx*h.hub*sc, y0=g.dy*h.hub*sc, x1=g.dx*sc, y1=g.dy*sc;
+    const path=()=>{ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);};
+    stroke(path, BEAM_R*2*sc*3.2, alpha*0.14*(0.5+heat), col);
+    stroke(path, BEAM_R*2*sc,      alpha,                 col);
+    if(heat>0.25) stroke(path, BEAM_R*0.7*sc, alpha*heat, '#ffffff');
+  }
+
+  if(h.ring){
+    const r=ringAt(h)*sc;
+    const ga=h.gapA + h.spin*h.life;
+    const path = h.gap
+      ? (()=>ctx.arc(0,0,r, ga+h.gap, ga-h.gap+6.283))
+      : (()=>ctx.arc(0,0,r,0,6.283));
+    stroke(path, BEAM_R*2*sc*3.2, alpha*0.13*(0.5+heat), col);
+    stroke(path, BEAM_R*2*sc,      alpha,                 col);
+    if(heat>0.25) stroke(path, BEAM_R*0.7*sc, alpha*heat, '#ffffff');
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawPod(){
+  // wake
+  for(let i=trail.length-1;i>=1;i--){
+    const p=trail[i], a=(1-i/trail.length)*0.28;
+    ctx.fillStyle='rgba(184,255,232,'+a.toFixed(3)+')';
+    ctx.beginPath(); ctx.arc(p.x*S,p.y*S, POD_R*S*(1-i/trail.length)*0.85, 0, 6.283); ctx.fill();
+  }
+  const x=pod.x*S, y=pod.y*S, r=POD_R*S;
+  const gl=ctx.createRadialGradient(x,y,0,x,y,r*3.4);
+  gl.addColorStop(0,'rgba(184,255,232,0.5)'); gl.addColorStop(1,'rgba(184,255,232,0)');
+  ctx.fillStyle=gl; ctx.beginPath(); ctx.arc(x,y,r*3.4,0,6.283); ctx.fill();
+
+  ctx.fillStyle='#b8ffe8'; ctx.beginPath(); ctx.arc(x,y,r,0,6.283); ctx.fill();
+  ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(x,y,r*0.45,0,6.283); ctx.fill();
+
+  if(popup>0){
+    ctx.globalAlpha=popup;
+    ctx.fillStyle=popupCol;
+    ctx.font='600 11px '+getComputedStyle(document.body).fontFamily;
+    ctx.textAlign='center';
+    ctx.letterSpacing='2px';
+    ctx.fillText(popupText, x, y-r*3.6-(1-popup)*18);
+    ctx.letterSpacing='0px';
+    ctx.globalAlpha=1;
+  }
+}
+
+function drawSparks(){
+  for(const p of sparks){
+    ctx.globalAlpha=clamp(p.life,0,1);
+    ctx.fillStyle=p.col;
+    ctx.beginPath(); ctx.arc(p.x*S,p.y*S, 2.2*p.life+0.6, 0, 6.283); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
+// ───────── depth gauge (SVG, redrawn only when the numbers change) ─────────
+let lastTick=-1;
+function drawGauge(){
+  const m=Math.floor(travel*10);
+  if(m===lastTick) return;
+  lastTick=m;
+  const step=25, span=H;
+  const px=step*2.6;                               // pixels per 25m
+  let s='';
+  const off=(m%step)/step*px;
+  for(let i=-1;i<span/px+2;i++){
+    const y=i*px+off;
+    const val=Math.round((m - m%step) - (i-Math.floor(span/px/2))*step);
+    if(val<0) continue;
+    const major=val%100===0;
+    s+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+(major?18:9)+'" y2="'+y.toFixed(1)+
+       '" stroke="'+(major?'#6fd6ff':'#2b3f7a')+'" stroke-width="1"/>';
+    if(major) s+='<text x="23" y="'+(y+3.5).toFixed(1)+'" fill="#5b6a9a" font-size="9" '+
+                 'font-family="ui-monospace,monospace" letter-spacing="1">'+val+'</text>';
+  }
+  gauge.innerHTML=s;
+}
+
+// ───────────────────────────── loop ─────────────────────────────
+let prev=performance.now();
+function frame(now){
+  const real=Math.min((now-prev)/1000, 1/30);
+  prev=now;
+  if(slowT>0) slowT=Math.max(0, slowT-real);   // the beat runs on real seconds
+  update(real*timeScale(), real);
+  draw();
+  elDepth.textContent = Math.floor(travel*10);
+  elSpd.textContent = (speed*10).toFixed(0);
+  elMult.textContent = mult.toFixed(2);
+  elCore.style.color = mult>1.02 ? 'rgb(184,255,232)' : '#5b6a9a';
+  drawGauge();
+  requestAnimationFrame(frame);
+}
+
+reset();
+showMenu();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
