@@ -49,6 +49,8 @@ canvas#c{position:absolute;inset:0;width:100%;height:100%;display:block;}
 #time{font-size:1.62rem;letter-spacing:.02em;}
 #time.warn{color:#FF9A5C;}
 #time.crit{color:#FF5D5D;}
+@keyframes timePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.06)}}
+#time.final{animation:timePulse .55s ease-in-out infinite;}
 #tbarOut{margin:.26rem auto 0;width:4.4rem;height:.3rem;border-radius:.3rem;background:rgba(6,8,16,.62);overflow:hidden;
   box-shadow:inset 0 .07rem .12rem rgba(0,0,0,.45);}
 #tbar{height:100%;width:100%;border-radius:.3rem;background:linear-gradient(90deg,#45E0E8,#7CF2A8);transition:background .3s;}
@@ -396,8 +398,13 @@ const K = {
   SWIPE_MED     : 480,       // px/s (real time) — solid
   SWIPE_FAST    : 1250,      // px/s — smash
   SWIPE_MIN     : 16,        // px before a drag counts as an aim at all
-  AIM_REF_X     : 0.34,      // fraction of stage width for a full lateral sweep
-  AIM_REF_Y     : 0.21,      // fraction of stage height for a full vertical sweep
+  /* Gesture range. These were too tight for the SMASH gesture: registering a
+     smash needs ~69 px of travel inside 55 ms, and a real hard flick keeps
+     going for 150-250 px — but the far baseline arrived at only ~195 px of
+     swipe, so almost every genuine smack sailed long. Widened so a vigorous
+     flick lands deep-but-in, and only a deliberately huge swipe goes over. */
+  AIM_REF_X     : 0.42,      // fraction of stage width for a full lateral sweep
+  AIM_REF_Y     : 0.31,      // fraction of stage height for a full vertical sweep
   LATE_MUL      : 0.65,      // quality if the ball arrives while you are still dragging
 
   MULT_MAX      : 3.0,
@@ -458,8 +465,8 @@ renderer.outputEncoding = THREE.sRGBEncoding;
 
 const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62,1,0.05,140);
-const CAM_HOME = new THREE.Vector3(0,0.790,2.42);
-const CAM_LOOK = new THREE.Vector3(0,0.16,-1.05);
+const CAM_HOME = new THREE.Vector3(0,1.215,2.42);
+const CAM_LOOK = new THREE.Vector3(0,-0.10,-0.88);
 
 /* ============================================================ TOON SHADER */
 const LIGHT_DIR = new THREE.Vector3(-0.42,0.86,0.42).normalize();
@@ -995,10 +1002,10 @@ let padGlow;
     d.position.z=-0.0152; d.rotation.y=Math.PI; padTilt.add(d);
   }
   // handle
-  const hg=new THREE.Group(); hg.position.set(0.052,-R-0.045,0.0); hg.rotation.z=0.34; padTilt.add(hg);
-  const grip=box(mWood,0.048,0.135,0.028, 0,-0.03,0, hg); outline(grip,0.006);
-  const neck=box(mWoodD,0.062,0.06,0.030, 0,0.045,0, hg);
-  const butt=box(mWoodD,0.056,0.028,0.034, 0,-0.108,0, hg); outline(butt,0.006);
+  const hg=new THREE.Group(); hg.position.set(0.052,-R-0.040,0.0); hg.rotation.z=0.34; padTilt.add(hg);
+  const grip=box(mWood,0.050,0.185,0.030, 0,-0.055,0, hg); outline(grip,0.006);
+  const neck=box(mWoodD,0.064,0.062,0.032, 0,0.050,0, hg);
+  const butt=box(mWoodD,0.060,0.030,0.038, 0,-0.160,0, hg); outline(butt,0.006);
   padRig.userData.grip=hg;
 
   // charge glow behind the blade
@@ -1012,26 +1019,6 @@ let padGlow;
         x.fillStyle=g;x.fillRect(0,0,w,h);})}));
   padGlow.position.z=0.035; padTilt.add(padGlow);
 }
-/* ---- forearm + glove (separate: it points back at the "shoulder") ------ */
-const armGrp=new THREE.Group(); world.add(armGrp);
-let armFore, armGlove, armSleeve;
-{
-  const mSleeve=toon({color:P.sleeve,shadow:0x5C7CB0,rimStr:0.26});
-  const mSkin  =toon({color:P.skin,  shadow:0xB6866A,rimStr:0.26});
-  const mGlove =toon({color:P.glove, shadow:0xB9B2A0,rimStr:0.3});
-  armFore=new THREE.Mesh(G.cyl,mSkin);
-  armFore.scale.set(0.052,1,0.052); armGrp.add(armFore); outline(armFore,0.0055);
-  armSleeve=new THREE.Mesh(G.cyl,mSleeve);
-  armSleeve.scale.set(0.082,0.30,0.082); armGrp.add(armSleeve); outline(armSleeve,0.0055);
-  armGlove=new THREE.Group(); world.add(armGlove);
-  const palm=new THREE.Mesh(G.sph,mGlove);
-  palm.scale.set(0.082,0.098,0.082); armGlove.add(palm); outline(palm,0.0055);
-  const thumb=new THREE.Mesh(G.sph,mGlove);
-  thumb.scale.set(0.040,0.062,0.040); thumb.position.set(-0.040,0.032,0.030); thumb.rotation.z=0.5; armGlove.add(thumb);
-  const cuff=new THREE.Mesh(G.cyl,mSleeve);
-  cuff.scale.set(0.092,0.042,0.092); cuff.position.y=-0.072; armGlove.add(cuff); outline(cuff,0.0055);
-}
-
 /* =================================================================== BALL */
 const ballGrp=new THREE.Group(); world.add(ballGrp);
 const matBallBody=toon({color:P.ball,shadow:0xA9AEDA,rimStr:0.34,spec:0.42,b1:-0.1,b2:0.42});
@@ -1137,14 +1124,14 @@ let cpuArm, cpuPad, cpuEyeL, cpuEyeR, cpuBody, cpuShadow;
    nothing — the robot covers so much table that the ring's edge fell off it.) */
 const coverTex=ctex(128,128,(x,w,h)=>{
   const g=x.createRadialGradient(w/2,h/2,2,w/2,h/2,w/2);
-  g.addColorStop(0,'rgba(255,255,255,0.55)');
-  g.addColorStop(0.55,'rgba(255,255,255,0.26)');
+  g.addColorStop(0,'rgba(255,255,255,0.80)');
+  g.addColorStop(0.55,'rgba(255,255,255,0.40)');
   g.addColorStop(1,'rgba(255,255,255,0)');
   x.fillStyle=g; x.fillRect(0,0,w,h);
 });
 const cover=new THREE.Mesh(new THREE.PlaneGeometry(1,1),
   new THREE.MeshBasicMaterial({map:coverTex,transparent:true,depthWrite:false,opacity:0,
-    color:0xFF6B5A,blending:THREE.AdditiveBlending}));
+    color:0xFF7A55,blending:THREE.AdditiveBlending}));
 cover.rotation.x=-Math.PI/2; cover.position.y=K.TABLE_Y+0.030; cover.renderOrder=3; world.add(cover);
 
 /* ---- bounce marker: where your shot will land on their half. A flat ring
@@ -1597,7 +1584,8 @@ function traceShot(p0,v0,out){
 const RUN={
   state:'boot', t:0, elapsed:0, left:K.RUN_TIME, score:0, shown:0, mult:1,
   you:0, cpu:0, rally:0, rallies:0, shots:0, smashes:0, bestPoint:0, longest:0,
-  streak:0, overdrive:false, serveMine:true,
+  streak:0, overdrive:false, serveMine:true, log:[],
+  ending:false, finalRally:false, endHold:0,
 };
 const B={p:new THREE.Vector3(0,-9,0), v:new THREE.Vector3(), prev:new THREE.Vector3(),
   phase:'idle', t:0, live:false, dead:true, spin:new THREE.Vector3(), outT:0,
@@ -1778,6 +1766,7 @@ function pointTo(who, reason){
   if(RUN.state!=='play' || B.dead) return;
   B.dead=true; B.live=false;
   const shots=RUN.rally;
+  RUN.log.push(who[0]+':'+reason);   // telemetry: why each point ended
   if(who==='player'){
     RUN.you++;
     const bonus=1+clamp((shots-1)*0.22,0,1.1);
@@ -1857,8 +1846,12 @@ function cpuReturn(plan){
   const ease=clamp((plan.t-0.30)/0.26,0,1);                 // how long it had
   const central=1-clamp(Math.abs(plan.bx||0)/K.TABLE_HW,0,1);
   const shallow=1-clamp(((-(plan.bz||0))-0.2)/1.0,0,1);     // landed near the net
-  const weak=clamp(ease*0.45+central*0.35+shallow*0.20,0,1);
-  const aggr=clamp(Math.max(CPU.aggr, weak*weak*1.15),0,1);
+  /* Centrality matters most: a ball down the middle leaves YOU in the middle,
+     covering both sides, which is why hitting there is so safe. The counter is
+     that a central ball is the easiest one to attack — without weighting it
+     heavily, "always deep down the middle" won 60% of matches on a fixed input. */
+  const weak=clamp(central*0.55+ease*0.25+shallow*0.20,0,1);
+  const aggr=clamp(Math.max(CPU.aggr, Math.pow(weak,1.5)*1.20),0,1);
   // wrong-foot: mostly play away from where the player's paddle already is
   let side = pad.x>0?-1:1;
   if(rnd()<0.28) side=-side;                       // but not every single time
@@ -2088,7 +2081,7 @@ function aimTick(dt){
   // the opponent's footprint: the tactical read for where to place the ball
   cover.position.set(clamp(CPU.x,-0.95,0.95),K.TABLE_Y+0.030,clamp(CPU.z+0.62,-1.30,-0.30));
   cover.scale.set(1.05,1.85,1);
-  cover.material.opacity=dmp(cover.material.opacity,(sw.down&&sw.armed)?0.85:0.42,8,dt);
+  cover.material.opacity=dmp(cover.material.opacity,(sw.down&&sw.armed)?1.0:0.55,8,dt);
   if(!arrival) return;
   if(!sw.down || !sw.armed || B.locked) return;
 
@@ -2178,22 +2171,6 @@ function paddleTick(dtReal){
   padGlow.material.opacity=clamp(charging*0.55+padHitFlash*0.40,0,0.45);
   padGlow.material.color.setHex(powerTier()==='smash'?0xFFC943:0x9FF3FF);
 
-  // forearm: from the grip toward an off-screen shoulder
-  const grip=padRig.userData.grip;
-  grip.updateWorldMatrix(true,false);
-  const hand=new THREE.Vector3(0,-0.075,0).applyMatrix4(grip.matrixWorld);
-  const shoulder=new THREE.Vector3(0.34,-0.06,2.16);
-  armGlove.position.copy(hand);
-  armGlove.quaternion.copy(padTilt.getWorldQuaternion(_q));
-  const mid=hand.clone().add(shoulder).multiplyScalar(0.5);
-  const dir=shoulder.clone().sub(hand);
-  const len=dir.length();
-  armFore.position.copy(mid);
-  armFore.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
-  armFore.scale.set(0.052,len,0.052);
-  armSleeve.position.copy(hand).addScaledVector(dir,0.62);
-  armSleeve.quaternion.copy(armFore.quaternion);
-  armSleeve.scale.set(0.078,len*0.5,0.078);
 }
 
 /* =============================================================== OPPONENT */
@@ -2251,7 +2228,7 @@ function cameraTick(dt){
     const a=RUN.t*0.12;
     cx=Math.sin(a)*1.25; cy=1.16+Math.sin(a*1.6)*0.07; cz=3.05+Math.cos(a)*0.25;
   }
-  padRig.visible=!menu; armGrp.visible=!menu; armGlove.visible=!menu;
+  padRig.visible=!menu;
   if(shake>0.0005){
     shake=Math.max(0,shake-dt*3.0);
     const s=shake*shake*0.075;
@@ -2280,7 +2257,7 @@ function hudTick(dt){
   const L=Math.max(0,RUN.left);
   const mm=Math.floor(L/60), ss=Math.floor(L%60);
   elTime.textContent=mm+':'+String(ss).padStart(2,'0');
-  elTime.className='val'+(L<=10?' crit':(L<=K.OVERDRIVE_AT?' warn':''));
+  elTime.className='val'+(RUN.finalRally&&RUN.ending?' crit final':(L<=10?' crit':(L<=K.OVERDRIVE_AT?' warn':'')));
   elTbar.style.width=(L/K.RUN_TIME*100)+'%';
   elTbar.style.background=L<=10?'linear-gradient(90deg,#FF5D5D,#FF9A5C)':(L<=K.OVERDRIVE_AT?'linear-gradient(90deg,#FF9A5C,#FFC943)':'linear-gradient(90deg,#45E0E8,#7CF2A8)');
   elMult.textContent='×'+RUN.mult.toFixed(RUN.mult>=10?0:1);
@@ -2382,7 +2359,8 @@ function endRun(){
   RUN.state='end';
   B.live=false; ballGrp.visible=false; ballShadow.visible=false;
   arcMesh.visible=false; mark.visible=false; timeScale=1;
-  sfxSiren(); if(RUN.you>=RUN.cpu) sfxCheer(1);
+  if(!RUN.ending) sfxSiren();
+  if(RUN.you>=RUN.cpu) sfxCheer(1);
   setHud(false);
   const won=RUN.you>RUN.cpu, drew=RUN.you===RUN.cpu;
   $('resHead').textContent = won?'YOU WIN':(drew?'DEAD HEAT':'CPU WINS');
@@ -2580,7 +2558,22 @@ function frame(dtR){
     }
     if(hitstop>0) hitstop-=dtR; else ballTick(dt);
     aimTick(dtR);
-    if(RUN.left<=0) endRun();
+    /* The clock never cuts a rally short — the point in play is finished and
+       counted first. No new rally starts once time is up (the serve gate needs
+       RUN.left > 0.6), so this can only ever extend by one point. */
+    if(RUN.left<=0){
+      if(!RUN.ending){
+        RUN.ending=true; RUN.endHold=0;
+        RUN.finalRally = B.live && !B.dead;
+        sfxSiren();
+        if(RUN.finalRally) callOut('TIME','PLAY THE POINT OUT','#FFC943');
+      }
+      if(B.live && !B.dead) RUN.endHold=0;              // still live: let it run
+      else {
+        RUN.endHold+=dtR;
+        if(RUN.endHold > (RUN.finalRally?1.20:0.30)) endRun();
+      }
+    }
   } else {
     arcMesh.visible=false; mark.visible=false;
   }
@@ -2674,7 +2667,7 @@ window.__TS={
     const n=Math.round(sec/dt);
     for(let i=0;i<n;i++){ if(fn) fn(i*dt,i); frame(dt); }
     SKIP_RENDER=false;
-    return {score:RUN.score,you:RUN.you,cpu:RUN.cpu,shots:RUN.shots,
+    return {score:RUN.score,you:RUN.you,cpu:RUN.cpu,shots:RUN.shots,log:RUN.log.slice(),
             rallies:RUN.rallies,longest:RUN.longest,smashes:RUN.smashes,
             mult:RUN.mult,left:RUN.left};
   },
