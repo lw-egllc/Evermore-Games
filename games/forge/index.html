@@ -1,0 +1,1198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#160D06">
+<title>FORGE — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#100A05;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 36%,#4A2C14 0%,#160D06 72%)}
+  canvas{display:block;touch-action:none;image-rendering:auto;
+    box-shadow:0 0 90px rgba(0,0,0,.92), 0 0 0 1px rgba(255,200,120,.10)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+
+/* =========================================================================
+   FORGE — Evermore Arcade   ·   gameId: forge   ·   simVersion: 0.1.0
+   Archetype: Merger (bible §4.1). Time-driven world → ghost-legal.
+
+   One sentence: drag to aim the ingot at a column and release to drop it,
+   touching ingots of the same tier fuse into the next tier and cascade, and
+   the run ends when the bench stacks over the rim.
+
+   Two things in this build deliberately differ from the original pitch,
+   because the bible forbids them:
+     · no idle coins-per-second. Score that accrues without input breaks the
+       comparability test (§3.7) and hands a do-nothing line a real score.
+       Compounding instead comes from HEAT: tier-5+ ingots on the bench slow
+       the multiplier's decay, so a well-built bench sustains your rate.
+       You still have to merge to raise it.
+     · no fixed 90 s horn. C3 says the run ends by death and the curve is
+       tuned so p50 lands at 60–90 s. Elapsed time is shown, not counted down.
+
+   Escalation vectors — band 1: feed rate (uncapped). band 2: slag density,
+   which clamps at 0.28; feed rate carries from there (§5.2).
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const _hxCache = {};
+function HX(h) {
+  const c = _hxCache[h]; if (c) return c;
+  const v = [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  _hxCache[h] = v; return v;
+}
+function mix(a, b, t) {
+  const A = HX(a), B = HX(b); t = clamp(t, 0, 1);
+  return 'rgb(' + ((A[0] + (B[0] - A[0]) * t) | 0) + ',' + ((A[1] + (B[1] - A[1]) * t) | 0) + ',' + ((A[2] + (B[2] - A[2]) * t) | 0) + ')';
+}
+function rgba(h, a) { const A = HX(h); return 'rgba(' + A[0] + ',' + A[1] + ',' + A[2] + ',' + a + ')'; }
+function tone(h, f) {
+  const A = HX(h);
+  return 'rgb(' + clamp(A[0] * f, 0, 255) + ',' + clamp(A[1] * f, 0, 255) + ',' + clamp(A[2] * f, 0, 255) + ')';
+}
+function commas(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+/* ----------------------------------------------------------------- palette
+   House style: rendered warm wood, carved plaques, glossy spheres with a
+   thick dark rim and a hard specular. Semantic colour per §11.6 —
+   hazard = warm red family (slag is desaturated char, the rim line is red),
+   scoring = gold family, neutral = cool desaturated wood. */
+const C = {
+  woodDeep:  '#2A1808',
+  woodDark:  '#3B2415',
+  woodMid:   '#6B4423',
+  woodLite:  '#C9924F',
+  plaqueEdge:'#3E2210',
+  plaqueA:   '#E8B575',
+  plaqueB:   '#C07A33',
+  pill:      '#221C18',
+  pillEdge:  '#6E5B48',
+  gold:      '#FFC542',
+  goldDeep:  '#C87D14',
+  cream:     '#FFF4DE',
+  danger:    '#E2452C',
+  slag:      '#4C4038',
+  slagEdge:  '#241D18',
+};
+
+/* Tier faces. Two-channel semantics (§11.6): every tier is distinguished by
+   colour AND by the numeral on its face AND by size of the specular, so the
+   board stays readable on a deuteranopia palette and in greyscale. */
+const TIER = [
+  null,
+  { a:'#F0785A', b:'#B32E17', ink:'#4A1206' },   // 1
+  { a:'#FFB443', b:'#C4700A', ink:'#4A2A02' },   // 2
+  { a:'#F7E463', b:'#BFA010', ink:'#4A3D04' },   // 3
+  { a:'#8CE05F', b:'#3E8F1E', ink:'#153B06' },   // 4
+  { a:'#5ED9E8', b:'#1C87A0', ink:'#04333D' },   // 5
+  { a:'#7E8CF7', b:'#3341B8', ink:'#0C1249' },   // 6
+  { a:'#D07BF2', b:'#8324B5', ink:'#340846' },   // 7
+  { a:'#FFF4DE', b:'#D2A63A', ink:'#4A3505' },   // 8  — the cash-out tier
+];
+const MAXT = 8;
+
+/* ================================================================== AUDIO */
+class Audio_ {
+  constructor() {
+    this.on = true; this.ctx = null; this.master = null; this.noise = null;
+  }
+  boot() {
+    if (this.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) { this.on = false; return; }
+    this.ctx = new AC();
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.ratio.value = 7;
+    this.master = this.ctx.createGain(); this.master.gain.value = .5;
+    this.master.connect(comp); comp.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 1.2, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+  }
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+  tone(f, dur, gain, type, delay, f2) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const o = this.ctx.createOscillator(); o.type = type || 'sine';
+    o.frequency.setValueAtTime(f, t);
+    if (f2) o.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(.0002, gain), t + .012);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + .04);
+  }
+  hit(f, dur, gain, q, delay, type) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise;
+    const fl = this.ctx.createBiquadFilter(); fl.type = type || 'bandpass';
+    fl.frequency.value = f; fl.Q.value = q || 1.2;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.master); s.start(t); s.stop(t + dur + .04);
+  }
+  /* §7.7 — the streak ladder on a real pentatonic scale, capped at +3 oct. */
+  ladder(streak, wave) {
+    const deg = [0, 2, 4, 7, 9];
+    const n = Math.max(0, streak);
+    const f = 360 * Math.pow(2, deg[n % 5] / 12) * Math.pow(2, Math.min(Math.floor(n / 5), 3));
+    const det = 1 + (((n * 37) % 15) - 7) * .001;      // ±0.7%, deterministic
+    this.tone(f * det, .12, .18, 'triangle', 0);
+    this.tone(f * 2 * det, .035, .05 + .0015 * n, 'sine', .01);
+    if (wave > 1) this.tone(f * 1.5, .07, .06, 'sine', .02);
+  }
+  /* the ladder must be HEARD to fall (§7.7) */
+  ladderBreak() {
+    this.tone(430, .30, .16, 'sawtooth', 0, 150);
+    this.tone(608, .26, .07, 'sine', .01, 214);        // tritone against the fall
+  }
+  drop()   { this.hit(320, .09, .30, .9, 0, 'lowpass'); this.tone(150, .07, .10, 'sine'); }
+  land()   { this.hit(240, .07, .22, 1.0, 0, 'lowpass'); }
+  cash()   { for (let i = 0; i < 6; i++) this.tone(523 * Math.pow(2, [0,2,4,7,9,12][i] / 12), .17, .12, 'triangle', i * .045); }
+  feed()   { this.hit(180, .12, .18, .7, 0, 'lowpass'); this.tone(98, .10, .09, 'sine'); }
+  warn()   { this.tone(210, .09, .07, 'square'); }
+  pb()     { for (let i = 0; i < 4; i++) this.tone(784 * Math.pow(2, i * 2 / 12), .20, .13, 'triangle', i * .06); }
+  die()    { this.tone(150, .70, .26, 'sawtooth', 0, 42); this.hit(140, .55, .30, .5, 0, 'lowpass'); }
+}
+const S = new Audio_();
+function vib(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+/* ============================================================ CANVAS SETUP */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha: false });
+const VW = 540;
+let VH = 960, DPR = 1, SCALE = 1;
+
+/* §8.1 bands, mapped to the 540-wide house canvas. Disjoint, summing to VH. */
+const L = {};
+function layout() {
+  const ww = Math.max(1, window.innerWidth || 0), wh = Math.max(1, window.innerHeight || 0);
+  VH = clamp(Math.round(VW * wh / ww), 800, 1180);          // 19.5:9 → 4:3
+  const s = Math.min(ww / VW, wh / VH);
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  SCALE = s;
+  cv.width = Math.round(VW * s * DPR); cv.height = Math.round(VH * s * DPR);
+  cv.style.width = Math.round(VW * s) + 'px'; cv.style.height = Math.round(VH * s) + 'px';
+
+  L.reserve = 36;
+  L.hudY = 36; L.hudH = 68;
+  L.fieldY = L.hudY + L.hudH;                                // 104
+  L.homeH = 40;
+  L.thumbH = 172;
+  L.fieldH = VH - L.fieldY - L.thumbH - L.homeH;
+  L.thumbY = L.fieldY + L.fieldH;
+
+  L.cell = 66;
+  L.gw = COLS * L.cell;
+  L.gx = Math.round((VW - L.gw) / 2);
+  L.queueY = L.fieldY + 26;
+  L.hopY = L.fieldY + 74;
+  L.gy = L.fieldY + 108;
+  L.gh = ROWS * L.cell;
+  /* if a tall device gives us more room, spend it below the bench, never on
+     more rows — the row count is part of the sim and must be identical
+     everywhere (§8.4). */
+  L.benchBase = L.gy + L.gh;
+  L.rimY = L.gy + L.cell;                                    // top of row 1
+
+  L.meterX = 18; L.meterW = 36;
+  L.meterY = L.gy; L.meterH = L.gh;
+}
+
+/* ============================================================== CONSTANTS */
+const COLS = 5, ROWS = 8;               // row 0 is the danger row above the rim
+const TICK = 1 / 60;
+
+/* difficulty (§5.1) */
+const ONRAMP_TICKS = 240, K_DIFF = 2.0, T_RAMP = 45, BREATHE_A = 0.10, BREATHE_P = 12;
+const CEILING_S = 180;
+
+/* escalation — one hazard, one death condition. The bench is shoved up from
+   below on a timer the player cannot influence (§5.4 encroachment). Merging
+   frees cells; the shove adds five at once. Skill is the clearing rate. */
+const SHOVE_BASE = 12.5;                // seconds between shoves at D_eff = 1
+const TELEGRAPH = 1.4;                  // the incoming row is visible this long
+const SLAG_FIRST = 25, SLAG_LIVE = 30, SLAG_MAX = 0.22;
+
+/* scoring (§9)
+   MERGE_MIN = 3 is the greed mechanic (§9.3), and it is load-bearing. At 2, a
+   pair fuses the instant it touches, the player never chooses whether to
+   merge, and a survival-only bot scores as well as a good one — measured at
+   1.02× on the first build. At 3, two matching ingots sit on the bench
+   waiting, and completing at exactly 3 versus building to 5 or 6 for the size
+   bonus is a real risk/reward decision available every few seconds. */
+const MERGE_MIN = 3;
+/* The multiplier must reward the QUALITY of a merge, not the count of them.
+   A flat per-merge gain was measured at 0.46 and immediately handed the
+   survival-only bot 0.71× of good play, because cashing endless minimum
+   triples rides the multiplier just as well as engineering big clusters.
+   Gain now scales with how far past the safe threshold the cluster was. */
+const MULT_MIN = 1, MULT_MAX = 8, DECAY_BASE = 0.45, DECAY_FLOOR = 0.08;
+/* MULT_G0 = 0 is the load-bearing zero. A minimum-size fuse feeds the
+   multiplier NOTHING; only clusters built past the safe threshold do. At 0.10
+   the multiplier was still a throughput meter and every lazy line rode it —
+   spam peaked at 3.31 mean multiplier, higher than the expert's. This is the
+   same fix Hot Streak needed: reward the good outcome, not the frequent one. */
+const MULT_G0 = 0.0, MULT_GS = 0.75, MULT_CASH = 1.6;
+const multGain = n => MULT_G0 + MULT_GS * (n - MERGE_MIN);
+const HOT_TIER = 5, HOT_RELIEF = 0.06;
+const CASH_BASE = 40;                   // a tier-8 group clears the bench for this
+/* Super-linear in group size, so hoarding a cluster past the safe threshold is
+   worth the bench space it costs. Six cells held as one group pay 5.08; the
+   same six cells cashed as two safe triples pay 2.0. That gap IS the greed
+   mechanic — flatten this curve and the game reverts to an execution test. */
+const sizeBonus = n => 1 + 0.70 * (n - MERGE_MIN) + 0.22 * (n - MERGE_MIN) * (n - MERGE_MIN);
+const STREAK_TIERS = [5, 12, 24, 40];
+
+/* feel (§7) */
+const TRAUMA_DECAY = 1.2, SHAKE_OFF = 14, SHAKE_ANG = 2.0 * Math.PI / 180, SHAKE_FREQ = 25;
+const LOCK_BASE = 8, LOCK_PER_WAVE = 5, BUFFER_TICKS = 7;
+
+/* precomputed D_eff per tick — no transcendentals in the sim (§11.2) */
+const DEFF = new Float32Array(CEILING_S * 60 + 600);
+(function buildDeff() {
+  for (let i = 0; i < DEFF.length; i++) {
+    if (i < ONRAMP_TICKS) { DEFF[i] = 1.0; continue; }
+    const tau = (i - ONRAMP_TICKS) / 60;
+    const trend = 1 + K_DIFF * Math.pow(tau / T_RAMP, 0.8);
+    const breathe = 1 + BREATHE_A * Math.sin(TAU * tau / BREATHE_P);
+    DEFF[i] = trend * breathe;
+  }
+})();
+const dEffAt = t => DEFF[Math.min(DEFF.length - 1, t | 0)];
+
+/* ============================================================= GAME STATE */
+const G = {
+  state: 'title',                       // title | play | dying | over
+  seed: 0, tick: 0, t: 0,
+  score: 0, shown: 0,
+  mult: 1, multPeak: 1, streak: 0, tierIdx: 0,
+  merges: 0, drops: 0, chainBest: 0, cashes: 0, deepest: 1, lastWaves: 0,
+  lock: 0, buffer: -1,
+  col: 2,                               // selected column
+  hop: 1, queue: [1, 1],
+  shoveIn: 0, shoveRow: null, lastRow: null, shoves: 0, slagShown: false,
+  trauma: 0, hitstop: 0, timeScale: 1,
+  dieAt: 0, dieCell: -1,
+  best: 0, pbHit: false, noSave: false,
+  rival: 0,
+};
+let grid = new Array(COLS * ROWS).fill(null);
+let rnd = mulberry32(1), bag = [], parts = [], floats = [], flashes = [];
+
+const idx = (c, r) => r * COLS + c;
+const cellX = c => L.gx + c * L.cell + L.cell / 2;
+const cellY = r => L.gy + r * L.cell + L.cell / 2;
+
+/* ------------------------------------------------------------------- bag
+   A shuffled bag rather than per-object randomness (§6): the composition is
+   fixed and public, so the sequence is learnable and every player on the seed
+   gets the identical stream. */
+/* Three tiers. A two-tier bag was tried and made accidental adjacency so
+   common that dropping fast at random out-scored deliberate play by 2.6×:
+   with matches everywhere, throughput beat placement. Three tiers keeps
+   matches scarce enough that where a piece goes is the whole game. */
+const BAG = [1, 1, 1, 1, 2, 2, 2, 3, 3, 3];
+function refillBag() {
+  const b = BAG.slice();
+  for (let i = b.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; const x = b[i]; b[i] = b[j]; b[j] = x; }
+  bag = bag.concat(b);
+}
+function nextPiece() { if (bag.length < 4) refillBag(); return bag.shift(); }
+
+/* ================================================================= SIM */
+function resetRun(seed) {
+  G.seed = seed === undefined ? ((Date.now() / 86400000) | 0) : seed;
+  rnd = mulberry32(G.seed * 2654435761 % 4294967296 | 0);
+  bag = []; refillBag();
+  grid = new Array(COLS * ROWS).fill(null);
+  G.tick = 0; G.t = 0; G.score = 0; G.shown = 0;
+  G.mult = 1; G.multPeak = 1; G.streak = 0; G.tierIdx = 0;
+  G.merges = 0; G.drops = 0; G.chainBest = 0; G.cashes = 0; G.deepest = 1;
+  G.lock = 0; G.buffer = -1; G.col = 2;
+  G.hop = nextPiece(); G.queue = [nextPiece(), nextPiece()];
+  G.shoveIn = SHOVE_BASE; G.shoves = 0; G.slagShown = false; G.lastRow = null;
+  G.trauma = 0; G.hitstop = 0; G.timeScale = 1;
+  G.dieAt = 0; G.dieCell = -1; G.pbHit = false;
+  parts.length = 0; floats.length = 0; flashes.length = 0;
+  try { G.best = +(localStorage.getItem('forge.pb.' + G.seed) || 0); } catch (e) { G.best = 0; }
+  /* a stand-in bracket rival for the marker (§10.4); the shell owns this in
+     production and serves a real score for the seed. */
+  G.rival = 1400 + ((G.seed * 7919) % 1600);
+  armShove();
+}
+function startRun(seed) { resetRun(seed); G.state = 'play'; }
+
+function colHeight(c) { let h = 0; for (let r = ROWS - 1; r >= 0; r--) if (grid[idx(c, r)]) h = ROWS - r; return h; }
+function topEmptyRow(c) { for (let r = ROWS - 1; r >= 0; r--) if (!grid[idx(c, r)]) return r; return -1; }
+
+function mkCell(t, slag) { return { t: t, slag: !!slag, py: 0, pop: 0, flash: 0, hot: !slag && t >= HOT_TIER }; }
+
+/* The incoming row. A shove must be pure pressure: it never gifts a merge, so
+   every merge on the bench is one the player set up. That needs BOTH guards —
+   no two horizontal neighbours share a tier, and no cell repeats the tier
+   directly beneath it (the previous shove row). With only the horizontal
+   guard, stacked rows still lined up vertically and the board merged itself,
+   which handed the do-nothing bot 0.41× of honest play. */
+function armShove() {
+  const d = dEffAt(G.tick);
+  let slagP = 0;
+  if (G.t >= SLAG_LIVE) slagP = Math.min(SLAG_MAX, (G.t - SLAG_LIVE) / 260);
+  const row = [];
+  for (let c = 0; c < COLS; c++) {
+    if (rnd() < slagP) { row.push({ t: 1, slag: true }); continue; }
+    let t = rnd() < clamp(0.28 + 0.12 * (d - 1), 0, 0.55) ? 2 : 1;
+    if (rnd() < 0.10 * (d - 1)) t = 3;
+    const banL = c > 0 && !row[c - 1].slag ? row[c - 1].t : 0;
+    const banD = G.lastRow && !G.lastRow[c].slag ? G.lastRow[c].t : 0;
+    let guard = 0;
+    while ((t === banL || t === banD) && guard++ < 8) t = t % 3 + 1;
+    row.push({ t: t, slag: false });
+  }
+  /* §12 — foreshadow the hazard once, harmlessly, ~5 s before it can matter:
+     exactly one slag, in the shove row, while the bench is still low. */
+  if (!G.slagShown && G.t >= SLAG_FIRST && G.t < SLAG_LIVE) {
+    G.slagShown = true;
+    row[(rnd() * COLS) | 0] = { t: 1, slag: true };
+  }
+  G.shoveRow = row;
+}
+
+/* the whole bench moves up one row; anything already in the danger row is
+   pushed over the rim and that ends the run */
+function doShove() {
+  for (let c = 0; c < COLS; c++) if (grid[idx(c, 0)]) { die(idx(c, 0)); return; }
+  for (let r = 0; r < ROWS - 1; r++) for (let c = 0; c < COLS; c++) {
+    const q = grid[idx(c, r + 1)];
+    grid[idx(c, r)] = q;
+    if (q) q.py += L.cell;
+    grid[idx(c, r + 1)] = null;
+  }
+  for (let c = 0; c < COLS; c++) {
+    const spec = G.shoveRow[c];
+    const cell = mkCell(spec.t, spec.slag);
+    cell.py = L.cell;
+    grid[idx(c, ROWS - 1)] = cell;
+  }
+  G.lastRow = G.shoveRow;
+  G.shoves++;
+  S.feed();
+  G.trauma = clamp(G.trauma + 0.22, 0, 1);
+  resolveBoard(null);                    // a shove has no spark: it never fuses
+  armShove();
+}
+
+/* ---- gravity: every cell falls to the lowest free slot in its column */
+function settle() {
+  let moved = false;
+  for (let c = 0; c < COLS; c++) {
+    let write = ROWS - 1;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      const cell = grid[idx(c, r)];
+      if (!cell) continue;
+      if (write !== r) {
+        grid[idx(c, write)] = cell; grid[idx(c, r)] = null;
+        cell.py += (r - write) * L.cell; moved = true;
+      }
+      write--;
+    }
+  }
+  return moved;
+}
+
+/* ---- orthogonally connected groups of the same tier, size ≥ 2 */
+const _seen = new Uint8Array(COLS * ROWS);
+function findGroups() {
+  _seen.fill(0);
+  const out = [];
+  const stack = [];
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const i = idx(c, r); const cell = grid[i];
+    if (!cell || cell.slag || _seen[i]) continue;
+    const tier = cell.t;
+    const g = []; stack.length = 0; stack.push(i); _seen[i] = 1;
+    while (stack.length) {
+      const j = stack.pop(); g.push(j);
+      const jc = j % COLS, jr = (j / COLS) | 0;
+      if (jc > 0)        { const k = j - 1;    const q = grid[k]; if (q && !q.slag && q.t === tier && !_seen[k]) { _seen[k] = 1; stack.push(k); } }
+      if (jc < COLS - 1) { const k = j + 1;    const q = grid[k]; if (q && !q.slag && q.t === tier && !_seen[k]) { _seen[k] = 1; stack.push(k); } }
+      if (jr > 0)        { const k = j - COLS; const q = grid[k]; if (q && !q.slag && q.t === tier && !_seen[k]) { _seen[k] = 1; stack.push(k); } }
+      if (jr < ROWS - 1) { const k = j + COLS; const q = grid[k]; if (q && !q.slag && q.t === tier && !_seen[k]) { _seen[k] = 1; stack.push(k); } }
+    }
+    if (g.length >= MERGE_MIN) out.push(g);
+  }
+  return out;
+}
+
+function chainMul(wave) { return Math.min(5, 1 + 0.6 * (wave - 1)); }
+
+function addScore(v, x, y, big) {
+  G.score += v;
+  floats.push({ x: x, y: y, v: Math.round(v), a: 1, vy: -46, big: !!big, tier: G.tierIdx });
+}
+
+function bumpMult(gain) {
+  G.mult = Math.min(MULT_MAX, G.mult + gain);
+  if (G.mult > G.multPeak) G.multPeak = G.mult;
+  G.streak++;
+  const nt = STREAK_TIERS.filter(x => G.streak >= x).length;
+  if (nt > G.tierIdx) {
+    G.tierIdx = nt;
+    G.trauma = clamp(G.trauma + 0.50, 0, 1);
+    G.hitstop = Math.max(G.hitstop, 6);
+  }
+}
+
+/* one connected same-tier group, flood-filled from a single cell */
+function groupAt(i) {
+  const cell = grid[i];
+  if (!cell || cell.slag) return [];
+  const tier = cell.t, g = [], stack = [i];
+  _seen.fill(0); _seen[i] = 1;
+  while (stack.length) {
+    const j = stack.pop(); g.push(j);
+    const jc = j % COLS, jr = (j / COLS) | 0;
+    const push = k => { const q = grid[k]; if (q && !q.slag && q.t === tier && !_seen[k]) { _seen[k] = 1; stack.push(k); } };
+    if (jc > 0) push(j - 1);
+    if (jc < COLS - 1) push(j + 1);
+    if (jr > 0) push(j - COLS);
+    if (jr < ROWS - 1) push(j + COLS);
+  }
+  return g;
+}
+
+/* ---- resolve the cascade; returns the number of waves.
+   THE SPARK RULE. A group fuses only when the piece the player just dropped
+   completes it. Nothing on the bench ever fires by itself — not from gravity,
+   not from a shove. That is what makes the size bonus reachable: four, five,
+   six of a tier can sit there waiting while the player decides whether to
+   light them now or add one more. With automatic merging at any threshold the
+   mean group size measured 3.2 for every policy including the expert, i.e.
+   the greed decision did not exist. It also means a shove can never gift a
+   merge, so the do-nothing line scores exactly zero by construction. */
+function resolveBoard(spark) {
+  let wave = 0;
+  if (!spark) { settle(); return 0; }
+  for (;;) {
+    settle();
+    if (!spark) break;                   // the cash-out consumed it
+    let si = -1;
+    for (let i = 0; i < grid.length; i++) if (grid[i] === spark) { si = i; break; }
+    if (si < 0) break;
+    const g = groupAt(si);
+    if (g.length < MERGE_MIN) break;
+    wave++;
+    {
+      /* deterministic merge target: lowest row, then leftmost column */
+      let tgt = g[0];
+      for (const j of g) { const jr = (j / COLS) | 0, tr = (tgt / COLS) | 0; if (jr > tr || (jr === tr && j % COLS < tgt % COLS)) tgt = j; }
+      const tier = grid[g[0]].t;
+      const size = g.length;
+      const tx = cellX(tgt % COLS), ty = cellY((tgt / COLS) | 0);
+
+      for (const j of g) { if (j !== tgt) { burst(cellX(j % COLS), cellY((j / COLS) | 0), tier, G.tierIdx); grid[j] = null; } }
+
+      if (tier >= MAXT) {
+        /* the cash-out: a tier-8 group leaves the bench entirely */
+        grid[tgt] = null;
+        spark = null;
+        G.cashes++;
+        const v = CASH_BASE * sizeBonus(size) * chainMul(wave) * G.mult;
+        addScore(v, tx, ty, true);
+        bumpMult(MULT_CASH);
+        G.trauma = clamp(G.trauma + 0.70, 0, 1);
+        G.hitstop = Math.max(G.hitstop, 10);
+        flashes.push({ x: tx, y: ty, r: 0, a: 1, big: true });
+        S.cash(); vib([14, 30, 14]);
+      } else {
+        const out = tier + 1;
+        const cell = mkCell(out, false);
+        cell.pop = 1; cell.flash = 1;
+        grid[tgt] = cell;
+        spark = cell;                    // the fused ingot carries the chain on
+        if (out > G.deepest) G.deepest = out;
+        const v = (out + 2) * sizeBonus(size) * chainMul(wave) * G.mult;
+        addScore(v, tx, ty, out >= HOT_TIER);
+        bumpMult(multGain(size));
+        G.merges++;
+        flashes.push({ x: tx, y: ty, r: 0, a: 1, big: false });
+        burst(tx, ty, out, G.tierIdx);
+        S.ladder(G.streak, wave);
+        if (wave >= 2) { G.trauma = clamp(G.trauma + 0.18 * wave, 0, 1); }
+        G.hitstop = Math.max(G.hitstop, 3);
+      }
+
+      /* slag is destroyed by any merge resolving orthogonally beside it */
+      const tc = tgt % COLS, tr2 = (tgt / COLS) | 0;
+      const nb = [[tc - 1, tr2], [tc + 1, tr2], [tc, tr2 - 1], [tc, tr2 + 1]];
+      for (const [nc, nr] of nb) {
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+        const q = grid[idx(nc, nr)];
+        if (q && q.slag) { burst(cellX(nc), cellY(nr), 0, 0); grid[idx(nc, nr)] = null; }
+      }
+    }
+  }
+  if (wave > G.chainBest) G.chainBest = wave;
+  G.lastWaves = wave;
+  return wave;
+}
+
+function placePiece(c, tier, slag) {
+  const r = topEmptyRow(c);
+  if (r < 0) return null;
+  const cell = mkCell(tier, slag);
+  cell.py = -(L.gy + r * L.cell + L.cell) + L.hopY - L.cell / 2;   // fall-in offset
+  grid[idx(c, r)] = cell;
+  return cell;
+}
+
+function doDrop(c) {
+  if (G.state !== 'play') return false;
+  c = clamp(c | 0, 0, COLS - 1);
+  if (colHeight(c) >= ROWS) return false;
+  const spark = placePiece(c, G.hop, false);
+  G.drops++;
+  G.hop = G.queue.shift(); G.queue.push(nextPiece());
+  S.drop();
+  const waves = resolveBoard(spark);
+  if (!waves) S.land();
+  G.lock = LOCK_BASE + LOCK_PER_WAVE * waves;
+  return true;
+}
+
+function die(cellIndex) {
+  if (G.state !== 'play') return;
+  G.state = 'dying';
+  G.dieAt = G.t; G.dieCell = cellIndex;
+  G.hitstop = 10; G.trauma = 1;
+  S.die(); vib([30, 40, 90]);
+  if (!G.noSave && G.score > G.best) {
+    G.best = Math.round(G.score);
+    try { localStorage.setItem('forge.pb.' + G.seed, String(G.best)); } catch (e) {}
+  }
+}
+
+/* ---- one fixed sim tick (§11.2) */
+function tick() {
+  if (G.state !== 'play') {
+    if (G.state === 'dying' && G.t - G.dieAt > 1.0) G.state = 'over';
+    G.t += TICK; G.tick++;
+    return;
+  }
+  G.tick++; G.t += TICK;
+
+  const d = dEffAt(G.tick);
+
+  /* multiplier decay — the second anti-stall (§5.4). HEAT on the bench slows
+     it, which is where compounding lives: a high-tier bench sustains your
+     rate, but only merging ever raises it. */
+  let hot = 0;
+  for (let i = 0; i < grid.length; i++) { const q = grid[i]; if (q && q.hot) hot++; }
+  const decay = Math.max(DECAY_FLOOR, DECAY_BASE - HOT_RELIEF * hot);
+  if (G.mult > MULT_MIN) G.mult = Math.max(MULT_MIN, G.mult - decay * TICK);
+  if (G.mult < G.multPeak - 1.0) {
+    if (G.streak > 0) { S.ladderBreak(); vib(18); }
+    G.streak = 0; G.tierIdx = 0; G.multPeak = G.mult;
+  }
+
+  /* encroachment — unavoidable, time-driven, telegraphed (§5.4, §6) */
+  if (G.tick >= ONRAMP_TICKS) {
+    const was = G.shoveIn;
+    G.shoveIn -= TICK * d;
+    if (was > TELEGRAPH && G.shoveIn <= TELEGRAPH) S.warn();
+    if (G.shoveIn <= 0) { doShove(); G.shoveIn = SHOVE_BASE; }
+  }
+
+  if (G.lock > 0) {
+    G.lock--;
+    if (G.lock === 0 && G.buffer >= 0) { const b = G.buffer; G.buffer = -1; doDrop(b); }
+  }
+
+  /* the hard ceiling (§5.3) — the curve should already have killed them */
+  if (G.t >= CEILING_S) die(idx(G.col, 0));
+}
+
+function requestDrop(c) {
+  if (G.state !== 'play') return;
+  if (G.lock > 0) { if (G.lock <= BUFFER_TICKS) G.buffer = c; return; }
+  doDrop(c);
+}
+
+/* ---- variable-dt wrapper; the sim itself only ever advances in fixed ticks */
+let acc = 0;
+function update(dt) {
+  dt = Math.min(dt, 0.25);
+  if (G.hitstop > 0) { G.hitstop -= dt / TICK; if (G.hitstop < 0) G.hitstop = 0; }
+  acc += dt;
+  let guard = 0;
+  while (acc >= TICK && guard++ < 8) { acc -= TICK; if (G.hitstop <= 0 || G.state !== 'play') tick(); }
+  presentation(dt);
+}
+
+/* ============================================================ PRESENTATION */
+function burst(x, y, tier, jt) {
+  const n = Math.min(34, 10 + jt * 6);
+  const spread = (90 + jt * 30) * Math.PI / 180;
+  const col = tier > 0 ? TIER[Math.min(MAXT, tier)].a : C.slag;
+  for (let i = 0; i < n; i++) {
+    if (parts.length > 400) break;
+    const a = -Math.PI / 2 + (Math.random() - .5) * spread + (Math.random() - .5) * .6;
+    const sp = 70 + Math.random() * 190;
+    parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: .55 + Math.random() * .40, t: 0, c: col, s: 10 });
+  }
+}
+
+function presentation(dt) {
+  G.trauma = clamp(G.trauma - TRAUMA_DECAY * dt, 0, 1);
+  G.shown += (G.score - G.shown) * (1 - Math.exp(-9 * dt));
+  if (!G.pbHit && G.best > 0 && G.score > G.best && G.state === 'play') {
+    G.pbHit = true; G.trauma = clamp(G.trauma + 0.70, 0, 1); G.timeScale = 0.25; S.pb();
+  }
+  if (G.timeScale < 1) { G.timeScale = Math.min(1, G.timeScale + dt * 3); }
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.t += dt;
+    if (p.t >= p.life) { parts.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt * -1 + 900 * dt;   // gravity −300 dp/s² bias, then fall
+    p.vx *= (1 - 1.6 * dt);
+  }
+  for (let i = floats.length - 1; i >= 0; i--) {
+    const f = floats[i]; f.y += f.vy * dt; f.vy *= (1 - 2.2 * dt); f.a -= dt * 1.7;
+    if (f.a <= 0) floats.splice(i, 1);
+  }
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    const f = flashes[i]; f.r += dt * (f.big ? 620 : 380); f.a -= dt * (f.big ? 2.0 : 3.2);
+    if (f.a <= 0) flashes.splice(i, 1);
+  }
+  for (let i = 0; i < grid.length; i++) {
+    const q = grid[i]; if (!q) continue;
+    if (q.py !== 0) { q.py *= (1 - Math.min(1, 17 * dt)); if (Math.abs(q.py) < .4) q.py = 0; }
+    if (q.pop > 0) q.pop = Math.max(0, q.pop - dt * 2.4);
+    if (q.flash > 0) q.flash = Math.max(0, q.flash - dt * 4.5);
+  }
+}
+
+/* =================================================================== DRAW */
+function shakeOffset() {
+  const sh = Math.pow(G.trauma, 3);
+  if (sh < .002) return [0, 0, 0];
+  const t = G.t * SHAKE_FREQ;
+  const n = (k) => Math.sin(t * 1.7 + k) * Math.sin(t * .9 + k * 2.3) * Math.sin(t * 2.3 + k * .7);
+  return [SHAKE_OFF * sh * n(1.3), SHAKE_OFF * sh * n(5.9), SHAKE_ANG * sh * n(11.1)];
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* carved-wood plaque, house style */
+function plaque(x, y, w, h, r) {
+  ctx.save();
+  roundRect(x, y, w, h, r); ctx.fillStyle = C.plaqueEdge; ctx.fill();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, C.plaqueA); g.addColorStop(1, C.plaqueB);
+  roundRect(x + 5, y + 5, w - 10, h - 10, Math.max(2, r - 3)); ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,240,210,.45)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x + 10, y + 8); ctx.lineTo(x + w - 10, y + 8); ctx.stroke();
+  ctx.restore();
+}
+
+/* near-black HUD pill with a top gloss, house style */
+function pill(x, y, w, h) {
+  roundRect(x, y, w, h, h / 2); ctx.fillStyle = C.pill; ctx.fill();
+  ctx.strokeStyle = rgba(C.pillEdge, .55); ctx.lineWidth = 1.5; ctx.stroke();
+  const g = ctx.createLinearGradient(0, y, 0, y + h * .6);
+  g.addColorStop(0, 'rgba(255,255,255,.15)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  roundRect(x + 2, y + 2, w - 4, h * .55, h / 2.4); ctx.fillStyle = g; ctx.fill();
+}
+
+/* glossy sphere — radial body, thick dark rim, hard specular, bounce light */
+function ingot(x, y, rad, tier, slag, popT, flashT) {
+  const sc = 1 + 0.22 * popT * (1 - popT) * 4;
+  const r = rad * (popT > 0 ? sc : 1);
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.ellipse(0, r * .82, r * .78, r * .22, 0, 0, TAU);
+  ctx.fillStyle = 'rgba(0,0,0,.34)'; ctx.fill();
+
+  if (slag) {
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU);
+    const g = ctx.createRadialGradient(-r * .3, -r * .35, r * .1, 0, 0, r);
+    g.addColorStop(0, '#6A5B50'); g.addColorStop(1, '#38302A');
+    ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = r * .19; ctx.strokeStyle = C.slagEdge; ctx.stroke();
+    ctx.strokeStyle = 'rgba(20,15,12,.85)'; ctx.lineWidth = r * .13; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-r * .34, -r * .30); ctx.lineTo(r * .30, r * .34);
+    ctx.moveTo(r * .30, -r * .34); ctx.lineTo(-r * .34, r * .30);
+    ctx.stroke();
+    ctx.restore(); return;
+  }
+
+  const T = TIER[Math.min(MAXT, tier)];
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU);
+  const g = ctx.createRadialGradient(-r * .34, -r * .40, r * .06, 0, 0, r * 1.06);
+  g.addColorStop(0, tone(T.a, 1.22)); g.addColorStop(.52, T.a); g.addColorStop(1, T.b);
+  ctx.fillStyle = g; ctx.fill();
+
+  ctx.lineWidth = r * .17; ctx.strokeStyle = tone(T.b, .42); ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(0, r * .30, r * .70, 0.55, Math.PI - 0.55);
+  ctx.lineWidth = r * .12; ctx.strokeStyle = rgba(T.a, .40); ctx.stroke();
+
+  ctx.beginPath(); ctx.ellipse(-r * .30, -r * .38, r * .30, r * .19, -0.5, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,.90)'; ctx.fill();
+
+  if (tier >= HOT_TIER) {
+    ctx.beginPath(); ctx.arc(0, 0, r * 1.14, 0, TAU);
+    ctx.strokeStyle = rgba(C.gold, .30 + .18 * Math.sin(G.t * 4 + tier)); ctx.lineWidth = 2.4; ctx.stroke();
+  }
+
+  ctx.fillStyle = T.ink;
+  ctx.font = '800 ' + (r * .86) + 'px system-ui,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(tier), 0, r * .04);
+
+  if (flashT > 0) { ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,' + (flashT * .85) + ')'; ctx.fill(); }
+  ctx.restore();
+}
+
+function drawWood() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, '#5A3517'); g.addColorStop(.45, '#3F2411'); g.addColorStop(1, '#1D1006');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  ctx.save(); ctx.globalAlpha = .16;
+  for (let i = 0; i < 26; i++) {
+    const y = (i * 41) % VH;
+    ctx.strokeStyle = i % 3 ? '#201207' : '#7A4C22';
+    ctx.lineWidth = i % 4 ? 1.2 : 2.6;
+    ctx.beginPath();
+    for (let x = 0; x <= VW; x += 30) ctx.lineTo(x, y + Math.sin((x + i * 60) * .012) * 7 + Math.sin(x * .05 + i) * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+  const v = ctx.createRadialGradient(VW / 2, VH * .42, VH * .18, VW / 2, VH * .5, VH * .78);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.72)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, VW, VH);
+}
+
+function drawMeter() {
+  const x = L.meterX, y = L.meterY, w = L.meterW, h = L.meterH;
+  roundRect(x, y, w, h, w / 2); ctx.fillStyle = 'rgba(20,12,6,.72)'; ctx.fill();
+  ctx.strokeStyle = rgba(C.woodLite, .30); ctx.lineWidth = 1.5; ctx.stroke();
+
+  const top = Math.max(1200, Math.max(G.best, G.rival, G.score) * 1.25);
+  const f = clamp(G.shown / top, 0, 1);
+  if (f > 0) {
+    ctx.save(); roundRect(x + 3, y + 3, w - 6, h - 6, (w - 6) / 2); ctx.clip();
+    const fh = (h - 6) * f;
+    const gg = ctx.createLinearGradient(0, y + h - fh, 0, y + h);
+    gg.addColorStop(0, C.gold); gg.addColorStop(1, C.goldDeep);
+    ctx.fillStyle = gg; ctx.fillRect(x + 3, y + h - 3 - fh, w - 6, fh);
+    ctx.restore();
+  }
+  const markY = (v) => y + h - (h - 6) * clamp(v / top, 0, 1) - 3;
+  if (G.rival > 0) {
+    const my = markY(G.rival); const passed = G.score > G.rival;
+    ctx.strokeStyle = passed ? 'rgba(180,160,140,.45)' : '#EDE0C8'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x - 3, my); ctx.lineTo(x + w + 3, my); ctx.stroke();
+    ctx.save(); ctx.translate(x + w + 8, my); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = passed ? 'rgba(180,160,140,.5)' : '#EDE0C8';
+    ctx.font = '700 12px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('ALEX ' + commas(G.rival), 0, 0); ctx.restore();
+  }
+  if (G.best > 0) {
+    const my = markY(G.best);
+    ctx.strokeStyle = C.gold; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(x - 3, my); ctx.lineTo(x + w + 3, my); ctx.stroke(); ctx.setLineDash([]);
+    ctx.save(); ctx.translate(x + w + 8, my); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = C.gold; ctx.font = '700 12px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('BEST', 0, 0); ctx.restore();
+  }
+}
+
+function drawHUD() {
+  ctx.textBaseline = 'middle';
+  const y = L.hudY, h = L.hudH;
+
+  pill(14, y + 8, 190, h - 16);
+  ctx.fillStyle = C.cream; ctx.font = '800 34px system-ui,sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(commas(G.shown), 30, y + h / 2 + 1);
+
+  const el = Math.floor(G.t);
+  pill(VW / 2 - 46, y + 8, 92, h - 16);
+  ctx.fillStyle = rgba(C.cream, .82); ctx.font = '800 22px system-ui,sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText((el / 60 | 0) + ':' + String(el % 60).padStart(2, '0'), VW / 2 + 6, y + h / 2 + 1);
+  ctx.beginPath(); ctx.arc(VW / 2 - 26, y + h / 2, 8, 0, TAU);
+  ctx.strokeStyle = rgba(C.cream, .7); ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(VW / 2 - 26, y + h / 2); ctx.lineTo(VW / 2 - 26, y + h / 2 - 5);
+  ctx.moveTo(VW / 2 - 26, y + h / 2); ctx.lineTo(VW / 2 - 22, y + h / 2 + 2); ctx.stroke();
+
+  const mw = 120;
+  pill(VW - 14 - mw, y + 8, mw, h - 16);
+  const mt = clamp((G.mult - 1) / (MULT_MAX - 1), 0, 1);
+  const mc = mix('#EDE0C8', C.gold, mt);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = mc; ctx.font = '800 30px system-ui,sans-serif';
+  const pulse = 1 + 0.08 * Math.max(0, 1 - (G.t * 4 % 1)) * (G.streak > 0 ? 1 : 0);
+  ctx.save(); ctx.translate(VW - 30, y + h / 2 + 1); ctx.scale(pulse, pulse);
+  ctx.fillText('×' + G.mult.toFixed(1), 0, 0); ctx.restore();
+
+  /* streak pips — the visual twin of the audio ladder (§7.7 silent play) */
+  const pips = Math.min(5, G.tierIdx + (G.streak > 0 ? 1 : 0));
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath(); ctx.arc(VW - 14 - mw + 16 + i * 11, y + h - 20, 3.4, 0, TAU);
+    ctx.fillStyle = i < pips ? C.gold : 'rgba(255,255,255,.16)'; ctx.fill();
+  }
+}
+
+function drawQueue() {
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = rgba(C.cream, .48); ctx.font = '700 12px system-ui,sans-serif';
+  ctx.fillText('NEXT', VW - 108, L.queueY);
+  for (let i = 0; i < 2; i++) ingot(VW - 78 + i * 46, L.queueY, 17 - i * 2, G.queue[i], false, 0, 0);
+}
+
+function drawBench() {
+  /* the bench itself */
+  const bx = L.gx - 12, by = L.gy - 8, bw = L.gw + 24, bh = L.gh + 26;
+  roundRect(bx, by, bw, bh, 14); ctx.fillStyle = 'rgba(14,8,4,.55)'; ctx.fill();
+  ctx.strokeStyle = rgba(C.woodLite, .22); ctx.lineWidth = 2; ctx.stroke();
+
+  for (let c = 0; c <= COLS; c++) {
+    ctx.beginPath(); ctx.moveTo(L.gx + c * L.cell, L.gy); ctx.lineTo(L.gx + c * L.cell, L.gy + L.gh);
+    ctx.strokeStyle = 'rgba(255,220,170,.055)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  /* the rim — crossing it ends the run, so it is drawn as a hazard and it
+     brightens as the tallest column approaches it */
+  let maxH = 0; for (let c = 0; c < COLS; c++) maxH = Math.max(maxH, colHeight(c));
+  const near = clamp((maxH - (ROWS - 4)) / 3, 0, 1);
+  ctx.save();
+  ctx.strokeStyle = mix('#8A6A44', C.danger, near);
+  ctx.lineWidth = 2 + near * 2.4; ctx.setLineDash([9, 6]);
+  ctx.globalAlpha = .55 + near * .45 + (near > .5 ? Math.sin(G.t * 8) * .18 : 0);
+  ctx.beginPath(); ctx.moveTo(L.gx - 10, L.rimY); ctx.lineTo(L.gx + L.gw + 10, L.rimY); ctx.stroke();
+  ctx.restore();
+
+  /* Primed clusters — everything already at or past the fuse threshold, so
+     the greed decision is visible rather than counted in the player's head.
+     The halo thickens with group size: the bigger the cluster, the louder it
+     asks to be lit, and the more bench it is costing to hold. */
+  for (const g of findGroups()) {
+    const over = g.length - MERGE_MIN;
+    const pulse = .30 + .22 * Math.sin(G.t * 5 - g.length);
+    ctx.save();
+    ctx.strokeStyle = rgba(over > 0 ? C.gold : C.cream, pulse + Math.min(.34, over * .12));
+    ctx.lineWidth = 2 + Math.min(4, over * 1.3);
+    for (const j of g) {
+      ctx.beginPath();
+      ctx.arc(cellX(j % COLS), cellY((j / COLS) | 0) + (grid[j].py || 0), L.cell * .49, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const q = grid[idx(c, r)]; if (!q) continue;
+    ingot(cellX(c), cellY(r) + q.py, L.cell * .43, q.t, q.slag, q.pop, q.flash);
+  }
+}
+
+/* The incoming row, always visible under the bench (§6's lookahead rule for a
+   board archetype) and rising as the shove nears — so the death is readable
+   several seconds before it happens. */
+function drawShovePreview() {
+  if (!G.shoveRow || G.state === 'title') return;
+  const armed = G.tick >= ONRAMP_TICKS;
+  const p = armed ? 1 - clamp(G.shoveIn / TELEGRAPH, 0, 1) : 0;
+  const y = L.benchBase + L.cell * 0.44 - p * L.cell * 0.34;
+  ctx.save();
+  ctx.globalAlpha = 0.30 + 0.60 * p;
+  for (let c = 0; c < COLS; c++) {
+    const s = G.shoveRow[c];
+    ingot(cellX(c), y, L.cell * 0.30 + p * L.cell * 0.10, s.t, s.slag, 0, 0);
+  }
+  ctx.restore();
+
+  /* the pressure read: how close the tallest column is to the rim */
+  let maxH = 0; for (let c = 0; c < COLS; c++) maxH = Math.max(maxH, colHeight(c));
+  const doom = maxH >= ROWS - 1;
+  if (armed) {
+    const w = L.gw * clamp(1 - G.shoveIn / SHOVE_BASE, 0, 1);
+    ctx.fillStyle = doom ? rgba(C.danger, .85) : rgba(C.woodLite, .45);
+    ctx.fillRect(L.gx, L.benchBase + 12, w, 3);
+  }
+}
+
+function drawHopper() {
+  if (G.state !== 'play') return;
+  const x = cellX(G.col);
+  /* aim UI, house style: dotted white line to a circle reticle */
+  const r = topEmptyRow(G.col);
+  const endY = r >= 0 ? cellY(r) : L.gy;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.42)'; ctx.lineWidth = 3; ctx.setLineDash([3, 11]); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, L.hopY + 26); ctx.lineTo(x, endY - L.cell * .40); ctx.stroke();
+  ctx.setLineDash([]);
+  if (r >= 0) {
+    ctx.beginPath(); ctx.arc(x, endY, L.cell * .40, 0, TAU);
+    ctx.strokeStyle = 'rgba(255,255,255,.34)'; ctx.lineWidth = 2.4; ctx.stroke();
+  }
+  ctx.restore();
+  const bob = Math.sin(G.t * 3.4) * 2.2;
+  ingot(x, L.hopY + bob, 26, G.hop, false, 0, 0);
+}
+
+function drawParticles() {
+  for (const p of parts) {
+    const a = 1 - p.t / p.life;
+    ctx.globalAlpha = a * a;
+    ctx.fillStyle = p.c;
+    const s = p.s * (0.4 + a * 0.6);
+    ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+  }
+  ctx.globalAlpha = 1;
+  for (const f of flashes) {
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU);
+    ctx.strokeStyle = 'rgba(255,240,200,' + clamp(f.a, 0, 1) + ')';
+    ctx.lineWidth = f.big ? 5 : 3; ctx.stroke();
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const f of floats) {
+    ctx.globalAlpha = clamp(f.a, 0, 1);
+    ctx.fillStyle = f.big ? C.gold : C.cream;
+    ctx.font = '800 ' + (f.big ? 30 : 21) + 'px system-ui,sans-serif';
+    ctx.fillText('+' + commas(f.v), f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTitle() {
+  ctx.fillStyle = 'rgba(10,6,3,.66)'; ctx.fillRect(0, 0, VW, VH);
+  plaque(VW / 2 - 190, VH * .30, 380, 132, 18);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#3A1E08'; ctx.font = '900 62px system-ui,sans-serif';
+  ctx.fillText('FORGE', VW / 2, VH * .30 + 52);
+  ctx.fillStyle = '#5A340F'; ctx.font = '700 18px system-ui,sans-serif';
+  ctx.fillText('fuse the bench · beat the rim', VW / 2, VH * .30 + 98);
+
+  const y = VH * .58;
+  ingot(VW / 2 - 74, y, 26, 2, false, 0, 0);
+  ingot(VW / 2, y, 26, 2, false, 0, 0);
+  ctx.fillStyle = C.cream; ctx.font = '800 30px system-ui,sans-serif';
+  ctx.fillText('→', VW / 2 + 44, y);
+  ingot(VW / 2 + 90, y, 28, 3, false, 0, 0);
+
+  const a = .55 + .45 * Math.sin(G.t * 3);
+  ctx.fillStyle = rgba(C.cream, a); ctx.font = '800 24px system-ui,sans-serif';
+  ctx.fillText('DRAG  TO  AIM  ·  RELEASE  TO  DROP', VW / 2, L.thumbY + 54);
+  ctx.fillStyle = rgba(C.cream, .5); ctx.font = '700 16px system-ui,sans-serif';
+  ctx.fillText('TAP  TO  START', VW / 2, L.thumbY + 92);
+}
+
+/* §12 — the idle finger hint, removed permanently on first input */
+let everDragged = false;
+function drawHint() {
+  if (everDragged || G.state !== 'play' || G.t < 1.0 || G.t > 8) return;
+  const p = (G.t * .6) % 1;
+  const x = lerp(cellX(1), cellX(3), smooth(p < .5 ? p * 2 : (1 - p) * 2));
+  ctx.save(); ctx.globalAlpha = .5;
+  ctx.beginPath(); ctx.arc(x, L.thumbY + 40, 22, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,.30)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.restore();
+}
+
+/* §10.5 — the numerically smallest TRUE gap. No manufactured near-misses. */
+function nearMiss() {
+  const sc = G.score;
+  const cands = [];
+  if (G.best > sc) cands.push({ v: G.best - sc, s: 'to your best on this seed' });
+  if (G.rival > sc) cands.push({ v: G.rival - sc, s: 'to pass ALEX' });
+  const round = Math.ceil((sc + 1) / 500) * 500;
+  cands.push({ v: round - sc, s: 'to ' + commas(round) });
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.v - b.v);
+  return cands[0];
+}
+
+function drawOver() {
+  const since = G.t - G.dieAt;
+  const k = clamp((since - 0.5) / 0.28, 0, 1);
+  if (k <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = k * .74; ctx.fillStyle = '#0A0603'; ctx.fillRect(0, 0, VW, VH);
+  ctx.globalAlpha = 1;
+  const py = lerp(VH, L.thumbY - 250, eOut(k));
+  plaque(VW / 2 - 200, py, 400, 210, 18);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#5A340F'; ctx.font = '700 16px system-ui,sans-serif';
+  ctx.fillText('BENCH OVER THE RIM', VW / 2, py + 34);
+  ctx.fillStyle = '#3A1E08'; ctx.font = '900 66px system-ui,sans-serif';
+  ctx.fillText(commas(G.shown), VW / 2, py + 88);
+
+  const nm = nearMiss();
+  if (nm) {
+    ctx.fillStyle = '#7A4410'; ctx.font = '800 26px system-ui,sans-serif';
+    ctx.fillText('+' + commas(nm.v) + ' ' + nm.s, VW / 2, py + 142);
+  }
+  ctx.fillStyle = 'rgba(90,52,15,.75)'; ctx.font = '700 15px system-ui,sans-serif';
+  ctx.fillText(Math.floor(G.t) + 's   ·   ' + G.merges + ' fuses   ·   best chain ×' + G.chainBest + '   ·   tier ' + G.deepest, VW / 2, py + 180);
+
+  if (since > 0.75) {
+    const bw = 250, bh = 68, bx = VW / 2 - bw / 2, by = L.thumbY + 44;
+    const pop = clamp((since - .75) / .28, 0, 1);
+    ctx.save(); ctx.translate(VW / 2, by + bh / 2); ctx.scale(lerp(.7, 1, eOut(pop)), lerp(.7, 1, eOut(pop))); ctx.translate(-VW / 2, -(by + bh / 2));
+    roundRect(bx, by, bw, bh, 34); ctx.fillStyle = C.goldDeep; ctx.fill();
+    roundRect(bx + 4, by + 4, bw - 8, bh - 8, 30);
+    const g = ctx.createLinearGradient(0, by, 0, by + bh);
+    g.addColorStop(0, '#FFD874'); g.addColorStop(1, C.goldDeep);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.fillStyle = '#4A2A02'; ctx.font = '900 28px system-ui,sans-serif';
+    ctx.fillText('AGAIN', VW / 2, by + bh / 2 + 1);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.save();
+  ctx.scale(SCALE * DPR, SCALE * DPR);
+  ctx.clearRect(0, 0, VW, VH);
+  drawWood();
+
+  const [sx, sy, sa] = shakeOffset();
+  ctx.save();
+  ctx.translate(VW / 2 + sx, VH / 2 + sy); ctx.rotate(sa); ctx.translate(-VW / 2, -VH / 2);
+
+  /* desaturate everything but the killing cell on death (§7.9) */
+  const dying = G.state === 'dying' || G.state === 'over';
+  if (dying) ctx.globalAlpha = 0.55;
+  drawMeter();
+  drawBench();
+  if (dying) ctx.globalAlpha = 1;
+  if (dying && G.dieCell >= 0) {
+    const c = G.dieCell % COLS, r = (G.dieCell / COLS) | 0;
+    const q = grid[G.dieCell];
+    if (q) ingot(cellX(c), cellY(r), L.cell * .43, q.t, q.slag, 0, Math.max(0, 1 - (G.t - G.dieAt) * 3));
+    ctx.beginPath(); ctx.arc(cellX(c), cellY(r), L.cell * .62, 0, TAU);
+    ctx.strokeStyle = rgba(C.danger, .85); ctx.lineWidth = 4; ctx.stroke();
+  }
+  drawShovePreview();
+  drawHopper();
+  drawParticles();
+  ctx.restore();
+
+  drawHUD();
+  drawQueue();
+  drawHint();
+  if (G.state === 'title') drawTitle();
+  if (G.state === 'dying' || G.state === 'over') drawOver();
+  ctx.restore();
+}
+
+/* ================================================================== INPUT */
+let pointerDown = false;
+function toVirtual(e) {
+  const r = cv.getBoundingClientRect();
+  return [(e.clientX - r.left) / SCALE, (e.clientY - r.top) / SCALE];
+}
+function colFromX(x) { return clamp(Math.floor((x - L.gx) / L.cell), 0, COLS - 1); }
+
+function onDown(e) {
+  e.preventDefault();
+  S.boot();
+  const [x, y] = toVirtual(e);
+  if (G.state === 'title') { startRun(G.seed); return; }
+  if (G.state === 'over') {
+    if (G.t - G.dieAt < 0.75) return;                 // 250 ms lockout past the gap line
+    startRun(G.seed); return;
+  }
+  if (G.state === 'dying') return;
+  pointerDown = true; everDragged = true;
+  G.col = colFromX(x);
+}
+function onMove(e) {
+  if (!pointerDown || G.state !== 'play') return;
+  e.preventDefault();
+  const [x] = toVirtual(e);
+  G.col = colFromX(x);
+}
+function onUp(e) {
+  if (!pointerDown) return;
+  e.preventDefault();
+  pointerDown = false;
+  if (G.state === 'play') requestDrop(G.col);
+}
+cv.addEventListener('pointerdown', onDown, { passive: false });
+window.addEventListener('pointermove', onMove, { passive: false });
+window.addEventListener('pointerup', onUp, { passive: false });
+window.addEventListener('pointercancel', onUp, { passive: false });
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+
+/* =================================================================== LOOP */
+let last = 0;
+function frame(ts) {
+  const now = ts / 1000;
+  let dt = last ? Math.min(0.05, now - last) : 0.016;
+  last = now;
+  update(dt * G.timeScale);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+layout();
+resetRun();
+G.state = 'title';
+requestAnimationFrame(frame);
+
+/* tuning handle — only when asked for, so the shipped file stays clean */
+if (location.search.indexOf('debug') >= 0) window.__FORGE = {
+  G, L, C, S,
+  get grid() { return grid; },
+  COLS, ROWS, MAXT, HOT_TIER, CEILING_S,
+  MULT_MAX, MULT_CASH, CASH_BASE, MERGE_MIN, sizeBonus, chainMul, multGain,
+  SHOVE_BASE, SLAG_LIVE, SLAG_MAX, STREAK_TIERS,
+  startRun, resetRun, tick, update, draw, die,
+  doDrop, requestDrop, doShove, armShove, resolveBoard, findGroups, settle,
+  colHeight, topEmptyRow, idx, dEffAt,
+  quiet() { S.on = false; },
+  sim(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) tick(); },
+};
+</script>
+</body>
+</html>
