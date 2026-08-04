@@ -76,7 +76,7 @@ canvas#c{position:absolute;inset:0;width:100%;height:100%;display:block;}
 #rallyTag.on{opacity:1;}
 #rallyTag b{color:#FFF6E4;font-size:.78rem;}
 
-#multBox{position:absolute;top:calc(4.5rem + env(safe-area-inset-top));right:.7rem;text-align:right;
+#multBox{transition:transform .09s;position:absolute;top:calc(4.5rem + env(safe-area-inset-top));right:.7rem;text-align:right;
   padding:.26rem .6rem .34rem;min-width:4.3rem;}
 #mult{font-size:1.34rem;color:#FFC943;}
 #rallyRow{display:flex;align-items:center;justify-content:flex-end;gap:.2rem;margin-top:.14rem;}
@@ -407,7 +407,7 @@ const K = {
   AIM_REF_Y     : 0.31,      // fraction of stage height for a full vertical sweep
   LATE_MUL      : 0.65,      // quality if the ball arrives while you are still dragging
 
-  MULT_MAX      : 3.0,
+  MULT_MAX      : 5.0,
   MULT_MISS     : -0.6,
   MULT_NET      : -0.4,
   OD_MUL        : 1.6,
@@ -425,12 +425,16 @@ const K = {
   AIM_Z_SPAN    : 0.96,      // ny=1 lands at -1.28, just inside the baseline
 
   POINT_BASE    : 260,
-  MULT_WIN      : 0.22,
-  MULT_LOSE     : -0.55,
+  /* The multiplier IS the rally. It ticks up on every ball you put back, jumps
+     on winning the point, and resets to 1 the moment you lose one — so a long
+     rally you actually finish is worth far more than a cheap point. */
+  MULT_RALLY    : 0.10,      // per shot you return during a rally
+  MULT_WIN      : 0.60,      // extra for taking the point
   POINT_GAP     : 1.15,
   /* Your reach is bounded exactly like the opponent's. Without it the CPU had
      no way to WIN a point — only to wait for you to fault — so any bot that
      never faulted beat it, mashing included (4-0). Now it can wrong-foot you. */
+  CPU_LEVEL     : 0.60,      // 1 = the original opponent, 0 = gentle
   PLAYER_SPEED  : 1.30,
   PLAYER_REACH  : 0.32,
   MAX_APEX      : 1.10,      // no shot from either side arcs above this
@@ -1061,12 +1065,12 @@ const CPU = {
   x:0, z:K.CPU_HOME_Z,          // where it is
   tx:0, tz:K.CPU_HOME_Z,        // where it is heading
   vx:0, lean:0, swing:0, swingDir:1,
-  speed:2.0, reach:0.30, err:0.13, aggr:0.35,
+  speed:2.0, reach:0.30, err:0.13, aggr:0.35, attack:1.0, mood:0,
   plan:null,                    // {ok,t,hx,hy,hz} for the ball in flight
   hitAt:-1,
 };
 const cpuGrp = new THREE.Group(); world.add(cpuGrp);
-let cpuArm, cpuPad, cpuEyeL, cpuEyeR, cpuBody, cpuShadow;
+let cpuArm, cpuPad, cpuEyeL, cpuEyeR, cpuBody, cpuShadow, cpuLamp;
 {
   const mShell=toon({color:0xF2EDE0, shadow:0x9AA0C8, rimStr:0.24, spec:0.16});
   const mDark =toon({color:0x2E3550, shadow:0x6A70A6, rimStr:0.18, spec:0.10});
@@ -1095,7 +1099,7 @@ let cpuArm, cpuPad, cpuEyeL, cpuEyeR, cpuBody, cpuShadow;
   };
   cpuEyeL=eye(-0.165); cpuEyeR=eye(0.165);
   cyl(mDark,0.016,0.26, 0, Y(1.58), 0, cpuGrp, true);
-  sph(new THREE.MeshBasicMaterial({color:0xFF5D8F}),0.048, 0,Y(1.74),0, cpuGrp, true);
+  cpuLamp=sph(new THREE.MeshBasicMaterial({color:0xFF5D8F}),0.048, 0,Y(1.74),0, cpuGrp, true);
   // shoulder pads read the lean
   for(const sx of [-1,1]){
     const f=box(mAcc,0.10,0.26,0.32, sx*0.46, Y(1.02), 0, cpuGrp);
@@ -1151,13 +1155,19 @@ const markPin=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,0.34,8),
 markPin.position.y=0.17; markPin.renderOrder=24; mark.add(markPin);
 
 /* ---- CPU difficulty over the run --------------------------------------- */
+/* One dial for the whole opponent: CPU_LEVEL 1 is the original, tougher robot,
+   0 is a gentle one. Every trait moves together so the profile stays coherent
+   — a slow robot that never errs is not "easier", it is just a wall. */
 function cpuTune(){
   const t=clamp(RUN.elapsed/K.RUN_TIME,0,1);
-  const od=RUN.overdrive?1:0;
-  CPU.speed = lerp(1.84, 2.92, t) + od*0.30;
-  CPU.reach = lerp(0.30, 0.26, t);
-  CPU.err   = lerp(0.245, 0.125, t) * (od?0.88:1);
-  CPU.aggr  = lerp(0.28, 0.78, t) + od*0.18;
+  const L=clamp(K.CPU_LEVEL,0,1);
+  CPU.speed = lerp(lerp(1.42,2.10,t), lerp(1.84,2.92,t), L);
+  CPU.reach = lerp(lerp(0.25,0.21,t), lerp(0.30,0.26,t), L);
+  CPU.err   = lerp(lerp(0.36,0.24,t), lerp(0.245,0.125,t), L);
+  /* Overdrive is a SCORING surge, not a difficulty spike: buffing the robot
+     in the last 15 s punished exactly the player who was already behind. */
+  CPU.aggr  = lerp(lerp(0.14,0.40,t), lerp(0.28,0.78,t), L);
+  CPU.attack= lerp(0.72, 1.20, L);          // how hard it punishes a weak ball
 }
 
 /* Where the opponent will meet a ball. It takes the ball CPU_LAG after the
@@ -1610,7 +1620,7 @@ let serveTimer=1.1;
 let shake=0, hitstop=0, fovPunch=0, flashT=0;
 let timeScale=1, slowT=0;
 let arrival=null;
-let smackAnim=0, smackDir={x:0,y:1}, committed=0;
+let smackAnim=0, smackDir={x:0,y:1}, committed=0, multPop=0;
 
 /* swipe vector -> a point on the target board. Zero swipe aims low-centre, so
    the natural "flick up" verb sweeps the ball up through the rows. */
@@ -1719,6 +1729,7 @@ function doSmack(cx,cy){
   B.bounces=0; B.phase='out'; B.outT=0;
   B.tier=L.tier; B.late=L.late; B.locked=null;
   RUN.rally++; RUN.shots++; RUN.longest=Math.max(RUN.longest,RUN.rally);
+  setMult(RUN.mult+K.MULT_RALLY); multPop=1;
   if(L.tier==='smash') RUN.smashes++;
 
   // does it beat them? decided now, played out over the next half second
@@ -1769,12 +1780,11 @@ function pointTo(who, reason){
   RUN.log.push(who[0]+':'+reason);   // telemetry: why each point ended
   if(who==='player'){
     RUN.you++;
-    const bonus=1+clamp((shots-1)*0.22,0,1.1);
+    setMult(RUN.mult+K.MULT_WIN);                          // taking it pays
     const pace=B.hitter==='player'?K.SMACK[B.tier].mul:1;   // won it with pace?
-    const val=Math.round(K.POINT_BASE*bonus*pace*RUN.mult*(RUN.overdrive?K.OD_MUL:1));
+    const val=Math.round(K.POINT_BASE*pace*RUN.mult*(RUN.overdrive?K.OD_MUL:1));
     addScore(val);
     RUN.bestPoint=Math.max(RUN.bestPoint,val);
-    setMult(RUN.mult+K.MULT_WIN);
     RUN.streak=Math.min(8,RUN.streak+1);
     popAt(B.p.clone().setY(Math.max(0.25,B.p.y)),'+'+val.toLocaleString(),'#FFD86B',shots>=4);
     callOut(reason, shots>=4?(shots+' SHOT RALLY'):'', '#7CF2A8');
@@ -1785,12 +1795,13 @@ function pointTo(who, reason){
     AU.intensity=Math.min(1,AU.intensity+0.14);
   } else {
     RUN.cpu++;
-    setMult(RUN.mult+K.MULT_LOSE);
+    RUN.mult=1;                                             // lose it all
     RUN.streak=0;
     callOut(reason,'','#FF8A8A');
     sfxBonk();
     shake=Math.max(shake,0.25);
   }
+  CPU.mood = who==='player' ? -1 : 1;      // it slumps or perks up
   updateScoreboard();
   serveTimer=K.POINT_GAP;
 }
@@ -1851,7 +1862,7 @@ function cpuReturn(plan){
      that a central ball is the easiest one to attack — without weighting it
      heavily, "always deep down the middle" won 60% of matches on a fixed input. */
   const weak=clamp(central*0.55+ease*0.25+shallow*0.20,0,1);
-  const aggr=clamp(Math.max(CPU.aggr, Math.pow(weak,1.5)*1.20),0,1);
+  const aggr=clamp(Math.max(CPU.aggr, Math.pow(weak,1.5)*CPU.attack),0,1);
   // wrong-foot: mostly play away from where the player's paddle already is
   let side = pad.x>0?-1:1;
   if(rnd()<0.28) side=-side;                       // but not every single time
@@ -2059,9 +2070,11 @@ function trailTick(dt){
       trail.pos[trail.idx].copy(B.p);
     }
   }
-  const hot=B.phase==='out'&&(B.kind==='power'||B.kind==='perfect');
-  im.material.color.setHex(B.phase==='out'?(hot?0xFFD26B:0xCFE4FF):0xFFE7B0);
-  im.material.opacity=B.live?(hot?0.62:0.36):0;
+  // colour by who hit it and how hard, so pace reads at a glance
+  const mine=B.hitter==='player';
+  const hot=mine&&B.tier==='smash';
+  im.material.color.setHex(mine?(hot?0xFFC943:(B.tier==='solid'?0x9FF3FF:0xCFE4FF)):0xFF9AA8);
+  im.material.opacity=B.live?(hot?0.72:0.42):0;
   for(let i=0;i<TRAIL_N;i++){
     const age=((trail.idx-i+TRAIL_N)%TRAIL_N)/TRAIL_N;
     const s=B.live?K.BALL_R*1.75*(1-age)*(1-age):0;
@@ -2209,6 +2222,12 @@ function cpuTick(dt){
     cpuArm.rotation.x=dmp(cpuArm.rotation.x,0,6,dt);
     cpuPad.rotation.z=dmp(cpuPad.rotation.z,0,6,dt);
   }
+  // mood: slumps when it drops a point, perks up when it takes one
+  CPU.mood=dmp(CPU.mood,0,1.6,dt);
+  cpuBody.position.y=FLOOR_Y+1.06+CPU.mood*0.045;
+  cpuBody.scale.set(0.74+CPU.mood*-0.03,0.80+CPU.mood*0.05,0.62);
+  cpuLamp.material.color.setHex(CPU.mood<-0.15?0xFF4D6A:(CPU.mood>0.15?0x7CF2A8:0xFF5D8F));
+  cpuLamp.scale.setScalar(0.048*2*(1+Math.abs(CPU.mood)*0.5));
   // eyes follow the ball
   const look=B.live?B.p:new THREE.Vector3(0,0.4,0.6);
   for(const e of [cpuEyeL,cpuEyeR]){
@@ -2260,8 +2279,10 @@ function hudTick(dt){
   elTime.className='val'+(RUN.finalRally&&RUN.ending?' crit final':(L<=10?' crit':(L<=K.OVERDRIVE_AT?' warn':'')));
   elTbar.style.width=(L/K.RUN_TIME*100)+'%';
   elTbar.style.background=L<=10?'linear-gradient(90deg,#FF5D5D,#FF9A5C)':(L<=K.OVERDRIVE_AT?'linear-gradient(90deg,#FF9A5C,#FFC943)':'linear-gradient(90deg,#45E0E8,#7CF2A8)');
+  multPop=Math.max(0,multPop-dt*4.5);
+  elMult.parentNode.style.transform='scale('+(1+multPop*0.10).toFixed(3)+')';
   elMult.textContent='×'+RUN.mult.toFixed(RUN.mult>=10?0:1);
-  elMult.style.color=RUN.mult>=4?'#FF8FB8':(RUN.mult>=2.5?'#FFC943':'#FFF6E4');
+  elMult.style.color=RUN.mult>=3.5?'#FF8FB8':(RUN.mult>=2?'#FFC943':'#FFF6E4');
   const st=Math.min(8,RUN.streak);
   for(let i=0;i<8;i++) rdots[i].className='rdot'+(i<st?' on':'');
   if(flashT>0){ flashT-=dt; elFlash.style.opacity=clamp(flashT*3.0,0,0.34); }
@@ -2578,6 +2599,9 @@ function frame(dtR){
     arcMesh.visible=false; mark.visible=false;
   }
 
+  // the crowd leans in as a rally goes long
+  {const e=clamp(RUN.rally/10,0,1)*(RUN.state==='play'?1:0.25);
+   crowd.material.uniforms.uBob.value=dmp(crowd.material.uniforms.uBob.value,0.055+e*0.075,3,dtR);}
   paddleTick(dtR);
   cpuTick(dtR);
   trailTick(dt);
