@@ -1,0 +1,1925 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#120A05">
+<title>HAUL — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0A0603;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,#241408 0%,#0A0603 75%)}
+  canvas{display:block;touch-action:none;image-rendering:auto;
+    box-shadow:0 0 90px rgba(0,0,0,.9), 0 0 0 1px rgba(255,190,110,.10)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+/* =========================================================================
+   HAUL  —  Evermore Arcade prototype
+   Drag a magnet across a workbench. Scrap sticks to it. Nothing scores
+   until you carry it to the hopper.
+   The load is the multiplier AND the hitbox: every piece you pick up makes
+   the payout bigger and makes you too fat to fit between the arcs. Greed is
+   the entire game, and it is spatial — you can SEE that you won't fit.
+   No lives. Sixty seconds. Everything procedural: art, audio, physics.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+const eBack = t => { const c = 1.70158 + 1; return 1 + c * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2); };
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+
+const _hxCache = {};
+function HX(h) {
+  const c = _hxCache[h]; if (c) return c;
+  let v;
+  if (h.charCodeAt(0) === 35) {
+    v = [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+    _hxCache[h] = v;
+  } else {
+    const m = h.match(/\d+(\.\d+)?/g);
+    v = m && m.length >= 3 ? [m[0] | 0, m[1] | 0, m[2] | 0] : [255, 255, 255];
+  }
+  return v;
+}
+function mix(a, b, t) {
+  const A = HX(a), B = HX(b); t = clamp(t, 0, 1);
+  return 'rgb(' + (A[0]+(B[0]-A[0])*t | 0) + ',' + (A[1]+(B[1]-A[1])*t | 0) + ',' + (A[2]+(B[2]-A[2])*t | 0) + ')';
+}
+function rgba(h, a) { const A = HX(h); return 'rgba(' + A[0] + ',' + A[1] + ',' + A[2] + ',' + a + ')'; }
+function tone(h, f) {
+  const A = HX(h);
+  return 'rgb(' + clamp(A[0]*f|0,0,255) + ',' + clamp(A[1]*f|0,0,255) + ',' + clamp(A[2]*f|0,0,255) + ')';
+}
+function commas(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+/* distance from point to segment — the arc collision test, used every frame */
+function segDist(px, py, x0, y0, x1, y1) {
+  const dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
+  if (l2 < 1e-6) return Math.hypot(px - x0, py - y0);
+  const t = clamp(((px - x0) * dx + (py - y0) * dy) / l2, 0, 1);
+  return Math.hypot(px - (x0 + dx * t), py - (y0 + dy * t));
+}
+
+/* ----------------------------------------------------------------- palette */
+const C = {
+  ink:      '#160C05',
+  woodDeep: '#1C1008',
+  woodDark: '#3E2210',
+  woodMid:  '#6A4022',
+  woodHi:   '#C08A4E',
+  tan:      '#F0C382',
+  tanDeep:  '#C08148',
+  gold:     '#FFC542',
+  goldLite: '#FFE9A8',
+  goldDeep: '#B76E0C',
+  ember:    '#FF7A29',
+  cream:    '#FFF3DC',
+  red:      '#E8412F',
+  redDeep:  '#7E1509',
+  hud:      '#221C18',
+  steel:    '#7E8A97',
+  steelHi:  '#D6DFE8',
+  volt:     '#9CE6FF',
+  voltDeep: '#2C7FD0',
+};
+
+/* Three metals. Everything on the bench is one of them, so value is legible
+   at a glance without a single number: grey is cheap, brass is worth the
+   detour, gold is worth the risk.                                          */
+const MET = [
+  { hi: '#EAF1F8', mid: '#94A2B1', lo: '#414B57', spec: '#FFFFFF', glow: '#C7D6E6' }, // steel
+  { hi: '#FBE1AC', mid: '#CE9450', lo: '#5E3612', spec: '#FFF0CE', glow: '#FFC98A' }, // brass
+  { hi: '#FFF6C6', mid: '#FFC93F', lo: '#96570A', spec: '#FFFFFF', glow: '#FFD86A' }, // gold
+];
+
+/* val is the whole economy. Average draw is ~13, so a 30-piece load is worth
+   about 390 before any multiplier — and the multiplier is what the game is
+   actually about.                                                          */
+const KIND = [
+  { n: 'nail',    val: 5,   met: 0, w: 26, r: 13 },
+  { n: 'nut',     val: 8,   met: 0, w: 22, r: 12 },
+  { n: 'bolt',    val: 11,  met: 0, w: 18, r: 14 },
+  { n: 'key',     val: 15,  met: 1, w: 15, r: 15 },
+  { n: 'gear',    val: 21,  met: 0, w: 11, r: 14 },
+  { n: 'spanner', val: 30,  met: 1, w: 7,  r: 17 },
+  { n: 'watch',   val: 120, met: 2, w: 1,  r: 14 },
+];
+const WSUM = KIND.reduce((a, k) => a + k.w, 0);
+function pickKind(rnd) {
+  let r = (rnd || Math.random)() * WSUM;
+  for (let i = 0; i < KIND.length; i++) { r -= KIND[i].w; if (r <= 0) return i; }
+  return 0;
+}
+
+/* ================================================================== AUDIO */
+class Audio_ {
+  constructor() { this.ctx = null; this.on = true; this.master = null; this.noise = null; this.bed = null; this.lastPick = 0; }
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) { this.on = false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = 0.55;
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -15; comp.knee.value = 22; comp.ratio.value = 8; comp.attack.value = .003; comp.release.value = .16;
+    this.master.connect(comp); comp.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 1.4, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+  }
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+
+  blip(freq, dur, type, vol, freq2, delay) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const o = this.ctx.createOscillator(); o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    if (freq2) o.frequency.exponentialRampToValueAtTime(Math.max(20, freq2), t + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + Math.min(.012, dur * .25));
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + .03);
+  }
+  noiseHit(dur, vol, type, f0, f1, q, delay) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise;
+    const f = this.ctx.createBiquadFilter(); f.type = type || 'bandpass';
+    f.frequency.setValueAtTime(f0, t);
+    if (f1) f.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
+    f.Q.value = q || 1;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + .005);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t + dur + .05);
+  }
+
+  /* The load is audible before it is legible: every pickup is a semitone
+     higher than the last, so a fat magnet literally sings higher. This is
+     the greed meter, and it lives in your ears.                            */
+  pick(n, met) {
+    if (!this.on || !this.ctx) return;
+    if (this.t - this.lastPick < .028) return;         // 40 pickups/sec would be a swarm of nodes
+    this.lastPick = this.t;
+    const p = Math.pow(1.0595, Math.min(n, 40) * .85);
+    this.noiseHit(.035, .085, 'bandpass', (2100 + met * 900) * Math.min(p, 2.6), 900, 4.5);
+    this.blip(360 * p, .045, 'square', .028, 620 * p);
+  }
+  /* the bed: a continuous clatter whose loudness and brightness ARE the load.
+     Nothing else in the mix moves like this, so it reads as weight.        */
+  startBed() {
+    if (!this.ctx || this.bed) return;
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise; s.loop = true;
+    const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = .7;
+    const g = this.ctx.createGain(); g.gain.value = 0;
+    s.connect(f); f.connect(g); g.connect(this.master); s.start();
+    this.bed = { s, f, g };
+  }
+  setBed(load, motion) {
+    if (!this.bed || !this.ctx) return;
+    const t = this.t;
+    const v = this.on ? clamp(load * .0026, 0, .15) * (.28 + clamp(motion, 0, 1) * .72) : 0;
+    this.bed.g.gain.setTargetAtTime(v, t, .07);
+    this.bed.f.frequency.setTargetAtTime(1100 + load * 42, t, .12);
+  }
+  stopBed() { if (this.bed) { try { this.bed.s.stop(); } catch (e) {} this.bed = null; } }
+
+  arcCharge() { this.blip(120, .42, 'sawtooth', .035, 300); this.noiseHit(.4, .035, 'bandpass', 700, 2600, 2.2); }
+  arcLive()   { this.noiseHit(.13, .06, 'highpass', 5200, 3000, .7); }
+  zap() {
+    this.noiseHit(.30, .34, 'bandpass', 3400, 220, .9);
+    this.blip(180, .34, 'sawtooth', .17, 42);
+    this.blip(90, .5, 'sine', .18, 30);
+    [660, 520, 400, 300].forEach((f, i) => this.blip(f, .22, 'square', .05, f * .5, i * .045));
+  }
+  /* the payout: a rapid ascending run, one note per piece, capped so a
+     sixty-piece drop doesn't turn into a siren                             */
+  bankTick(i, n) {
+    const step = Math.max(1, Math.ceil(n / 16));
+    if (i % step) return;
+    const k = i / step;
+    this.blip(560 * Math.pow(1.0595, Math.min(k, 22) * 1.2), .13, 'triangle', .07, null, 0);
+  }
+  bankLand(big) {
+    this.noiseHit(.22, .17, 'lowpass', 380, 110, 1.2);
+    this.blip(196, .3, 'sine', .12, 98);
+    if (big) [523, 659, 784, 1047, 1319].forEach((f, i) => this.blip(f, .5, 'triangle', .075, null, i * .06));
+  }
+  heat(lvl) { [392, 523, 659, 880].forEach((f, i) => this.blip(f * (1 + lvl * .04), .35, 'triangle', .06, null, i * .05)); }
+  overload() {
+    this.noiseHit(.7, .22, 'bandpass', 260, 1600, 1.1);
+    [330, 392, 494, 587, 740].forEach((f, i) => this.blip(f, .55, 'sawtooth', .06, null, i * .06));
+  }
+  ui() { this.blip(880, .07, 'triangle', .07, 1320); }
+  go() { this.blip(523, .12, 'triangle', .10); this.blip(1047, .3, 'sine', .09, null, .04); }
+  end() {
+    this.noiseHit(.5, .20, 'bandpass', 300, 90, 1.2);
+    [392, 523, 659, 880].forEach((f, i) => this.blip(f, .7, 'triangle', .075, null, i * .085));
+  }
+}
+const S = new Audio_();
+
+function vib(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+/* ============================================================ CANVAS SETUP */
+const cv = document.getElementById('cv');
+let ctx = cv.getContext('2d', { alpha: false });   // retargeted while baking the backdrop
+const VW = 540;
+let VH = 960, DPR = 1, SCALE = 1;
+let BG = null, bgDirty = true;
+const L = {};
+
+function layout() {
+  const ww = Math.max(1, window.innerWidth || 0), wh = Math.max(1, window.innerHeight || 0);
+  const ratio = VW * wh / ww;
+  VH = clamp(Number.isFinite(ratio) ? Math.round(ratio) : 960, 760, 1300);
+  const s = Math.min(ww / VW, wh / VH);
+  DPR = clamp(window.devicePixelRatio || 1, 1, 2.6);
+  cv.width  = Math.round(VW * s * DPR);
+  cv.height = Math.round(VH * s * DPR);
+  cv.style.width  = Math.round(VW * s) + 'px';
+  cv.style.height = Math.round(VH * s) + 'px';
+  SCALE = s * DPR;
+
+  L.hudY = 16; L.hudH = 46;
+  L.plaqueH = 74;
+  L.plaqueY = VH - L.plaqueH - 20;
+  L.aT = L.hudY + L.hudH + 20;
+  L.aB = L.plaqueY - 18;
+  L.aL = 18; L.aR = VW - 18;
+  L.cx = (L.aL + L.aR) * .5; L.cy = (L.aT + L.aB) * .5;
+
+  // the hopper: bottom-centre, so the loot is always uphill from the bank
+  L.hopW = 156; L.hopH = 66;
+  L.hopX = VW * .5; L.hopTop = L.aB - L.hopH;
+  L.hopY = L.hopTop + 30;                 // detection centre
+  L.hopRX = 80; L.hopRY = 46;
+  bgDirty = true;
+}
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+layout();
+
+/* ================================================================ ART BITS */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  r = Math.min(r, w * .5, h * .5);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function txt(t, x, y, size, fill, stroke, sw, align, weight) {
+  ctx.font = (weight || 900) + ' ' + size + 'px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (stroke && sw) { ctx.lineWidth = sw; ctx.strokeStyle = stroke; ctx.strokeText(t, x, y); }
+  ctx.fillStyle = fill; ctx.fillText(t, x, y);
+}
+function sphere(x, y, r, col, o) {
+  o = o || {};
+  const dark = o.dark || tone(col, .48);
+  const lite = o.lite || tone(col, 1.28);
+  const rim  = o.rim || C.ink;
+  const rw   = o.rimW !== undefined ? o.rimW : r * .10;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+  ctx.fillStyle = dark; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  ctx.beginPath(); ctx.arc(x - r * .13, y - r * .15, r * .99, 0, TAU); ctx.fillStyle = col; ctx.fill();
+  ctx.beginPath(); ctx.arc(x - r * .30, y - r * .33, r * .78, 0, TAU); ctx.fillStyle = lite; ctx.fill();
+  ctx.restore();
+  if (o.spec !== false) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+    ctx.globalAlpha = o.specA || .95;
+    ctx.translate(x - r * .36, y - r * .40); ctx.rotate(-.5);
+    ctx.beginPath(); ctx.ellipse(0, 0, r * .27, r * .16, 0, 0, TAU);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.restore();
+  }
+  if (rw > 0) {
+    ctx.beginPath(); ctx.arc(x, y, r - rw * .5, 0, TAU);
+    ctx.lineWidth = rw; ctx.strokeStyle = rim; ctx.stroke();
+  }
+}
+function glow(x, y, r, col, a) {
+  if (a <= 0.002 || r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(col, a));
+  g.addColorStop(.45, rgba(col, a * .38));
+  g.addColorStop(1, rgba(col, 0));
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+function plaque(x, y, w, h, r, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.42)'; rr(x + 3, y + 6, w, h, r + 2); ctx.fill();
+  rr(x, y, w, h, r); ctx.fillStyle = o.border || C.woodDark; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; ctx.stroke();
+  const b = o.b !== undefined ? o.b : 9;
+  const g = ctx.createLinearGradient(0, y + b, 0, y + h - b);
+  const f0 = o.f0 || C.tan, f1 = o.f1 || C.tanDeep;
+  g.addColorStop(0, f0); g.addColorStop(.55, o.fm || mix(f0, f1, .5)); g.addColorStop(1, f1);
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.fillStyle = g; ctx.fill();
+  ctx.save(); rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.30)'; ctx.fillRect(x + b, y + b, w - b * 2, 3);
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(x + b, y + h - b - 4, w - b * 2, 4);
+  ctx.restore();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.stroke();
+  if (o.rivets !== false) {
+    const rv = (px, py) => { sphere(px, py, 4.2, C.goldDeep, { lite: C.gold, rimW: 1.4, specA: .8 }); };
+    rv(x + 11, y + 11); rv(x + w - 11, y + 11); rv(x + 11, y + h - 11); rv(x + w - 11, y + h - 11);
+  }
+  ctx.restore();
+}
+function pill(x, y, w, h, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.save(); ctx.translate(0, 3); rr(x, y, w, h, h * .5); ctx.fill(); ctx.restore();
+  rr(x, y, w, h, h * .5);
+  ctx.fillStyle = o.bg || C.hud; ctx.fill();
+  ctx.save(); ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h * .55);
+  g.addColorStop(0, 'rgba(255,255,255,.16)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h * .55);
+  ctx.restore();
+  ctx.lineWidth = 1.6; ctx.strokeStyle = o.line || 'rgba(190,175,165,.55)';
+  rr(x, y, w, h, h * .5); ctx.stroke();
+  ctx.restore();
+}
+function coinIcon(x, y, r, rot) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.scale(clamp(Math.abs(Math.cos(rot || 0)), .12, 1), 1);
+  sphere(0, 0, r, C.goldDeep, { lite: C.gold, dark: '#7A4405', rimW: r * .17, rim: '#4A2803', specA: .9 });
+  ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(0, 0, r * .52, 0, TAU);
+  ctx.lineWidth = r * .13; ctx.strokeStyle = C.goldLite; ctx.stroke();
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+/* ================================================================== SCRAP */
+/* Bold silhouettes, thick ink rim, one baked gradient per metal. At bench
+   scale the shapes read as brass-or-steel long before they read as objects,
+   which is exactly the hierarchy the scoring wants.                        */
+function pNail(c) {
+  c.beginPath();
+  c.moveTo(-2.4, -7); c.lineTo(-1.5, 8); c.lineTo(0, 13); c.lineTo(1.5, 8); c.lineTo(2.4, -7); c.closePath();
+  c.moveTo(6.4, -9.6); c.arc(0, -9.6, 6.4, 0, TAU);
+}
+function pNut(c) {
+  c.beginPath();
+  for (let i = 0; i < 6; i++) { const a = i / 6 * TAU + .26; c[i ? 'lineTo' : 'moveTo'](Math.cos(a) * 11.6, Math.sin(a) * 11.6); }
+  c.closePath();
+}
+function pBolt(c) {
+  c.beginPath();
+  c.moveTo(-3.6, -4); c.lineTo(3.6, -4); c.lineTo(3.6, 13); c.lineTo(-3.6, 13); c.closePath();
+  c.moveTo(9, -8); for (let i = 0; i < 6; i++) { const a = i / 6 * TAU + .26; c.lineTo(Math.cos(a) * 9, Math.sin(a) * 9 - 8); }
+  c.closePath();
+}
+function pKey(c) {
+  c.beginPath();
+  c.moveTo(7.6, -11); c.arc(0, -11, 7.6, 0, TAU);
+  c.moveTo(-2.4, -6); c.lineTo(2.4, -6); c.lineTo(2.4, 15); c.lineTo(-2.4, 15); c.closePath();
+  c.moveTo(2.4, 6); c.lineTo(8.4, 6); c.lineTo(8.4, 9.4); c.lineTo(2.4, 9.4); c.closePath();
+  c.moveTo(2.4, 11.4); c.lineTo(7, 11.4); c.lineTo(7, 14.6); c.lineTo(2.4, 14.6); c.closePath();
+}
+function pGear(c) {
+  const R = 13.2, r = 9.2, n = 8;
+  c.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a0 = i / n * TAU, a1 = (i + .5) / n * TAU;
+    c.lineTo(Math.cos(a0 - .15) * R, Math.sin(a0 - .15) * R);
+    c.lineTo(Math.cos(a0 + .15) * R, Math.sin(a0 + .15) * R);
+    c.lineTo(Math.cos(a1 - .17) * r, Math.sin(a1 - .17) * r);
+    c.lineTo(Math.cos(a1 + .17) * r, Math.sin(a1 + .17) * r);
+  }
+  c.closePath();
+}
+function pSpanner(c) {
+  c.beginPath();
+  c.moveTo(-3.4, -9); c.lineTo(3.4, -9); c.lineTo(3.4, 9); c.lineTo(-3.4, 9); c.closePath();
+  c.moveTo(7.2, -13.4); c.arc(0, -13.4, 7.2, 0, TAU);                       // ring end
+  c.moveTo(-7, 16.6); c.lineTo(-7, 8); c.lineTo(7, 8); c.lineTo(7, 16.6);
+  c.lineTo(3.1, 16.6); c.lineTo(3.1, 13.4); c.lineTo(-3.1, 13.4); c.lineTo(-3.1, 16.6); c.closePath();
+}
+function pWatch(c) {
+  c.beginPath();
+  c.moveTo(12.4, 1.6); c.arc(0, 1.6, 12.4, 0, TAU);
+  c.moveTo(-3, -14.4); c.lineTo(3, -14.4); c.lineTo(3, -9); c.lineTo(-3, -9); c.closePath();
+}
+const PATHS = [pNail, pNut, pBolt, pKey, pGear, pSpanner, pWatch];
+
+function holeAt(c, x, y, r) {
+  c.beginPath(); c.arc(x, y, r, 0, TAU);
+  c.fillStyle = 'rgba(12,7,3,.85)'; c.fill();
+  c.lineWidth = 1.4; c.strokeStyle = 'rgba(255,255,255,.22)'; c.stroke();
+}
+const DETAIL = [
+  null,
+  c => holeAt(c, 0, 0, 5),
+  c => { c.globalAlpha = .35; c.strokeStyle = C.ink; c.lineWidth = 1.2;
+         for (let i = 0; i < 4; i++) { c.beginPath(); c.moveTo(-3.6, 1 + i * 3); c.lineTo(3.6, 1 + i * 3); c.stroke(); } c.globalAlpha = 1; },
+  c => holeAt(c, 0, -11, 3.2),
+  c => holeAt(c, 0, 0, 5),
+  c => holeAt(c, 0, -13.4, 3.6),
+  c => { holeAt(c, 0, 1.6, 8.4);
+         c.strokeStyle = C.goldLite; c.lineWidth = 1.6; c.lineCap = 'round';
+         c.beginPath(); c.moveTo(0, 1.6); c.lineTo(0, -4); c.moveTo(0, 1.6); c.lineTo(4.4, 3.4); c.stroke(); },
+];
+
+/* Every piece is baked once into a 21-sprite sheet (7 kinds × 3 metals) and
+   blitted from then on. A hundred-plus objects on the bench is the whole
+   point of the snowball, and a hundred clipped gradient fills a frame is not
+   a thing a phone will do.                                                 */
+const SPR = 2.4, SPR_H = 26;
+let SPRITES = null;
+function makeSprites() {
+  const px = Math.round(SPR_H * 2 * SPR);
+  SPRITES = PATHS.map((p, k) => MET.map((m, mi) => {
+    const cn = document.createElement('canvas'); cn.width = px; cn.height = px;
+    const c = cn.getContext('2d');
+    c.translate(px * .5, px * .5); c.scale(SPR, SPR);
+    c.lineJoin = 'round'; c.lineCap = 'round';
+    c.save(); c.translate(2, 3.2); p(c); c.fillStyle = 'rgba(0,0,0,.42)'; c.fill(); c.restore();
+    p(c); c.lineWidth = 3.6; c.strokeStyle = C.ink; c.stroke();
+    const g = c.createLinearGradient(-13, -16, 10, 16);
+    g.addColorStop(0, m.hi); g.addColorStop(.44, m.mid); g.addColorStop(1, m.lo);
+    p(c); c.fillStyle = g; c.fill();
+    c.save(); p(c); c.clip();
+    c.globalAlpha = .5; c.fillStyle = m.spec;
+    c.rotate(-.62); c.fillRect(-30, -14, 60, 3.6);
+    c.globalAlpha = 1; c.restore();
+    if (DETAIL[k]) DETAIL[k](c);
+    return cn;
+  }));
+}
+
+function drawScrap(k, x, y, rot, met, sc, hot) {
+  const img = SPRITES[k][met];
+  const h = SPR_H * (sc || 1), w = h * 2;
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(rot);
+  ctx.drawImage(img, -h, -h, w, w);
+  if (hot > .02) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = hot * .30;
+    ctx.drawImage(img, -h, -h, w, w);
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+/* ================================================================== FIELD */
+/* Ring packing. The cluster repacks itself every frame from the current
+   count, so pieces flow inward as you bank and outward as you grab — the
+   swarm is always tight, never a ragged comet.                            */
+function slotOf(i) {
+  let ring = 0, cap = 6, base = 0;
+  while (i >= base + cap) { base += cap; ring++; cap = 6 + 4 * ring; }
+  return [ring, i - base, cap];
+}
+function ringsFor(n) { if (n <= 0) return 0; let ring = 0, cap = 6, base = 0; while (n > base + cap) { base += cap; ring++; cap = 6 + 4 * ring; } return ring; }
+/* The innermost ring keeps its distance so the magnet itself is never buried.
+   A player who cannot see their own centre cannot thread a doorway.        */
+function clusterR(n) { return n <= 0 ? 0 : 30 + ringsFor(n - 1) * 14 + 8; }
+function fieldR(n)   { return 88 + clusterR(n) * .74; }
+function catchR(n)   { return clusterR(n) + 26; }
+/* Deliberately smaller than the cluster: the swarm is loose, so clipping an
+   outer nail on a doorpost should not cost you the run. What matters is that
+   this number grows, and that a doorway either admits it or does not.      */
+function hitR(n)     { return 14 + clusterR(n) * .60; }
+function loadMult(n) { return 1 + n * .09; }
+
+/* ================================================================== STATE */
+const ROUND = 60;
+/* Capped so a completely full magnet still fits through the generous door on
+   every row — the generator enforces it below. A load you cannot get home
+   with is not a gamble, it is a dead end, and the player would be stuck in it
+   through no decision of their own.                                        */
+const HOLD_MAX = 48;
+const HEAT_MIN = 20;                    // drops smaller than this build no heat
+const FREE_MAX = 46;
+const OVERLOAD_AT = 12;
+const KEY_LS = 'evermore.haul.v1';
+
+const scrap = [];        // free on the bench
+const held  = [];        // stuck to the magnet
+const rows  = [];        // gauntlet rows, each a line of doorways
+const posts = [];        // flat view of every row's terminals, for drawing
+const flyers = [];       // pieces streaming into the hopper
+const parts = [], rings = [], pops = [];
+
+const M = { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, rot: -Math.PI * .5, stun: 0, kx: 0, ky: 0 };
+
+const G = {
+  state: 'title',
+  t: 0, time: ROUND,
+  score: 0, scoreShown: 0,
+  heat: 1, heatFlash: 0, valMul: 1,
+  banks: 0, bestLoad: 0, bestDrop: 0, zaps: 0, peakHeat: 1, picked: 0,
+  overload: false,
+  shake: 0, shakeT: 0, flash: 0, flashCol: '#fff', freeze: 0,
+  banner: null, bannerT: 0, hint: 1, endT: 0,
+  coinPulse: 0, hopPulse: 0, newBest: false,
+  feed: 0, grab: 0, dragging: false, motion: 0,
+  day: 0, seedHex: '----',
+};
+
+let PB = { score: 0, load: 0, drop: 0 }, T = 0;
+try { const raw = localStorage.getItem(KEY_LS); if (raw) PB = JSON.parse(raw); } catch (e) {}
+
+function dayIndex() { return Math.floor((Date.now() - Date.UTC(2025, 0, 1)) / 86400000); }
+
+function shakeIt(a, d) { G.shake = Math.max(G.shake, a); G.shakeT = Math.max(G.shakeT, d || .3); }
+function flashIt(a, c) { G.flash = Math.max(G.flash, a); G.flashCol = c || '#fff'; }
+function banner(text, col, sub) { G.banner = { text, col, sub }; G.bannerT = 0; }
+
+function loadVal() { let v = 0; for (let i = 0; i < held.length; i++) v += held[i].val; return v; }
+function payout()  { return Math.round(loadVal() * loadMult(held.length) * G.heat * G.valMul); }
+
+/* ------------------------------------------------------------------ seed  */
+/* The bench everyone gets today. Post layout and the opening scatter are
+   daily-seeded so the first ten seconds are byte-identical for every player
+   on the challenge; the feed after that is free-running, so a session never
+   turns into the same run twice.                                          */
+/* The gauntlet. Loot is up top, the hopper is at the bottom, so every run is
+   a descent — and the bench is banded by rows of terminals that cut it into
+   DOORWAYS of three different widths. A live arc closes a doorway; your load
+   decides which doorways you still fit through. That is the whole game, and
+   because it is geometry rather than reflex you can read your odds in one
+   glance and be entirely to blame for what you decide to do about them.
+
+   Going up empty is free. Coming down full is the gamble.                  */
+const DOORS = [.44, .32, .24];          // fractions of the bench width: generous, fair, mean
+
+function buildBench() {
+  G.day = dayIndex();
+  const h = hashStr('haul-bench-' + G.day);
+  G.seedHex = h.toString(16).toUpperCase().slice(0, 4);
+  const rnd = mulberry32(h);
+
+  rows.length = 0; posts.length = 0;
+  const H = L.aB - L.aT;
+  const W = L.aR - L.aL;
+  // Three gates at most: the trip home has to stay short enough that a full
+  // magnet can make it more than twice in a minute, or the multiplier never
+  // gets to pay for the risk it is asking you to take. And the rows must sit
+  // far enough apart that a full magnet can wait between two of them without
+  // touching either — on a short screen that means two gates, not three.
+  const top = L.aT + H * .34, bot = L.hopTop - H * .09;
+  const minGap = 2 * hitR(HOLD_MAX) + 58;
+  const n = clamp(1 + Math.floor((bot - top) / minGap), 2, 3);
+
+  // a full magnet must always clear the generous door: its own width, plus
+  // both terminals, plus a little air so a perfect line isn't required
+  const need = 2 * hitR(HOLD_MAX) + 58;
+
+  let prevWide = -1;
+  for (let r = 0; r < n; r++) {
+    // the first gate sits a third of the way down: above it is a proper
+    // farming floor, not a sliver, even once every row has armed
+    const y = lerp(top, bot, n > 1 ? r / (n - 1) : .5) + (rnd() - .5) * 20;
+    const wide = Math.max((DOORS[0] + (rnd() - .5) * .07) * W, need);
+    const rest = W - wide, fair = rest * (.50 + rnd() * .16);
+
+    // the generous door never sits in the same slot two rows running, so a
+    // heavy load always has to weave rather than drop down one lane
+    let wi = (rnd() * 3) | 0;
+    if (wi === prevWide) wi = (wi + 1 + ((rnd() * 2) | 0)) % 3;
+    prevWide = wi;
+    const other = rnd() < .5 ? [fair, rest - fair] : [rest - fair, fair];
+    const w = []; let oi = 0;
+    for (let i = 0; i < 3; i++) w[i] = i === wi ? wide : other[oi++];
+    const xs = [L.aL, L.aL + w[0], L.aL + w[0] + w[1], L.aR];
+    const pts = [{ x: xs[1], y, buzz: 0 }, { x: xs[2], y, buzz: 0 }];
+    const segs = [];
+    const off = rnd();
+    for (let i = 0; i < 3; i++) {
+      // jitter stays under half the phase spacing, so two segments in a row can
+      // never be live at once. That is what makes a row provably crossable at
+      // any load: one live span can never cover the whole bench.
+      segs.push({ x0: xs[i], x1: xs[i + 1], w: xs[i + 1] - xs[i],
+        ph: (off + i / 3 + (rnd() - .5) * .12 + 1) % 1,
+        ch: 0, on: 0, live: false, was: false, buzzed: 0, seed: (rnd() * 8000) | 0 });
+    }
+    rows.push({ y, segs, pts, per: 2.6 + rnd() * .8 - r * .13, armed: false });
+    posts.push(pts[0], pts[1]);
+  }
+  return rnd;
+}
+
+/* Nominal doorway width — used by the generator to guarantee the generous door
+   is always big enough. What the player is actually judged against is
+   passRanges() below, which is exact.                                       */
+function doorGap(s) { return s.w - (s.x0 <= L.aL + 1 || s.x1 >= L.aR - 1 ? 19 : 38); }
+
+/* The honest answer to "where can I cross this row right now". Terminals are
+   scenery — only a live span hurts — so the passable set is the bench minus
+   each live span fattened by the magnet's own radius. Drawn as gold on the
+   bench, it shrinks in front of you as the load grows, which is the entire
+   risk of the game expressed as a picture rather than a number.            */
+function passRanges(R, HR) {
+  let out = [[L.aL + 16, L.aR - 16]];
+  for (let i = 0; i < R.segs.length; i++) {
+    const s = R.segs[i];
+    if (!s.live) continue;
+    const a = s.x0 - (HR + 7), b = s.x1 + (HR + 7);
+    const next = [];
+    for (let k = 0; k < out.length; k++) {
+      const x0 = out[k][0], x1 = out[k][1];
+      if (x1 <= a || x0 >= b) { next.push([x0, x1]); continue; }
+      if (x0 < a) next.push([x0, a]);
+      if (x1 > b) next.push([b, x1]);
+    }
+    out = next;
+  }
+  return out;
+}
+
+function addScrap(x, y, vx, vy, k, cool) {
+  if (scrap.length >= FREE_MAX) return null;
+  const K = KIND[k];
+  const s = { x, y, vx, vy, k, met: K.met, val: K.val, rot: Math.random() * TAU, vrot: (Math.random() - .5) * 5,
+    cool: cool || 0, hot: 0, sc: 1 };
+  scrap.push(s);
+  return s;
+}
+
+/* Value is tied to distance from the bank: nails land anywhere, spanners and
+   gold land high. The good stuff is always the longest carry.              */
+function scrapY(k, rnd) {
+  const r = rnd || Math.random;
+  let t = Math.pow(r(), 1.35);          // the bench feeds from the top down
+  if (KIND[k].val >= 21) t *= .5;
+  if (KIND[k].val >= 100) t *= .6;
+  return lerp(L.aT + 38, L.aB - 96, t);
+}
+
+function feedScrap() {
+  const k = pickKind();
+  let x = 0, y = 0, guard = 0;
+  do { x = lerp(L.aL + 34, L.aR - 34, Math.random()); y = scrapY(k); }
+  while (Math.hypot(x - L.hopX, y - L.hopY) < 118 && guard++ < 30);
+  const s = addScrap(x, y, (Math.random() - .5) * 40, (Math.random() - .5) * 40, k);
+  if (s) s.sc = 0;                      // scales in, so it reads as landing on the bench
+  return s;
+}
+
+function resetRun() {
+  const rnd = buildBench();
+  G.time = ROUND; G.score = 0; G.scoreShown = 0;
+  G.heat = 1; G.heatFlash = 0; G.valMul = 1;
+  G.banks = 0; G.bestLoad = 0; G.bestDrop = 0; G.zaps = 0; G.peakHeat = 1; G.picked = 0;
+  G.overload = false; G.newBest = false;
+  G.hint = 1; G.endT = 0; G.banner = null; G.freeze = 0; G.feed = 0; G.grab = 0;
+  G.coinPulse = 0; G.hopPulse = 0; G.motion = 0; G.dragging = false;
+
+  scrap.length = 0; held.length = 0; flyers.length = 0;
+  parts.length = 0; rings.length = 0; pops.length = 0;
+
+  M.x = L.cx; M.y = L.aT + 190; M.tx = M.x; M.ty = M.y;
+  M.vx = 0; M.vy = 0; M.rot = -Math.PI * .5; M.stun = 0; M.kx = 0; M.ky = 0;
+
+  // the opening scatter — same for everyone on today's bench
+  for (let i = 0; i < 30; i++) {
+    const k = pickKind(rnd);
+    let x, y, guard = 0;
+    do { x = lerp(L.aL + 34, L.aR - 34, rnd()); y = scrapY(k, rnd); }
+    while (Math.hypot(x - L.hopX, y - L.hopY) < 120 && guard++ < 40);
+    addScrap(x, y, (rnd() - .5) * 30, (rnd() - .5) * 30, k);
+  }
+}
+
+/* ================================================================ ACTIONS */
+function capture(s, i) {
+  scrap.splice(i, 1);
+  s.cool = 0;
+  held.push(s);
+  G.picked++;
+  S.pick(held.length, s.met);
+  if (s.k === 6) {                                     // the watch is an event
+    ring(s.x, s.y, 6, 54, C.goldLite, .4, 5);
+    spark(s.x, s.y, 10, C.goldLite, 240, 0, 3);
+    pop(s.x, s.y - 20, 'GOLD', C.goldLite, 24, null);
+  }
+}
+
+/* The bank. Multiplier is locked at the instant of the drop, and the load
+   leaves the magnet immediately — so you can turn and run while it pays,
+   which is what makes a big drop feel like getting away with something.   */
+function bank() {
+  const n = held.length;
+  if (!n) return;
+  const v = loadVal();
+  const mult = loadMult(n);
+  const total = Math.round(v * mult * G.heat * G.valMul);
+
+  G.banks++;
+  G.bestLoad = Math.max(G.bestLoad, n);
+  G.bestDrop = Math.max(G.bestDrop, total);
+
+  const per = total / n;
+  for (let i = 0; i < n; i++) {
+    const s = held[i];
+    flyers.push({ k: s.k, met: s.met, rot: s.rot, x0: s.x, y0: s.y, x: s.x, y: s.y,
+      tx: L.hopX + (Math.random() - .5) * 46, ty: L.hopY + 6,
+      t: -(i / n) * .34, dur: .26 + Math.random() * .12, val: per, idx: i, n: n,
+      arc: -30 - Math.random() * 60, sx: (Math.random() - .5) * 60 });
+  }
+  held.length = 0;
+
+  /* Heat pays for NERVE, not for errands. A drop under twenty buys nothing at
+     all, so grinding small safe loads leaves you on ×1.0 forever while the
+     player who walks the fat load home compounds. This is the line that makes
+     the game about the decision instead of about the commute.              */
+  if (n >= HEAT_MIN) {
+    const before = G.heat;
+    G.heat = Math.min(3, G.heat + .06 + (n - HEAT_MIN) * .026);
+    G.peakHeat = Math.max(G.peakHeat, G.heat);
+    if (Math.floor(G.heat * 5) > Math.floor(before * 5)) { G.heatFlash = 1; S.heat(G.heat); }
+  }
+
+  const big = n >= 22;
+  S.bankLand(big);
+  G.hopPulse = 1;
+  ring(L.hopX, L.hopY, 20, 150, C.goldLite, .5, 8);
+  shakeIt(clamp(3 + n * .22, 3, 14), .26);
+  pop(L.hopX, L.hopTop - 34, '+' + commas(total), n >= 18 ? C.goldLite : C.cream,
+      n >= 26 ? 44 : n >= 14 ? 36 : 28, n + ' PCS  ·  ×' + mult.toFixed(1));
+  if (big) {
+    banner('BIG HAUL', C.goldLite, n + ' pieces  ·  ×' + (mult * G.heat).toFixed(1));
+    flashIt(clamp(.10 + n * .008, 0, .42), '#FFF3C8');
+    vib([12, 24, 14]);
+  }
+}
+
+/* The punishment, and the reason anybody ever banks early: the load blows
+   apart, the run-long heat resets, and the magnet is thrown clear. Nothing
+   is destroyed — every piece lands back on the bench — so the sting is pure
+   loss of progress, never loss of material.                               */
+function zapped(ax, ay) {
+  const n = held.length;
+  const lost = Math.round(loadVal() * loadMult(n) * G.heat);
+  G.zaps++;
+  for (let i = 0; i < n; i++) {
+    const s = held[i];
+    const a = Math.atan2(s.y - ay, s.x - ax) + (Math.random() - .5) * 1.2;
+    const sp = 260 + Math.random() * 320;
+    s.vx = Math.cos(a) * sp; s.vy = Math.sin(a) * sp;
+    s.cool = .85 + Math.random() * .4;
+    s.vrot = (Math.random() - .5) * 20;
+    if (scrap.length < FREE_MAX + 24) scrap.push(s);
+  }
+  held.length = 0;
+  G.heat = 1;
+
+  const a = Math.atan2(M.y - ay, M.x - ax);
+  M.kx = Math.cos(a) * 640; M.ky = Math.sin(a) * 640;
+  M.stun = .5;
+
+  S.zap(); vib([40, 30, 60]);
+  flashIt(.62, C.volt);
+  shakeIt(20, .5);
+  ring(M.x, M.y, 10, 200, C.volt, .45, 9);
+  spark(M.x, M.y, 26, C.volt, 520, 0, 3.4);
+  if (lost > 0) pop(M.x, M.y - 82, '−' + commas(lost), '#9CE6FF', 34, 'LOAD  LOST');
+  G.freeze = Math.max(G.freeze, .09);
+}
+
+/* ==================================================================== FX  */
+function spark(x, y, n, col, spd, up, sz) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, s = spd * (.35 + Math.random());
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (up || 0), r: (sz || 3) * (.5 + Math.random()),
+      life: 1, dec: 1.1 + Math.random() * 1.6, col, g: 0, add: 1, drag: 2.4 });
+  }
+}
+function confetti(x, y, n) {
+  const cols = [C.gold, C.red, C.steelHi, C.cream, C.ember, C.volt];
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI * .5 + (Math.random() - .5) * 2.1, s = 260 + Math.random() * 560;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 4 + Math.random() * 4, life: 1, dec: .48,
+      col: cols[i % cols.length], g: 780, add: 0, drag: .6, flat: 1, rot: Math.random() * TAU, vr: (Math.random() - .5) * 22 });
+  }
+}
+function partsStep(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.vy += p.g * dt; p.vx *= (1 - p.drag * dt); p.vy *= (1 - p.drag * dt * .5);
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.rot !== undefined) p.rot += p.vr * dt;
+    p.life -= dt * p.dec;
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+}
+function ring(x, y, r0, r1, col, dur, w) { rings.push({ x, y, r0, r1, col, t: 0, dur: dur || .45, w: w || 6 }); }
+function ringsStep(dt) { for (let i = rings.length - 1; i >= 0; i--) { rings[i].t += dt; if (rings[i].t >= rings[i].dur) rings.splice(i, 1); } }
+function pop(x, y, s, col, size, sub) { pops.push({ x, y, s, col, size: size || 30, sub, t: 0, dur: 1.0, vx: (Math.random() - .5) * 20 }); }
+function popsStep(dt) { for (let i = pops.length - 1; i >= 0; i--) { pops[i].t += dt; if (pops[i].t >= pops[i].dur) pops.splice(i, 1); } }
+
+function flyersStep(dt) {
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const f = flyers[i]; f.t += dt;
+    if (f.t < 0) continue;
+    const p = clamp(f.t / f.dur, 0, 1), e = smooth(p);
+    f.x = lerp(f.x0, f.tx, e) + f.sx * Math.sin(p * Math.PI);
+    f.y = lerp(f.y0, f.ty, e) + f.arc * Math.sin(p * Math.PI);
+    f.rot += dt * 13;
+    if (p >= 1) {
+      G.score += f.val;
+      G.coinPulse = Math.max(G.coinPulse, .55);
+      G.hopPulse = Math.max(G.hopPulse, .5);
+      S.bankTick(f.idx, f.n);
+      spark(L.hopX + (Math.random() - .5) * 40, L.hopTop + 12, 2, C.gold, 130, 60, 2.4);
+      flyers.splice(i, 1);
+    }
+  }
+}
+
+/* ================================================================== ARCS  */
+/* A pair spends most of its cycle dark, telegraphs for about half a second,
+   then snaps live for a third of one. Fully readable, never a gotcha — the
+   only question the game ever asks is whether you are thin enough to fit.  */
+/* 30% of the cycle spent telegraphing, 18% live. Even at overload speed that
+   is half a second of warning before anything can take your load off you.  */
+const CHARGE0 = .52, LIVE0 = .82, LIVE1 = 1.0;
+
+/* Rows arm from the bottom up, so the trip home is guarded from the first
+   second and the safe farming band at the top shrinks as the clock runs. */
+function armedRows(prog) { return clamp(Math.round(lerp(2, rows.length, prog)), 2, rows.length); }
+
+function arcsStep(dt, live) {
+  const prog = 1 - clamp(G.time / ROUND, 0, 1);
+  const nA = armedRows(prog);
+  const rate = G.overload ? 1.5 : lerp(1, 1.3, prog);
+  const HR = hitR(held.length);
+
+  for (let r = 0; r < rows.length; r++) {
+    const R = rows[r];
+    R.armed = r >= rows.length - nA;
+    for (let i = 0; i < R.pts.length; i++) R.pts[i].buzz = Math.max(0, R.pts[i].buzz - dt * 2.6);
+    if (!R.armed) { for (let i = 0; i < R.segs.length; i++) { const s = R.segs[i]; s.live = false; s.on = 0; s.ch = 0; } continue; }
+
+    let allLive = true;
+    for (let i = 0; i < R.segs.length; i++) {
+      const s = R.segs[i];
+      s.ph += dt * rate / R.per;
+      if (s.ph >= 1) s.ph -= 1;
+      s.ch = s.ph > CHARGE0 && s.ph < LIVE0 ? (s.ph - CHARGE0) / (LIVE0 - CHARGE0) : 0;
+      s.want = s.ph >= LIVE0 && s.ph < LIVE1;
+      if (!s.want) allLive = false;
+    }
+    // a row may never seal. If the phases ever conspire, the doorway closest
+    // to opening stays open — there is always a way through, and it is always
+    // on screen. Nothing in this game is ever allowed to be a trap.
+    if (allLive) {
+      let best = R.segs[0];
+      for (let i = 1; i < R.segs.length; i++) if (R.segs[i].ph > best.ph) best = R.segs[i];
+      best.want = false;
+    }
+
+    for (let i = 0; i < R.segs.length; i++) {
+      const s = R.segs[i];
+      const on = s.want;
+      if (on && !s.was) S.arcLive();
+      if (s.ch > 0 && s.ch < .1 && !s.buzzed) { s.buzzed = 1; S.arcCharge(); }
+      if (s.ch === 0) s.buzzed = 0;
+      s.was = on; s.live = on;
+      s.on = on ? 1 - (s.ph - LIVE0) / (LIVE1 - LIVE0) : 0;
+
+      const heat = on ? 1 : s.ch * .55;
+      if (heat > 0) {
+        if (i > 0) R.pts[i - 1].buzz = Math.max(R.pts[i - 1].buzz, heat);
+        if (i < R.pts.length) R.pts[i].buzz = Math.max(R.pts[i].buzz, heat);
+      }
+
+      // the whole game in one line: your load is your hitbox
+      if (on && live && M.stun <= 0 && segDist(M.x, M.y, s.x0, R.y, s.x1, R.y) < HR + 7) {
+        zapped(clamp(M.x, s.x0, s.x1), R.y);
+        return;
+      }
+    }
+  }
+}
+
+/* ================================================================= UPDATE */
+function magnetStep(dt) {
+  if (M.stun > 0) {
+    M.stun -= dt;
+    M.x += M.kx * dt; M.y += M.ky * dt;
+    M.kx *= Math.pow(.02, dt); M.ky *= Math.pow(.02, dt);
+  } else {
+    // a full magnet steers like a full magnet — this is the tax on greed
+    const heavy = 1 + held.length * .016;
+    const k = 210 / heavy, d = 20;
+    M.vx += (M.tx - M.x) * k * dt - M.vx * d * dt;
+    M.vy += (M.ty - M.y) * k * dt - M.vy * d * dt;
+    M.x += M.vx * dt; M.y += M.vy * dt;
+  }
+  M.x = clamp(M.x, L.aL + 16, L.aR - 16);
+  M.y = clamp(M.y, L.aT + 16, L.aB - 14);
+  const sp = Math.hypot(M.vx, M.vy);
+  if (sp > 26) M.rot = lerp(M.rot, Math.atan2(M.vy, M.vx), clamp(dt * 9, 0, 1));
+  G.motion = lerp(G.motion, clamp(sp / 420, 0, 1), clamp(dt * 5, 0, 1));
+}
+
+function scrapStep(dt) {
+  const n = held.length;
+  const FR = fieldR(n), CR = catchR(n);
+  const full = n >= HOLD_MAX;
+  if (G.grab > 0) G.grab -= dt;
+  for (let i = scrap.length - 1; i >= 0; i--) {
+    const s = scrap[i];
+    if (s.sc < 1) s.sc = Math.min(1, s.sc + dt * 4);
+    if (s.cool > 0) s.cool -= dt;
+    s.hot = Math.max(0, s.hot - dt * 4);
+
+    if (!full && s.cool <= 0 && M.stun <= 0) {
+      const dx = M.x - s.x, dy = M.y - s.y, d = Math.hypot(dx, dy);
+      if (d < CR) {
+        if (G.grab <= 0) { capture(s, i); G.grab = .09 + held.length * .0055; continue; }
+        // waiting its turn at the throat: park it on the cluster edge instead
+        // of letting it pile into the middle, so the queue is visible
+        if (d > 1e-3) {
+          const push = (CR - d) * 6;
+          s.vx -= dx / d * push * dt; s.vy -= dy / d * push * dt;
+          s.vx *= (1 - Math.min(.9, 5 * dt)); s.vy *= (1 - Math.min(.9, 5 * dt));
+        }
+        s.hot = 1;
+        s.x += s.vx * dt; s.y += s.vy * dt; s.rot += s.vrot * dt;
+        continue;
+      }
+      if (d < FR && d > 1e-3) {
+        // steep falloff on purpose: the rim of the field only tugs, so distant
+        // scrap takes a beat to arrive. You see a long tail of metal streaming
+        // in rather than a snap, and filling up costs real seconds.
+        const f = Math.pow(1 - d / FR, 1.7) * 2400;
+        // a touch of swirl so the intake spirals instead of beelining — the
+        // difference between a vacuum cleaner and a whirlpool
+        s.vx += (dx / d * f - dy / d * f * .34) * dt;
+        s.vy += (dy / d * f + dx / d * f * .34) * dt;
+        s.hot = 1;
+        s.vrot += (Math.random() - .5) * 16 * dt;
+      }
+    }
+
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    s.rot += s.vrot * dt;
+    const drag = s.hot > 0 ? 1.1 : 3.4;                 // the bench is rough; the field is not
+    s.vx *= (1 - Math.min(.9, drag * dt)); s.vy *= (1 - Math.min(.9, drag * dt));
+    s.vrot *= (1 - Math.min(.9, 1.4 * dt));
+
+    if (s.x < L.aL + 14) { s.x = L.aL + 14; s.vx = Math.abs(s.vx) * .5; }
+    if (s.x > L.aR - 14) { s.x = L.aR - 14; s.vx = -Math.abs(s.vx) * .5; }
+    if (s.y > L.aB - 14) { s.y = L.aB - 14; s.vy = -Math.abs(s.vy) * .5; }
+    if (s.y < L.aT + 14 && s.sc >= 1) { s.y = L.aT + 14; s.vy = Math.abs(s.vy) * .5; }
+  }
+}
+
+function heldStep(dt) {
+  const n = held.length;
+  const spin = T * 1.15;
+  for (let i = 0; i < n; i++) {
+    const s = held[i];
+    const sl = slotOf(i);
+    const rr2 = 30 + sl[0] * 14;
+    const a = spin * (1 - sl[0] * .16) + sl[1] / sl[2] * TAU + sl[0] * .8;
+    const tx = M.x + Math.cos(a) * rr2, ty = M.y + Math.sin(a) * rr2;
+    const k = 300, d = 19;
+    s.vx += (tx - s.x) * k * dt - s.vx * d * dt;
+    s.vy += (ty - s.y) * k * dt - s.vy * d * dt;
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    s.rot += (2.2 + sl[0] * .6) * dt;
+  }
+}
+
+function update(dt) {
+  T += dt; G.t += dt;
+  if (G.shakeT > 0) { G.shakeT -= dt; G.shake *= Math.pow(.0016, dt); if (G.shakeT <= 0) G.shake = 0; }
+  G.flash = Math.max(0, G.flash - dt * 4.2);
+  G.coinPulse = Math.max(0, G.coinPulse - dt * 3);
+  G.hopPulse = Math.max(0, G.hopPulse - dt * 2.2);
+  G.heatFlash = Math.max(0, G.heatFlash - dt * 1.6);
+  if (G.banner) G.bannerT += dt;
+
+  partsStep(dt); ringsStep(dt); popsStep(dt); flyersStep(dt);
+
+  if (G.state === 'count') {
+    arcsStep(dt, false); scrapStep(dt); heldStep(dt); magnetStep(dt);
+    if (G.t >= 1.75) { G.state = 'play'; G.t = 0; S.startBed(); }
+    return;
+  }
+  if (G.state !== 'play') { S.setBed(0, 0); return; }
+
+  G.time -= dt;
+  const prog = 1 - clamp(G.time / ROUND, 0, 1);
+  if (G.picked > 6) G.hint = Math.max(0, G.hint - dt * 1.1);
+
+  if (!G.overload && G.time <= OVERLOAD_AT) {
+    G.overload = true; G.valMul = 2;
+    S.overload(); vib([20, 40, 20]);
+    banner('OVERLOAD', C.volt, 'every drop pays double · arcs run hot');
+    flashIt(.42, C.volt); shakeIt(14, .5);
+    for (let i = 0; i < 6; i++) feedScrap();
+  }
+
+  magnetStep(dt);
+  scrapStep(dt);
+  heldStep(dt);
+  arcsStep(dt, true);
+
+  // the bank
+  if (held.length && M.stun <= 0) {
+    const dx = (M.x - L.hopX) / L.hopRX, dy = (M.y - L.hopY) / L.hopRY;
+    if (dx * dx + dy * dy < 1) bank();
+  }
+
+  // the bench must never run dry — an empty sweep is the only genuinely
+  // un-fun second this game can produce
+  G.feed -= dt;
+  if (G.feed <= 0) {
+    G.feed = G.overload ? .16 : lerp(.34, .19, prog);
+    const want = Math.round(lerp(28, 36, prog));
+    if (scrap.length < want) { feedScrap(); if (scrap.length < want - 10) feedScrap(); }
+  }
+
+  S.setBed(held.length, G.motion + (G.dragging ? .18 : 0));
+
+  if (G.time <= 0) { G.time = 0; endRun(); }
+}
+
+function endRun() {
+  G.state = 'over'; G.endT = 0;
+  S.stopBed();
+  // anything already committed to the hopper counts, even if the whistle went
+  // while it was still in the air — otherwise the total ticks up after the
+  // tally and disagrees with the best-score line printed beside it
+  for (let i = 0; i < flyers.length; i++) G.score += flyers[i].val;
+  flyers.length = 0;
+  G.newBest = G.score > (PB.score || 0);
+  if (G.newBest) { PB.score = G.score; confetti(VW * .5, VH * .34, 70); }
+  PB.load = Math.max(PB.load || 0, G.bestLoad);
+  PB.drop = Math.max(PB.drop || 0, G.bestDrop);
+  try { localStorage.setItem(KEY_LS, JSON.stringify(PB)); } catch (e) {}
+  S.end();
+}
+
+/* ================================================================== INPUT */
+function toV(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * VW, y: (e.clientY - r.top) / r.height * VH };
+}
+function inRect(p, x, y, w, h) { return p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h; }
+
+/* The magnet rides a fixed offset above the finger. Absolute (so it never
+   drifts out from under you) but lifted (so your thumb never covers the one
+   thing you are reading).                                                 */
+const THUMB_LIFT = 54;
+let ptrId = null;
+
+function aim(p) {
+  M.tx = clamp(p.x, L.aL + 16, L.aR - 16);
+  M.ty = clamp(p.y - THUMB_LIFT, L.aT + 16, L.aB - 14);
+}
+
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); S.init();
+  const p = toV(e);
+  try { cv.setPointerCapture && cv.setPointerCapture(e.pointerId); } catch (err) {}
+
+  if (G.state === 'title') { startRun(); return; }
+  if (G.state === 'over') { if (G.endT > .7) { S.ui(); startRun(); } return; }
+  if (G.state === 'pause') {
+    if (inRect(p, VW * .5 - 120, VH * .5 - 10, 240, 68)) { S.ui(); G.state = 'play'; S.startBed(); }
+    else if (inRect(p, VW * .5 - 120, VH * .5 + 74, 240, 56)) { S.on = !S.on; S.ui(); }
+    else if (inRect(p, VW * .5 - 120, VH * .5 + 146, 240, 56)) { S.ui(); S.stopBed(); G.state = 'title'; }
+    return;
+  }
+  if (G.state !== 'play') return;
+  if (inRect(p, 16, L.hudY, 62, L.hudH)) { S.ui(); S.stopBed(); G.state = 'pause'; return; }
+
+  if (ptrId === null) { ptrId = e.pointerId; G.dragging = true; aim(p); }
+}, { passive: false });
+
+cv.addEventListener('pointermove', e => {
+  if (e.pointerId !== ptrId) return;
+  e.preventDefault();
+  // coalesced lists can come back empty; only the newest point matters here,
+  // so fall back to the event itself rather than indexing off the end
+  const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
+  aim(toV(evs.length ? evs[evs.length - 1] : e));
+  if (G.hint > 0) G.hint = Math.max(0, G.hint - .012);
+}, { passive: false });
+
+function endPtr(e) {
+  if (e.pointerId !== ptrId) return;
+  ptrId = null; G.dragging = false;
+}
+cv.addEventListener('pointerup', e => { e.preventDefault(); endPtr(e); }, { passive: false });
+cv.addEventListener('pointercancel', e => endPtr(e), { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  S.init();
+  if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault();
+    if (G.state === 'title') startRun();
+    else if (G.state === 'over' && G.endT > .7) startRun();
+  }
+  if (e.code === 'Escape' || e.code === 'KeyP') {
+    if (G.state === 'play') { S.stopBed(); G.state = 'pause'; }
+    else if (G.state === 'pause') { G.state = 'play'; S.startBed(); }
+  }
+  if (e.code === 'KeyM') { S.on = !S.on; }
+});
+
+function startRun() { S.init(); resetRun(); G.state = 'count'; G.t = 0; S.go(); }
+
+/* =================================================================== DRAW */
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, '#241408'); g.addColorStop(.5, '#301B0C'); g.addColorStop(1, '#170C05');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  const pw = 78;
+  for (let i = 0; i < Math.ceil(VW / pw) + 1; i++) {
+    const x = i * pw;
+    const f = .88 + ((i * 37) % 7) / 7 * .26;
+    ctx.fillStyle = tone('#3B2313', f); ctx.fillRect(x, 0, pw - 3, VH);
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(x + pw - 3, 0, 3, VH);
+    ctx.fillStyle = 'rgba(255,190,120,.05)'; ctx.fillRect(x, 0, 2, VH);
+    ctx.strokeStyle = 'rgba(0,0,0,.13)'; ctx.lineWidth = 1.4;
+    const r2 = mulberry32(1000 + i);
+    for (let k = 0; k < 5; k++) {
+      const gx = x + 6 + r2() * (pw - 16);
+      ctx.beginPath();
+      for (let yy = 0; yy < VH; yy += 46) ctx.lineTo(gx + Math.sin(yy * .017 + k * 2 + i) * 5, yy);
+      ctx.stroke();
+    }
+  }
+}
+
+/* The bench: a recessed working surface, scuffed, lit from above. Darker
+   than the frame so the metal on it reads as the brightest thing on screen. */
+function drawBenchStatic() {
+  const x = L.aL, y = L.aT, w = L.aR - L.aL, h = L.aB - L.aT;
+  ctx.save();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, '#2C1B0C'); g.addColorStop(.5, '#3B2611'); g.addColorStop(1, '#1E1207');
+  rr(x, y, w, h, 20); ctx.fillStyle = g; ctx.fill();
+
+  ctx.save(); rr(x, y, w, h, 20); ctx.clip();
+  // plank seams running the long way, plus a few scuffs
+  ctx.globalAlpha = .55;
+  for (let i = 1; i < 5; i++) {
+    const xx = x + i * w / 5;
+    ctx.fillStyle = 'rgba(0,0,0,.34)'; ctx.fillRect(xx - 1.5, y, 3, h);
+    ctx.fillStyle = 'rgba(255,190,120,.05)'; ctx.fillRect(xx + 1.5, y, 1.5, h);
+  }
+  const rs = mulberry32(9021);
+  ctx.globalAlpha = .13; ctx.strokeStyle = '#000'; ctx.lineWidth = 2.2;
+  for (let i = 0; i < 22; i++) {
+    const sx = x + rs() * w, sy = y + rs() * h, a = rs() * TAU, ln = 18 + rs() * 60;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + Math.cos(a) * ln, sy + Math.sin(a) * ln); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  const sg = ctx.createRadialGradient(VW * .5, y - h * .1, 10, VW * .5, y + h * .35, h * .95);
+  sg.addColorStop(0, 'rgba(255,205,140,.12)'); sg.addColorStop(1, 'rgba(255,205,140,0)');
+  ctx.fillStyle = sg; ctx.fillRect(x, y, w, h);
+  ctx.restore();
+
+  ctx.lineWidth = 9; ctx.strokeStyle = C.woodDark; rr(x, y, w, h, 20); ctx.stroke();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; rr(x - 4.5, y - 4.5, w + 9, h + 9, 24); ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,200,140,.16)'; rr(x + 5, y + 5, w - 10, h - 10, 15); ctx.stroke();
+  ctx.restore();
+}
+
+/* The wall and the bench never change, and between them they are a thousand
+   path segments a frame. Bake them once per layout and blit.              */
+function buildBG() {
+  BG = document.createElement('canvas');
+  BG.width = cv.width; BG.height = cv.height;
+  const real = ctx;
+  ctx = BG.getContext('2d');
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  drawBG();
+  drawBenchStatic();
+  ctx = real;
+  bgDirty = false;
+}
+
+function drawBenchLive() {
+  if (!G.overload || G.state !== 'play') return;
+  const x = L.aL, y = L.aT, w = L.aR - L.aL, h = L.aB - L.aT;
+  ctx.save();
+  rr(x, y, w, h, 20); ctx.clip();
+  ctx.fillStyle = rgba(C.volt, .05 + (.5 + Math.sin(T * 8) * .5) * .045);
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+/* The hopper: a brass-lipped mouth cut into the bottom rail. It is the only
+   place on the bench where anything is worth anything.                    */
+function drawHopper() {
+  const w = L.hopW, x = L.hopX - w * .5, y = L.hopTop, h = L.hopH;
+  const pulse = G.hopPulse;
+  const carrying = held.length > 0 && G.state === 'play';
+
+  ctx.save();
+  if (carrying || pulse > 0) glow(L.hopX, L.hopY, 130, C.gold, .10 + pulse * .3 + (carrying ? .06 + Math.sin(T * 4) * .03 : 0));
+
+  // funnel cheeks
+  ctx.beginPath();
+  ctx.moveTo(x - 26, y + h); ctx.lineTo(x + 6, y); ctx.lineTo(x + w - 6, y); ctx.lineTo(x + w + 26, y + h); ctx.closePath();
+  ctx.fillStyle = C.woodDark; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; ctx.stroke();
+
+  // the dark mouth
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(L.hopX, y + 16, w * .43, 17, 0, 0, TAU); ctx.clip();
+  ctx.fillStyle = '#0A0603'; ctx.fillRect(x, y - 20, w, 60);
+  const mg = ctx.createLinearGradient(0, y - 2, 0, y + 34);
+  mg.addColorStop(0, rgba(C.gold, .16 + pulse * .5)); mg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = mg; ctx.fillRect(x, y - 20, w, 60);
+  ctx.restore();
+
+  // brass lip
+  ctx.beginPath(); ctx.ellipse(L.hopX, y + 16, w * .43, 17, 0, 0, TAU);
+  ctx.lineWidth = 6; ctx.strokeStyle = mix(C.goldDeep, C.gold, .3 + pulse * .7); ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = rgba(C.goldLite, .5 + pulse * .5); ctx.stroke();
+
+  // slats down the throat
+  ctx.globalAlpha = .5;
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(x - 8 - i * 5, y + 26 + i * 12, w + 16 + i * 10, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  const lbl = carrying ? 'DROP  ' + commas(payout()) : 'HOPPER';
+  const bob = carrying ? Math.sin(T * 5) * 2 : 0;
+  txt(lbl, L.hopX, y + h - 10 + bob, carrying ? 19 : 15,
+      carrying ? C.goldLite : 'rgba(255,215,170,.55)', C.ink, carrying ? 5 : 4, null, carrying ? 900 : 800);
+  ctx.restore();
+}
+
+/* Bolted iron plate, pale ceramic insulator, cold steel terminal. Deliberately
+   square-shouldered and colourless: on this bench warm means take it and cold
+   means it will take from you, and nothing that can hurt you is ever allowed
+   to share a silhouette or a hue with something worth picking up.          */
+function drawPosts() {
+  for (let i = 0; i < posts.length; i++) {
+    const P = posts[i], b = P.buzz;
+    if (b > .02) glow(P.x, P.y, 40 + b * 30, C.volt, .14 + b * .42);
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(P.x + 2, P.y + 9, 20, 8, 0, 0, TAU);
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fill();
+
+    // base plate + corner bolts
+    rr(P.x - 17, P.y - 17, 34, 34, 7);
+    ctx.fillStyle = '#232A33'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = C.ink; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.13)';
+    for (let k = 0; k < 4; k++) {
+      ctx.beginPath();
+      ctx.arc(P.x + (k & 1 ? 11.5 : -11.5), P.y + (k & 2 ? 11.5 : -11.5), 2.4, 0, TAU); ctx.fill();
+    }
+
+    // ceramic stack
+    for (let k = 0; k < 2; k++) {
+      const r = 13.5 - k * 4.4;
+      ctx.beginPath(); ctx.arc(P.x, P.y - k * 1.6, r, 0, TAU);
+      const g = ctx.createLinearGradient(P.x - r, P.y - r, P.x + r * .4, P.y + r);
+      g.addColorStop(0, '#F2F7FB'); g.addColorStop(.5, '#B4C2CF'); g.addColorStop(1, '#5A6774');
+      ctx.fillStyle = g; ctx.fill();
+      ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(14,10,6,.9)'; ctx.stroke();
+    }
+
+    // terminal — the only part that lights
+    ctx.beginPath(); ctx.arc(P.x, P.y - 3.2, 5.6, 0, TAU);
+    ctx.fillStyle = mix('#2B333D', C.volt, b); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = C.ink; ctx.stroke();
+    if (b > .02) glow(P.x, P.y - 3.2, 16 + b * 12, C.volt, .55 * b);
+    ctx.restore();
+  }
+}
+
+/* Telegraph is a dashed line that fills in and a rising buzz; live is a
+   jagged double-stroke. You always get half a second of warning, and the
+   warning is on the bench, not in the HUD.                                */
+/* Three states per doorway, and the player must be able to tell them apart at
+   a glance while moving: open is a hairline groove, charging is a filling
+   dashed line plus a rising buzz, live is lightning. A doorway you fit through
+   also paints its threshold gold, so "can I make it" is answered in colour
+   before you have to answer it in nerve.                                   */
+function drawArcs() {
+  const HR = hitR(held.length);
+  const carrying = held.length > 0 && G.state === 'play';
+  ctx.save();
+  for (let r = 0; r < rows.length; r++) {
+    const R = rows[r];
+    if (!R.armed) continue;
+
+    // exactly where this load can cross, right now
+    if (carrying) {
+      const rg = passRanges(R, HR);
+      ctx.save();
+      ctx.lineCap = 'round';
+      for (let k = 0; k < rg.length; k++) {
+        const w = rg[k][1] - rg[k][0];
+        if (w < 8) continue;
+        ctx.globalAlpha = .16 + Math.min(w / 240, 1) * .34;
+        ctx.strokeStyle = C.gold; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(rg[k][0], R.y); ctx.lineTo(rg[k][1], R.y); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for (let i = 0; i < R.segs.length; i++) {
+      const s = R.segs[i];
+
+      if (!s.live) {
+        // the groove: where the row exists at all
+        ctx.save();
+        ctx.globalAlpha = s.ch > 0 ? .12 : .16;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(s.x0 + 12, R.y); ctx.lineTo(s.x1 - 12, R.y); ctx.stroke();
+        ctx.restore();
+      }
+
+      if (s.ch > 0 && !s.live) {
+        ctx.save();
+        ctx.globalAlpha = .2 + s.ch * .65;
+        ctx.strokeStyle = mix(C.voltDeep, C.volt, s.ch);
+        ctx.lineWidth = 1.8 + s.ch * 2.8; ctx.lineCap = 'round';
+        ctx.setLineDash([7, 11]); ctx.lineDashOffset = -T * 52;
+        ctx.beginPath(); ctx.moveTo(s.x0, R.y); ctx.lineTo(s.x1, R.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+      if (!s.live) continue;
+
+      const len = s.w, n = Math.max(5, Math.round(len / 26)), jag = 9 * s.on;
+      ctx.globalCompositeOperation = 'lighter';
+      for (let pass = 0; pass < 2; pass++) {
+        const rn = mulberry32(s.seed + Math.floor(T * 34));
+        ctx.beginPath(); ctx.moveTo(s.x0, R.y);
+        for (let k = 1; k < n; k++) {
+          const t = k / n;
+          ctx.lineTo(s.x0 + len * t, R.y + (rn() - .5) * 2 * jag * Math.sin(t * Math.PI));
+        }
+        ctx.lineTo(s.x1, R.y);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.globalAlpha = pass ? .95 * s.on : .30 * s.on;
+        ctx.lineWidth = pass ? 3.4 : 15;
+        ctx.strokeStyle = pass ? '#F2FCFF' : C.volt;
+        ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      glow(s.x0 + len * ((Math.sin(T * 9 + s.seed) * .5 + .5)), R.y, 26, C.volt, .26 * s.on);
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* Horseshoe magnet, top-down, painted red with steel poles. It rotates to
+   face the way you are dragging, so a fast sweep looks like a sweep.      */
+/* Reach and hitbox, drawn under everything so the bench stays legible. */
+function drawField() {
+  const n = held.length;
+  const FR = fieldR(n), HR = hitR(n);
+
+  // the field — how far you reach. A rim, not a stain: a filled disc this big
+  // just muddies the bench underneath it.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const fg = ctx.createRadialGradient(M.x, M.y, FR * .62, M.x, M.y, FR);
+  fg.addColorStop(0, rgba(C.ember, 0));
+  fg.addColorStop(.55, rgba(C.ember, .045));
+  fg.addColorStop(1, rgba(C.gold, .12));
+  ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(M.x, M.y, FR, 0, TAU); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.globalAlpha = .30 + Math.sin(T * 3) * .06;
+  ctx.strokeStyle = C.gold; ctx.lineWidth = 1.8;
+  ctx.setLineDash([5, 13]); ctx.lineDashOffset = -T * 28;
+  ctx.beginPath(); ctx.arc(M.x, M.y, FR, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // the hitbox — the number that kills you, drawn as a shape. Past thirty it
+  // starts to pulse red, because by then the honest advice is "go home".
+  if (n > 3) {
+    const fat = clamp((n - 26) / 24, 0, 1);
+    const pul = fat > 0 ? .5 + Math.sin(T * (6 + fat * 8)) * .5 : 0;
+    ctx.save();
+    ctx.globalAlpha = .16 + Math.min(n, 40) / 40 * .2 + fat * pul * .3;
+    ctx.strokeStyle = mix(C.volt, C.red, fat * (.4 + pul * .6));
+    ctx.lineWidth = 2.2 + fat * 2;
+    ctx.setLineDash([3, 7]); ctx.lineDashOffset = T * 22;
+    ctx.beginPath(); ctx.arc(M.x, M.y, HR + 8, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+    if (n >= HOLD_MAX) {
+      txt('FULL', M.x, M.y + HR + 26, 15, C.red, C.ink, 5, null, 900);
+    }
+  }
+}
+
+function drawMagnet() {
+  const n = held.length;
+  const danger = M.stun > 0;
+  // a pool of shadow so the magnet separates from the churn around it
+  ctx.save();
+  ctx.beginPath(); ctx.arc(M.x, M.y, 28, 0, TAU);
+  ctx.fillStyle = 'rgba(8,4,2,.5)'; ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(M.x, M.y); ctx.rotate(M.rot);
+  const R = 20, r = 10.8, gap = .30;
+  const body = danger ? mix(C.red, C.volt, .5 + Math.sin(T * 40) * .5) : C.red;
+  ctx.save(); ctx.translate(2, 3.4);
+  ctx.beginPath(); ctx.arc(0, 0, R, gap * Math.PI, (2 - gap) * Math.PI); ctx.arc(0, 0, r, (2 - gap) * Math.PI, gap * Math.PI, true); ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fill(); ctx.restore();
+
+  const drawU = () => { ctx.beginPath(); ctx.arc(0, 0, R, gap * Math.PI, (2 - gap) * Math.PI); ctx.arc(0, 0, r, (2 - gap) * Math.PI, gap * Math.PI, true); ctx.closePath(); };
+  drawU(); ctx.lineWidth = 3.6; ctx.lineJoin = 'round'; ctx.strokeStyle = C.ink; ctx.stroke();
+  const bg = ctx.createLinearGradient(-R, -R, R * .4, R);
+  bg.addColorStop(0, tone(body, 1.45)); bg.addColorStop(.5, body); bg.addColorStop(1, tone(body, .5));
+  drawU(); ctx.fillStyle = bg; ctx.fill();
+
+  // steel poles on the open ends
+  for (let s = -1; s <= 1; s += 2) {
+    const a = gap * Math.PI * s;
+    ctx.save(); ctx.rotate(a);
+    ctx.beginPath();
+    ctx.moveTo(r, 0); ctx.lineTo(R, 0);
+    ctx.lineTo(R, -7 * s); ctx.lineTo(r, -7 * s); ctx.closePath();
+    ctx.save(); ctx.rotate(-a); ctx.restore();
+    ctx.fillStyle = '#C9D4E0'; ctx.fill();
+    ctx.lineWidth = 3.2; ctx.strokeStyle = C.ink; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.restore();
+  }
+  // gloss
+  ctx.save(); drawU(); ctx.clip();
+  ctx.globalAlpha = .4; ctx.fillStyle = '#fff';
+  ctx.rotate(-.5); ctx.fillRect(-R - 6, -R * .74, R * 2 + 12, 4.4);
+  ctx.restore();
+  ctx.restore();
+
+  glow(M.x, M.y, 30 + n * .5, danger ? C.volt : C.ember, .18 + Math.min(n, 40) * .004);
+}
+
+/* The greed number, in your hand: what this load is worth if you make it
+   home. It grows and warms as the load does, so the decision to run for the
+   hopper is made by looking at one number that is physically attached to
+   the thing you are steering.                                            */
+function drawCarry() {
+  const n = held.length;
+  if (!n || G.state !== 'play') return;
+  const v = payout();
+  const CR = clusterR(n);
+  const y = M.y - CR - 30;
+  const big = clamp(n / 30, 0, 1);
+  const sc = 1 + big * .5;
+  ctx.save();
+  ctx.translate(M.x, Math.max(L.aT + 26, y)); ctx.scale(sc, sc);
+  txt(commas(v), 0, 0, 26, n >= 20 ? C.goldLite : C.cream, C.ink, 6.5);
+  txt(n + '  ×' + loadMult(n).toFixed(1) + (G.heat > 1.01 ? '  ×' + G.heat.toFixed(1) : '')
+        + (G.valMul > 1 ? '  ×' + G.valMul : ''),
+      0, 19, 13, rgba(C.gold, .95), C.ink, 4, null, 800);
+  ctx.restore();
+}
+
+function drawScrapAll() {
+  for (let i = 0; i < scrap.length; i++) {
+    const s = scrap[i];
+    if (s.sc <= 0) continue;
+    if (s.cool > 0) { ctx.save(); ctx.globalAlpha = .35 + Math.sin(T * 26) * .18; }
+    if (s.hot > .05) glow(s.x, s.y, 22, MET[s.met].glow, s.hot * .22);
+    drawScrap(s.k, s.x, s.y, s.rot, s.met, s.sc, s.hot);
+    if (s.cool > 0) ctx.restore();
+  }
+}
+function drawHeld() {
+  for (let i = 0; i < held.length; i++) {
+    const s = held[i];
+    drawScrap(s.k, s.x, s.y, s.rot, s.met, 1, .35);
+  }
+}
+function drawFlyers() {
+  for (let i = 0; i < flyers.length; i++) {
+    const f = flyers[i]; if (f.t < 0) continue;
+    glow(f.x, f.y, 20, C.gold, .22);
+    drawScrap(f.k, f.x, f.y, f.rot, f.met, 1, .5);
+  }
+}
+function drawParts() {
+  ctx.save();
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i], a = clamp(p.life, 0, 1);
+    ctx.globalCompositeOperation = p.add ? 'lighter' : 'source-over';
+    ctx.globalAlpha = p.add ? a : a * .9;
+    ctx.fillStyle = p.col;
+    if (p.flat) {
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillRect(-p.r, -p.r * .5, p.r * 2, p.r);
+      ctx.restore();
+    } else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (p.add ? a : 1), 0, TAU); ctx.fill(); }
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.restore();
+}
+function drawRings() {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < rings.length; i++) {
+    const r = rings[i], f = r.t / r.dur;
+    ctx.globalAlpha = (1 - f) * (1 - f) * .95;
+    ctx.beginPath(); ctx.arc(r.x, r.y, lerp(r.r0, r.r1, eOut(f)), 0, TAU);
+    ctx.lineWidth = r.w * (1 - f * .85); ctx.strokeStyle = r.col; ctx.stroke();
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+function drawPops() {
+  for (let i = 0; i < pops.length; i++) {
+    const p = pops[i], f = p.t / p.dur;
+    const y = p.y - eOut(clamp(f * 1.6, 0, 1)) * 56;
+    const sc = f < .18 ? eBack(f / .18) : 1;
+    ctx.save(); ctx.globalAlpha = clamp((1 - f) * 1.8, 0, 1);
+    ctx.translate(p.x + p.vx * f, y); ctx.scale(sc, sc);
+    if (p.sub) txt(p.sub, 0, -p.size * .8, p.size * .44, C.gold, C.ink, 5);
+    txt(p.s, 0, 0, p.size, p.col, C.ink, p.size * .22);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawBanner() {
+  if (!G.banner) return;
+  const f = G.bannerT / .95; if (f >= 1) { G.banner = null; return; }
+  const y = L.aT + 82;
+  const sc = f < .16 ? eBack(f / .16) : (f > .8 ? lerp(1, .9, (f - .8) / .2) : 1);
+  ctx.save();
+  ctx.globalAlpha = clamp((1 - f) * 2.4, 0, 1);
+  ctx.translate(VW * .5, y); ctx.scale(sc, sc); ctx.rotate(-.035);
+  txt(G.banner.text, 0, 0, 48, G.banner.col, C.ink, 10);
+  if (G.banner.sub) txt(G.banner.sub, 0, 32, 18, C.cream, C.ink, 5);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* --------------------------------------------------------------- chrome  */
+function drawHUD() {
+  pill(16, L.hudY, 62, L.hudH);
+  ctx.fillStyle = C.cream;
+  ctx.fillRect(36, L.hudY + 14, 7, 18); ctx.fillRect(50, L.hudY + 14, 7, 18);
+
+  const tw = 132, tx = VW * .5 - tw * .5;
+  const low = G.time <= OVERLOAD_AT;
+  pill(tx, L.hudY, tw, L.hudH, low ? { bg: mix(C.hud, '#0E4A78', .5 + Math.sin(T * 11) * .4), line: 'rgba(160,225,255,.8)' } : null);
+  const cxx = tx + 27, cyy = L.hudY + L.hudH * .5;
+  ctx.beginPath(); ctx.arc(cxx, cyy, 10, 0, TAU); ctx.lineWidth = 2.6; ctx.strokeStyle = low ? C.volt : C.cream; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cxx, cyy); ctx.lineTo(cxx, cyy - 6); ctx.moveTo(cxx, cyy); ctx.lineTo(cxx + 4.5, cyy + 2); ctx.lineWidth = 2.4; ctx.stroke();
+  const mm = Math.floor(G.time / 60), ss = Math.floor(G.time % 60);
+  const sc = low ? 1 + Math.max(0, Math.sin(T * 11)) * .07 : 1;
+  ctx.save(); ctx.translate(tx + tw * .5 + 12, cyy); ctx.scale(sc, sc);
+  txt('0' + mm + ':' + (ss < 10 ? '0' : '') + ss, 0, 1, 27, low ? C.volt : '#fff', null, 0);
+  ctx.restore();
+
+  const cw = 128, cx2 = VW - 16 - cw;
+  pill(cx2, L.hudY, cw, L.hudH);
+  const cp = 1 + G.coinPulse * .22;
+  ctx.save(); ctx.translate(cx2 + 24, L.hudY + L.hudH * .5); ctx.scale(cp, cp);
+  coinIcon(0, 0, 13, 0); ctx.restore();
+  const tot = Math.round(G.score);
+  txt(commas(tot), cx2 + cw - 14, L.hudY + L.hudH * .5 + 1, tot > 99999 ? 19 : 22, '#fff', null, 0, 'right');
+}
+
+/* Bottom plaque: heat on the left (the run-long combo you lose when you get
+   greedy once too often) and the ghost rival on the right.                */
+function drawPlaque() {
+  const x = 16, y = L.plaqueY, w = VW - 32, h = L.plaqueH;
+  const best = PB.score || 0;
+  const beat = best > 0 && G.score > best;
+  plaque(x, y, w, h, 16, beat ? { f0: '#FFE9A8', f1: C.gold, border: '#6B3D06' } : {});
+
+  txt('HEAT', x + 26, y + 26, 13, 'rgba(60,32,10,.62)', null, 0, 'left', 800);
+  const hs = 1 + G.heatFlash * .22;
+  ctx.save(); ctx.translate(x + 26, y + 51); ctx.scale(hs, hs);
+  txt('×' + G.heat.toFixed(1), 0, 0, 26, G.heat >= 2 ? '#8E3A04' : '#2A1400', null, 0, 'left');
+  ctx.restore();
+  const hbw = 62, hbx = x + 96, hby = y + 47;                 // beside the number, never under it
+  ctx.fillStyle = 'rgba(60,32,10,.28)'; rr(hbx, hby, hbw, 7, 3.5); ctx.fill();
+  ctx.fillStyle = G.heat >= 2 ? '#FF8C2A' : '#8E4A12'; rr(hbx, hby, hbw * clamp((G.heat - 1) / 2, 0, 1), 7, 3.5); ctx.fill();
+
+  if (best > 0) {
+    const bw = w - 214, bx = x + 184, by = y + h * .5 + 12;
+    txt(beat ? 'AHEAD OF YOUR BEST' : 'YOUR BEST  ' + commas(best), x + w - 26, y + 26, 13,
+        beat ? '#8E3A04' : 'rgba(60,32,10,.62)', null, 0, 'right', 800);
+    ctx.fillStyle = 'rgba(60,32,10,.28)'; rr(bx, by, bw, 8, 4); ctx.fill();
+    const f = clamp(G.score / best, 0, 1);
+    ctx.fillStyle = beat ? '#FF8C2A' : '#8E4A12'; rr(bx, by, bw * f, 8, 4); ctx.fill();
+    if (!beat) { ctx.fillStyle = 'rgba(60,32,10,.6)'; ctx.fillRect(bx + bw - 1.5, by - 3, 2.5, 14); }
+  } else {
+    txt('SET A SCORE', x + w - 26, y + 26, 13, 'rgba(60,32,10,.62)', null, 0, 'right', 800);
+    txt('carry it home or lose it', x + w - 26, y + 49, 15, 'rgba(60,32,10,.5)', null, 0, 'right', 800);
+  }
+  if (beat) glow(x + w * .5, y + h * .5, 200, C.gold, .10 + Math.sin(T * 6) * .04);
+}
+
+function drawVignette() {
+  const g = ctx.createRadialGradient(VW * .5, VH * .46, VH * .22, VW * .5, VH * .5, VH * .78);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.62)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  if (G.overload && G.state === 'play') {
+    const p = (Math.sin(T * 8) * .5 + .5);
+    const g2 = ctx.createRadialGradient(VW * .5, VH * .5, VH * .28, VW * .5, VH * .5, VH * .70);
+    g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, rgba(C.volt, .16 * p));
+    ctx.fillStyle = g2; ctx.fillRect(0, 0, VW, VH);
+  }
+}
+
+/* --------------------------------------------------------------- screens */
+function drawHint() {
+  if (G.hint <= .02 || G.state !== 'play') return;
+  ctx.save(); ctx.globalAlpha = clamp(G.hint, 0, 1) * (.7 + Math.sin(T * 3.4) * .16);
+  if (held.length === 0) {
+    txt('DRAG  TO  SWEEP  UP  SCRAP', VW * .5, L.aT + 40, 20, C.cream, C.ink, 6);
+  } else {
+    txt('NOW  CARRY  IT  TO  THE  HOPPER', VW * .5, L.aT + 40, 20, C.goldLite, C.ink, 6);
+    txt('the fuller you are, the more it pays — and the less you fit', VW * .5, L.aT + 64, 14, 'rgba(255,220,180,.9)', C.ink, 4, null, 700);
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+function drawCountdown() {
+  const n = 3 - Math.floor(G.t / .5);
+  const f = (G.t / .5) % 1;
+  ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, VW, VH); ctx.restore();
+  if (G.t < 1.5) {
+    const sc = 1 + (1 - eOut(f)) * .9;
+    ctx.save(); ctx.translate(VW * .5, VH * .44); ctx.scale(sc, sc); ctx.globalAlpha = clamp(1 - f * .5, 0, 1);
+    txt(String(Math.max(1, n)), 0, 0, 128, C.gold, C.ink, 16);
+    ctx.restore();
+  } else {
+    const ff = (G.t - 1.5) / .25;
+    ctx.save(); ctx.translate(VW * .5, VH * .44); ctx.scale(1 + eOut(ff) * .7, 1 + eOut(ff) * .7); ctx.globalAlpha = 1 - ff;
+    txt('HAUL!', 0, 0, 88, '#FFF0AE', C.ink, 14);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTitle() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,4,2,.80)'; ctx.fillRect(0, 0, VW, VH);
+  const cy = VH * .22;
+  glow(VW * .5, cy, 240, C.gold, .22);
+  txt('HAUL', VW * .5, cy, 112, C.gold, C.ink, 17);
+  txt('EVERMORE  ARCADE', VW * .5, cy + 74, 15, 'rgba(255,215,170,.7)', C.ink, 5, null, 800);
+
+  // the loop in one animation: sweep, fill, bank, empty
+  const dy = VH * .445, ph = (T * .42) % 1;
+  const pull = clamp(ph / .55, 0, 1);
+  const dropn = ph > .78 ? clamp((ph - .78) / .22, 0, 1) : 0;
+  const count = Math.round(lerp(0, 14, pull) * (1 - dropn));
+  const dr = fieldR(count) * .62;
+  ctx.save();
+  ctx.globalAlpha = .35; ctx.strokeStyle = C.gold; ctx.lineWidth = 1.8;
+  ctx.setLineDash([5, 13]); ctx.lineDashOffset = -T * 28;
+  ctx.beginPath(); ctx.arc(VW * .5, dy, dr, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]); ctx.restore();
+  for (let i = 0; i < 14; i++) {
+    const k = i % 7;
+    const held_ = i < count;
+    const a0 = i / 14 * TAU + T * .35;
+    // the loose ring is flattened and capped so it can never climb into the
+    // subtitle on a short, tablet-shaped viewport
+    const far = 132 - pull * 88;
+    const rr2 = held_ ? 30 + (i >= 6 ? 14 : 0) : far + (i % 3) * 16;
+    const a = held_ ? (T * 1.15 * (i >= 6 ? .84 : 1) + (i % 6) / 6 * TAU) : a0;
+    drawScrap(k, VW * .5 + Math.cos(a) * rr2, dy + Math.sin(a) * rr2 * (held_ ? 1 : .46), T * 1.6 + i, KIND[k].met, 1, held_ ? .35 : 0);
+  }
+  ctx.save(); ctx.translate(VW * .5, dy); ctx.rotate(T * .5);
+  const R = 23, r = 12.5, gap = .30;
+  const drawU = () => { ctx.beginPath(); ctx.arc(0, 0, R, gap * Math.PI, (2 - gap) * Math.PI); ctx.arc(0, 0, r, (2 - gap) * Math.PI, gap * Math.PI, true); ctx.closePath(); };
+  drawU(); ctx.lineWidth = 3.6; ctx.lineJoin = 'round'; ctx.strokeStyle = C.ink; ctx.stroke();
+  const bg = ctx.createLinearGradient(-R, -R, R * .4, R);
+  bg.addColorStop(0, tone(C.red, 1.45)); bg.addColorStop(.5, C.red); bg.addColorStop(1, tone(C.red, .5));
+  drawU(); ctx.fillStyle = bg; ctx.fill();
+  ctx.restore();
+
+  const ly = VH * .615;
+  const line = (t, y, s, c) => txt(t, VW * .5, y, s, c || C.cream, C.ink, s * .26, null, 800);
+  line('DRAG the magnet — scrap sticks to it', ly, 19);
+  line('Nothing scores until you reach the HOPPER', ly + 27, 19);
+  line('A fatter load pays more — and fits through less', ly + 55, 18, C.gold);
+  line('Touch a live arc and you drop the lot', ly + 82, 16, C.volt);
+
+  const bw = 252, bx = VW * .5 - bw * .5, by = VH * .785;
+  const pu = 1 + Math.sin(T * 3) * .015;
+  ctx.save(); ctx.translate(VW * .5, by + 33); ctx.scale(pu, pu); ctx.translate(-VW * .5, -(by + 33));
+  plaque(bx, by, bw, 66, 16, { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+  txt('TAP  TO  START', VW * .5, by + 34, 26, '#3A1E00', null, 0);
+  ctx.restore();
+
+  txt("TODAY'S  BENCH  #" + G.seedHex, VW * .5, VH - 58, 14, 'rgba(255,215,170,.66)', C.ink, 4, null, 800);
+  if (PB.score > 0) txt('YOUR BEST  ' + commas(PB.score) + (PB.load > 1 ? '   ·   LOAD ' + PB.load : ''), VW * .5, VH - 32, 15, C.gold, C.ink, 4, null, 900);
+  ctx.restore();
+}
+
+function drawPause() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,3,1,.78)'; ctx.fillRect(0, 0, VW, VH);
+  txt('PAUSED', VW * .5, VH * .5 - 78, 48, C.gold, C.ink, 11);
+  const btn = (y, h, label, col) => {
+    plaque(VW * .5 - 120, y, 240, h, 14, col || {});
+    txt(label, VW * .5, y + h * .5 + 1, 22, '#3A1E00', null, 0);
+  };
+  btn(VH * .5 - 10, 68, 'RESUME', { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+  btn(VH * .5 + 74, 56, S.on ? 'SOUND  ON' : 'SOUND  OFF');
+  btn(VH * .5 + 146, 56, 'QUIT');
+  ctx.restore();
+}
+
+function drawOver() {
+  const f = clamp(G.endT / .5, 0, 1);
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,3,1,' + (.90 * f) + ')'; ctx.fillRect(0, 0, VW, VH);
+
+  const topY = VH * .16;
+  ctx.save(); ctx.globalAlpha = f;
+  txt("SHIFT'S  OVER", VW * .5, topY, 38, '#FFD9A8', C.ink, 10);
+  ctx.restore();
+
+  const sf = clamp((G.endT - .28) / .42, 0, 1);
+  if (sf > 0) {
+    const w = 400, x = VW * .5 - w * .5, y = topY + 34;
+    const sc = 1 + (1 - eOut(sf)) * .55;
+    ctx.save(); ctx.translate(VW * .5, y + 60); ctx.scale(sc, sc); ctx.translate(-VW * .5, -(y + 60));
+    ctx.globalAlpha = clamp(sf * 2, 0, 1);
+    plaque(x, y, w, 132, 18, G.newBest ? { f0: '#FFE9A8', f1: C.gold, border: '#6B3D06' } : {});
+    txt('BANKED', VW * .5, y + 26, 15, 'rgba(60,32,10,.7)', null, 0);
+    const v = Math.round(G.scoreShown);
+    txt(commas(v), VW * .5, y + 69, v > 999999 ? 50 : v > 99999 ? 58 : 64, '#2A1400', null, 0);
+    const delta = G.score - (G.newBest ? 0 : PB.score);
+    txt(G.newBest ? '★  NEW  PERSONAL  BEST  ★' : (PB.score > 0 ? commas(Math.abs(delta)) + '  FROM  YOUR  BEST' : 'FIRST  RUN'),
+        VW * .5, y + 112, 14, G.newBest ? '#8E3A04' : 'rgba(60,32,10,.7)', null, 0);
+    ctx.restore();
+  }
+
+  const sf2 = clamp((G.endT - .70) / .4, 0, 1);
+  if (sf2 > 0) {
+    ctx.save(); ctx.globalAlpha = sf2;
+    const rows = [
+      ['DROPS', String(G.banks), C.cream],
+      ['BIGGEST LOAD', String(G.bestLoad) + ' pcs', G.bestLoad >= 25 ? C.gold : C.cream],
+      ['BIGGEST DROP', commas(G.bestDrop), G.bestDrop >= 3000 ? C.gold : C.cream],
+      ['PEAK HEAT', '×' + G.peakHeat.toFixed(1), G.peakHeat >= 2 ? C.gold : C.cream],
+      ['SCRAP PULLED', String(G.picked), C.cream],
+    ];
+    if (G.zaps > 0) rows.push(['ZAPPED', String(G.zaps), C.volt]);
+    const y0 = topY + 208;
+    for (let i = 0; i < rows.length; i++) {
+      const yy = y0 + i * 37 + (1 - eOut(clamp(sf2 * 1.6 - i * .12, 0, 1))) * 26;
+      txt(rows[i][0], 60, yy, 17, 'rgba(255,220,190,.66)', C.ink, 4, 'left', 800);
+      txt(rows[i][1], VW - 60, yy, 21, rows[i][2], C.ink, 5, 'right');
+      ctx.globalAlpha = sf2 * .22;
+      ctx.fillStyle = '#fff'; ctx.fillRect(60, yy + 17, VW - 120, 1);
+      ctx.globalAlpha = sf2;
+    }
+    const tip = G.zaps >= 3 ? 'you kept pushing — bank at twenty and the heat survives'
+              : G.bestLoad < 16 ? 'you banked early every time — the multiplier is the game'
+              : 'same bench for everyone today: #' + G.seedHex;
+    txt(tip, VW * .5, y0 + rows.length * 37 + 12, 14, 'rgba(255,200,160,.85)', C.ink, 4, null, 700);
+    ctx.restore();
+  }
+
+  const sf3 = clamp((G.endT - 1.0) / .35, 0, 1);
+  if (sf3 > 0) {
+    const bw = 260, bx = VW * .5 - bw * .5, by = VH * .805;
+    const pu = 1 + Math.sin(T * 3.4) * .018;
+    const gr = pu * (0.7 + eBack(sf3) * .3);
+    ctx.save(); ctx.globalAlpha = sf3;
+    ctx.translate(VW * .5, by + 36); ctx.scale(gr, gr); ctx.translate(-VW * .5, -(by + 36));
+    plaque(bx, by, bw, 72, 16, { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+    txt('AGAIN', VW * .5, by + 37, 30, '#3A1E00', null, 0);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ draw */
+function draw() {
+  if (bgDirty) buildBG();
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  ctx.save();
+  if (G.shake > .05) {
+    const a = G.shake * clamp(G.shakeT / .3, 0, 1);
+    ctx.translate((Math.random() - .5) * a, (Math.random() - .5) * a);
+    ctx.rotate((Math.random() - .5) * a * .0016);
+  }
+
+  const ui = G.state !== 'title';
+  ctx.drawImage(BG, 0, 0, VW, VH);      // wall + bench, baked
+  drawBenchLive();
+  ctx.save();
+  rr(L.aL, L.aT, L.aR - L.aL, L.aB - L.aT, 20); ctx.clip();
+  if (ui) {
+    drawHopper();
+    drawScrapAll();
+    drawPosts();
+    drawArcs();
+    drawField();
+    drawHeld();
+    drawMagnet();       // always on top of its own load — it is the cursor
+    drawFlyers();
+    drawRings();
+    drawParts();
+    drawHint();
+  }
+  ctx.restore();
+
+  if (ui) drawCarry();
+  drawPops();
+  drawBanner();
+  drawVignette();
+  if (ui) { drawHUD(); drawPlaque(); }
+
+  ctx.restore();
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+
+  if (G.flash > .004) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = rgba(G.flashCol, G.flash * .85); ctx.fillRect(0, 0, VW, VH);
+    ctx.restore();
+  }
+  if (G.state === 'count') drawCountdown();
+  if (G.state === 'title') drawTitle();
+  if (G.state === 'pause') drawPause();
+  if (G.state === 'over') drawOver();
+}
+
+/* ------------------------------------------------------------------ loop */
+let last = performance.now(), acc = 0;
+const STEP = 1 / 120;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > .25) dt = .25;
+  if (G.freeze > 0) { G.freeze -= dt; acc = 0; }
+  else { acc += dt; let guard = 0; while (acc >= STEP && guard++ < 12) { update(STEP); acc -= STEP; } }
+  if (G.state === 'over') {
+    G.endT += dt;
+    G.scoreShown += (G.score - G.scoreShown) * Math.min(1, dt * 5.5);
+    if (Math.abs(G.score - G.scoreShown) < 1) G.scoreShown = G.score;
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+makeSprites();
+resetRun();
+G.state = 'title';
+requestAnimationFrame(frame);
+
+/* tuning handle — only when asked for, so the shipped file stays clean */
+if (location.search.indexOf('debug') >= 0) window.__HAUL = {
+  G, M, L, C, S, scrap, held, posts, rows, startRun, update, bank, zapped,
+  fieldR, clusterR, hitR, doorGap, passRanges, loadMult, payout, KIND, draw,
+  get T() { return T; },
+  sim(sec, step) { step = step || 1 / 120; for (let i = 0; i < Math.round(sec / step); i++) update(step); },
+};
+</script>
+</body>
+</html>
