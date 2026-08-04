@@ -64,6 +64,22 @@
   .sub b{color:var(--idle);font-weight:600}
   .big{font-size:clamp(46px,16vw,84px);font-weight:700;line-height:1;font-variant-numeric:tabular-nums;color:var(--armed);text-shadow:0 0 40px rgba(255,61,127,.45)}
   .best{margin-top:10px;font-size:11px;letter-spacing:.22em;color:#7f8fbe}
+  .btn{
+    pointer-events:auto;
+    display:block; width:min(320px,78vw); margin:24px auto 0;
+    padding:20px 18px;
+    background:rgba(111,214,255,.10);
+    border:1px solid rgba(111,214,255,.55); border-radius:2px;
+    color:#fff; font-family:var(--mono); font-size:12px;
+    letter-spacing:.30em; text-transform:uppercase;
+    -webkit-appearance:none; appearance:none; touch-action:manipulation;
+  }
+  .btn:active{background:rgba(111,214,255,.28)}
+  #err{
+    position:fixed; left:10px; right:10px; bottom:10px; z-index:99; display:none;
+    padding:12px; border:1px solid var(--armed); background:#1a0410;
+    color:#ffb8d0; font:11px/1.6 var(--mono); white-space:pre-wrap;
+  }
   .go{margin-top:26px;font-size:11px;letter-spacing:.34em;color:#fff;opacity:.9;animation:blink 1.5s steps(2,end) infinite}
   @keyframes blink{50%{opacity:.22}}
   .fail{font-size:11px;letter-spacing:.3em;color:var(--armed);margin-bottom:8px}
@@ -72,6 +88,16 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="err"></div>
+<script>
+// Registered before anything else so a fatal error in the game script becomes
+// readable on the device instead of a dead black screen.
+window.onerror=function(m,src,l,c){
+  var e=document.getElementById('err');
+  if(e){ e.style.display='block'; e.textContent='SCRIPT ERROR\n'+m+'\nline '+l+':'+c; }
+  return false;
+};
+</script>
 <svg id="gauge" class="layer"></svg>
 
 <div id="hud">
@@ -180,7 +206,8 @@ const mix2 = (a,b,t) => [lerp(a[0],b[0],t)|0, lerp(a[1],b[1],t)|0, lerp(a[2],b[2
 const rgb  = c => 'rgb('+c[0]+','+c[1]+','+c[2]+')';
 const rgba = (c,a) => 'rgba('+c[0]+','+c[1]+','+c[2]+','+a+')';
 
-const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const REDUCED = typeof matchMedia==='function' &&
+                matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // Surges run on the clock, not on depth. Depth-based marks look fine on paper
 // but at 150 m/s a 200 m band lasts two seconds, so the breather ends up longer
@@ -392,7 +419,7 @@ function moveTargetTo(x,y){
 }
 
 cv.addEventListener('pointerdown', e=>{
-  cv.setPointerCapture(e.pointerId);
+  try{ cv.setPointerCapture(e.pointerId); }catch(_){}   // throws in some webviews
   start();                                              // no-op if already playing
   if(dragId!==null) return;                             // ignore extra fingers
   dragId=e.pointerId; lastX=e.clientX; lastY=e.clientY;
@@ -414,7 +441,9 @@ cv.addEventListener('pointercancel', endDrag);
 
 // last-resort fallback: nothing layered over the canvas should ever be able to
 // lock a touch-only player out of starting
-addEventListener('pointerdown', ()=>{ start(); }, {passive:true});
+for(const ev of ['pointerdown','touchstart','mousedown']){
+  addEventListener(ev, ()=>{ start(); }, {passive:true});
+}
 
 addEventListener('keydown', e=>{
   keys[e.key.toLowerCase()]=true;
@@ -432,7 +461,9 @@ function showMenu(){
     '<h1>PLUMMET</h1><div class="rule"></div>' +
     '<div class="sub">You are falling down a live laser shaft.<br>' +
     'Steer the pod through the gaps.<br>Every 200 m the shaft surges.<br>You do not slow down.</div>' +
-    '<div class="go">TAP TO DROP</div>';
+    '<button class="btn" id="startBtn">Tap to drop</button>' +
+    '<div class="go">or press space</div>';
+  wireStart();
 }
 function showDead(){
   ui.classList.remove('hide');
@@ -443,9 +474,23 @@ function showDead(){
     '<div class="best">'+Math.floor(travel*10)+' M &nbsp;·&nbsp; '+(isBest?'NEW BEST':'BEST '+best)+
       '<br>'+grazes+' GRAZES'+(closes?' &nbsp;·&nbsp; '+closes+' CLOSE':'')+
       ' &nbsp;·&nbsp; CORE ×'+(depthScore/Math.max(1,travel*10)).toFixed(2)+'</div>' +
-    '<div class="go">TAP TO DROP AGAIN</div>';
+    '<button class="btn" id="startBtn">Drop again</button>';
+  wireStart();
 }
-function start(){ if(state==='play') return; reset(); state='play'; ui.classList.add('hide'); }
+let startLock=0;
+function start(){
+  if(state==='play') return;
+  if(Date.now()<startLock) return;                 // ignore the release that killed you
+  reset(); state='play'; ui.classList.add('hide');
+}
+// wire the panel button each time a panel is rendered
+function wireStart(){
+  startLock = Date.now()+400;
+  const b=document.getElementById('startBtn');
+  if(!b) return;
+  b.addEventListener('click', start);
+  b.addEventListener('touchend', e=>{ e.preventDefault(); startLock=0; start(); }, {passive:false});
+}
 
 // ───────────────────────────── update ─────────────────────────────
 function update(dt, real){
