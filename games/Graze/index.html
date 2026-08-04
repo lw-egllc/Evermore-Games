@@ -1,0 +1,1794 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#070A0F">
+<title>GRAZE — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#04060A;
+    touch-action:none;overscroll-behavior:none;position:fixed;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,#101823 0%,#04060A 78%)}
+  canvas{display:block;touch-action:none;
+    box-shadow:0 0 90px rgba(0,0,0,.94), 0 0 0 1px rgba(120,200,230,.10)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+
+/* =========================================================================
+   GRAZE  ·  gameId: graze  ·  simVersion: 0.1.0
+   Built against Brain_Skills/EVERMORE_ARCADE_GAME_BIBLE.md v2.0.
+
+   ## One sentence
+   Flick to hop across the traffic lanes — you score by how close you cross,
+   your haul banks when you rest on a safe line, and the tide behind you
+   never stops rising.
+
+   ## Why it works
+   The scoring band IS the threat telegraph. Every hazard drags a hot wedge
+   ahead of it, exactly `speed x 1.20s` long, split at `speed x 0.60s`.
+   Landing in the amber is worth 2.5x a clear cell; landing in the red is
+   worth 5x. So the one thing the player must read to stay safe is the same
+   thing they must read to score, and it is drawn on the board at all times.
+   That single overlap gives us §5.5's visibility inequality for free (the
+   wedge is by construction >= 1.2s of warning) and makes the greed decision
+   (§9.3) legible at a glance, on every single hop, ~1.4 times a second.
+
+   ## Archetype
+   Lane-hopper (§4.1), converted to C13 by the §4.1 table:
+     hit a hazard      -> pool lost, multiplier shatters, knocked back to the
+                          last safe line. Never ends the run.
+     caught by tide    -> pool lost, multiplier shatters, -3.0s clock,
+                          shoved clear. Never ends the run.
+   Time-driven world: YES. Every hazard position is a closed form of
+   (seed, row, tick) — no per-row simulation state — so ghosts are supported
+   and replay is exact.
+
+   ## The greed mechanic (§9.3 / §9.2C — banked)
+   Points land in an AT-RISK POOL, not the score. Resting on a safe line for
+   36 ticks banks `pool x mult`. Hopping onward before the bank fires CARRIES
+   the pool and the multiplier into the next band.
+   Rate check (see memory: rate-curves-decide-greed): carrying k bands scores
+   `k*B*mult(k)` over `k*T`, i.e. rate `B*mult(k)/T`. mult climbs linearly
+   with landing quality and PLATEAUS at 8x, so the rate peaks exactly at the
+   plateau — waiting less is worth less, waiting more is worth the same and
+   strictly riskier. The multiplier cap is what makes banking correct, and
+   the better player is the one who can safely reach it.
+
+   ## Anti-stall (§5.4 — mandatory, and this format's whole exposure)
+   Nothing scores except forward hops into new lanes, so `idle` is 0 by
+   construction. Camping on a safe line is defeated by THE TIDE, which rises
+   on the clock AND rubber-bands to within LAG rows of the player's furthest
+   point, LAG shrinking from 6.5 rows to ~2.6 in the closing phase (C8-legal:
+   elapsed_ticks + player_position only).
+
+   ## Deviations from the bible, stated
+   - Session 60s not the 80s default (C3 permits 60-90s). Beat schedule and
+     T_ramp rescaled: T_ramp = 34s so D_eff reaches 3.98 at the siren.
+   - Breathe period 13.176s not 12s. Solved so that breathe(0)=1 exactly
+     (continuous at the onramp, §5.1) AND breathe(siren)=peak (§5.1's
+     "phase to a peak"). Both constraints cannot hold at P=12.
+   - §9.5 streak drives audio/particle tiers AND the multiplier from one
+     counter, as required — but it also resets on BANK, not only on mistake,
+     because a banked multiplier that survives its own payout is a ladder.
+   - The multiplier ladder is linear (1 + 0.25*streak) rather than §9.2C's
+     x1.35-per-rung. The x1.35 rule exists to kill min-cashout laddering;
+     here the ladder is gated on landing QUALITY (clear +0 / close +1 /
+     graze +2) and resets on every bank, so min-cashout is defeated at the
+     source. Verified by the `min-cashout` bot in _grazebot.js.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ layout
+   §8.1, 390 x 844 dp reference. The three bands are disjoint. */
+const W = 390, H = 844;
+const SYS_TOP   = 48;                 // notch / status
+const HUD_H     = 56;
+const FIELD_TOP = 104;
+const FIELD_H   = 542;
+const FIELD_BOT = FIELD_TOP + FIELD_H;   // 646
+const RAIL_W    = 40;                    // score meter, left rail
+
+const COLS  = 7;
+const CELL  = 46;                        // 7 * 46 = 322
+const GRID_X = Math.round((W - COLS * CELL) / 2);   // 34
+const GRID_W = COLS * CELL;
+const ROW_H = 58;
+/* The wrap period sets the RHYTHM of the whole game, and it is the single
+   most consequential number here. A lane's cycle is SPAN/(cars * speed); at
+   SPAN = 802 a 3-car lane cycled every 1.3s, which means no cell in it is
+   ever safe for long, which means the player can never stop inside a band.
+   That kills the hop-wait-hop rhythm the genre is built on and produced 30
+   costly mistakes per run against §7.9b's budget of one per 8s. */
+const OFFS  = 389;                       // hidden lane run-up either side
+const SPAN  = GRID_W + 2 * OFFS;         // 1100 — lane wrap period
+const LX0   = GRID_X - OFFS;             // lane coord origin, in screen dp
+
+const ANCHOR_Y = FIELD_TOP + FIELD_H * 0.655;   // screen y of the camera row
+
+/* ------------------------------------------------------------------- sim
+   §11.2. Fixed 60Hz. Transcendentals appear ONLY in init-time tables and in
+   the render layer — the tick loop is +,-,*,/ and table reads. */
+const TPS = 60, DT = 1 / TPS;
+const SESSION_TICKS = 3600;              // C3 — 60.0s
+const ONRAMP_TICKS  = 240;               // §5.1 — 4.0s, D_eff = 1.0 exactly
+const CLOSING_TICKS = 900;               // C14 — last 15.0s
+const K_DIFF = 2.0, T_RAMP = 34, BREATHE_A = 0.10;
+
+const HOP_TICKS   = 8;                   // 133ms — one hop, uninterruptible
+const BUF_TICKS   = 7;                   // §7.8 input buffer
+const BANK_TICKS  = 45;                  // 750ms rest on a safe line -> bank
+const INVULN      = 45;                  // 750ms after any costly mistake
+
+const SHAVE_T = 0.60, CLOSE_T = 1.20;    // seconds-to-impact band edges
+/* §9.4, solved rather than guessed. Tier weights are 1 : 2.5 : 5 and the
+   ladder rungs are 0 / 1 / 2, so a close line and a graze line reach the
+   multiplier cap on the same number of POINTS (2.5b per rung either way) —
+   the two styles are worth the same per unit of risk, they differ in tempo.
+   With mult = 1 + 0.25*streak, cap 8 arrives at streak 28, i.e. at 2.5*b*28
+   points of haul. A steady close-line player runs ~4.1 full cycles in 60s:
+       score ~= 4.1 * (2.5*b*28) * 8  =  2296*b   ->  b = 1.74 for 4,000.
+   MEASURED, and the model was wrong: nobody runs 4.1 full cycles. The bot
+   fleet banks ~10.6 times per run at a mean effective multiplier of 4.4 on
+   a raw haul of ~650, because a hit every ~6.5s means most players cash in
+   long before the ladder tops out. Refit against that: b = 8 puts the
+   population median in four digits, which is the actual §9.4 requirement.
+   This is above §9.1's "1-10 per event" and the reason is structural — the
+   event rate is fixed by the hop (~1.3/s), not by the score scale. */
+const BASE      = [14, 22, 34];          // clear / close / graze
+/* C14's closing phase — LAST CALL. §5.6 says lift base values; two builds
+   did exactly that (x1.75, then x2.0) and the median line still banked only
+   11-12% of its score in the final 15s against C14's 25% floor. The reason
+   is structural and the bible's worked example does not have it: a banked
+   game's late scoring is gated by BANK OPPORTUNITIES, not by point values,
+   and a band crossing takes ~7.5s — so a median player gets one, sometimes
+   zero, banks inside the closing window, and their last haul dies at the
+   siren either way.
+   So the lift moves onto the BANK instead of onto the landing: from 0:45,
+   banking pays double. It lifts the same scoring rate §5.6 asks for, it
+   never touches the multiplier cap, and it is one sentence the player can
+   read off the HUD — "LAST CALL, BANKS PAY BIG" — where a quietly larger
+   base value is something nobody would ever notice. It also makes the haul
+   carried INTO the closing phase the most valuable thing on the board,
+   which is the deadline-shaped decision §9.2C exists to produce. */
+const LATE_FLAT = 34;                    // FLAT addend, not a multiplier
+const BASE_LATE = [BASE[0] + LATE_FLAT, BASE[1] + LATE_FLAT, BASE[2] + LATE_FLAT];
+const LATE_BANK = 1.5;                   // bottom of §5.6's x1.5-x2.0 range
+/* Why the closing lift is FLAT. A multiplicative bonus amplifies whatever
+   the player already has, so pushing it to x2.5 raised the expert's closing
+   share to 40% and the median's to 23% — it widened the distribution instead
+   of making the last 15 seconds matter to everybody, and p10/p50 fell to
+   0.19 against §5.3's 0.30-0.45. A flat +34 per landing is worth 3.4x to a
+   CLEAR landing and 1.8x to a GRAZE, so it compresses the tier spread
+   exactly when the board is at its most punishing, and it is worth
+   proportionally most to the player having the worst run. Same total lift,
+   opposite effect on the tails. */
+const RUNG      = [ 1,  2,  3];          // §9.2C — quality-weighted, never volume
+const MULT_STEP = 0.125;                 // cap 8x arrives at streak 56
+const MULT_CAP  = 8.0;
+/* Why the tiers are 1 : 1.8 : 3.2 and not the 1 : 2.5 : 5 they started as.
+   Landing quality drives BOTH the points and the ladder, so the two effects
+   multiply: a 5x base spread against an 8x multiplier spread is a 40x skill
+   spread, and the measured population came out bimodal — p50 260 with a
+   p99 of 15,702, i.e. p99/p50 = 60 against a §5.3 target of 3.0-4.5.
+   Letting a CLEAR landing advance the ladder by 1 is safe here and it is
+   what lifts the floor: a clear cell has to be WAITED for, and the flood
+   bounds how long anyone can wait, so it is slow volume rather than cheap
+   volume and §9.2C's laddering exploit cannot reach it. Tiers finally sat
+   at 1 : 1.57 : 2.43 — measured, not chosen. Each compression step was
+   re-run against the population before the next one. */
+/* Carry capacity. Without it the bank/carry decision is fake: once the
+   multiplier caps, carrying is worth exactly what banking is worth and the
+   only difference is risk — measured a never-bank bot at 11,966 against an
+   expert's 12,301, i.e. dead level. A cap makes carrying past it strictly
+   wasteful, so the run has a rhythm (build -> cash) instead of one decision
+   at 0:58. Set just above the multiplier-cap point (~600) so the multiplier
+   is what you chase and this is only ever the backstop. */
+const POOL_CAP  = 640;
+/* Reaching a safe line you have never reached before pays a flat crossing
+   bonus. It exists to lift the floor: it is worth ~26% of a bad run and ~8%
+   of an expert one, because a weak player's whole score is a handful of
+   completed crossings while an expert's is the multiplier. It cannot be
+   farmed — only a NEW furthest row scores, so walking back and forth over a
+   safe line pays nothing (the `shore-farm` bot measures exactly this and
+   returns 0). */
+const SHORE_BONUS = 16;
+
+const TIDE_DMG   = 180;                  // 3.0s of clock, §4.1
+const DMG_CAP    = 900;                  // §4.1 cap: 25% of the session
+const FREEZE_HIT = 10;                   // §7.3 hitstop on a costly mistake
+const START_ROW  = 3;                    // 4-row safe apron, §12 onramp
+const LAG_0      = 4.2;                  // rows the tide may fall behind, D_eff=1
+const LAG_K      = 0.55;                 // ...shrinking this much per D_eff step
+const REPRIEVE   = 2.2;                  // rows the tide is pushed back on a hit
+
+/* Rival band — set from the measured p60..p85 of the bot population
+   (src/_grazebot.js __popGraze). Not a guess; see GRAZE_DESIGN.md. */
+const RIVAL_LO = 2600, RIVAL_HI = 5200;
+
+const BASE_V   = 175;                    // dp/s before chunk + time scaling
+const V_CLAMP  = 215;                    // §5.5 handoff — see genRow()
+
+const DIRS = [[0,1],[0,-1],[-1,0],[1,0]];   // up(forward) down left right
+
+/* --------------------------------------------------------- difficulty LUT
+   §5.1. Solved phase: we need breathe(0) = 1 (continuous at the onramp) and
+   breathe(t_siren) = +1 peak (§5.1 "phase to a PEAK"). With phase 0 the peak
+   condition is tau_end/P = 1/4 + k; tau_end = 56s, k = 4 -> P = 13.176s. */
+const TAU_END = (SESSION_TICKS - ONRAMP_TICKS) / 60;      // 56.0
+const BREATHE_P = TAU_END / 4.25;                          // 13.176s
+const DEFF = new Float64Array(SESSION_TICKS + 240);
+const CUMS = new Float64Array(SESSION_TICKS + 240);        // integral of SPD
+const SPDL = new Float64Array(SESSION_TICKS + 240);
+(function buildTables(){
+  let acc = 0;
+  for (let t = 0; t < DEFF.length; t++){
+    let d;
+    if (t < ONRAMP_TICKS) d = 1.0;
+    else {
+      const tau = (t - ONRAMP_TICKS) / 60;
+      const trend = 1 + K_DIFF * Math.pow(tau / T_RAMP, 0.8);
+      const br    = 1 + BREATHE_A * Math.sin(2 * Math.PI * tau / BREATHE_P);
+      d = trend * br;
+    }
+    DEFF[t] = d;
+    /* §5.1 gives speed(τ) = speed_0 * (0.6 + 0.4*D_eff), i.e. 1.00 -> 2.19.
+       Declared deviation (§5.2 wants the carrying vector named): a lane-
+       hopper escalates on TWO vectors and the second one — lane density,
+       which rises with row index — is doing far more work here than in an
+       approach-based archetype. At the bible's coefficients the combined
+       curve put a 3-car lane on a 0.67s cycle at the siren, which is not
+       "hard", it is "uncrossable". Scaled to 1.00 -> 1.66. */
+    SPDL[t] = 0.78 + 0.22 * d;
+    CUMS[t] = acc;                       // distance factor travelled BEFORE t
+    acc += SPDL[t] * DT;
+  }
+})();
+
+/* ------------------------------------------------------------------- PRNG
+   §11.2 — xorshift128+ style, never Math.random. Separate streams so a
+   cosmetic roll can never shift a gameplay roll. */
+function RNG(seed){
+  let a = seed >>> 0 || 1, b = 0x9E3779B9, c = 0x243F6A88, d = 0xB7E15162;
+  for (let i = 0; i < 12; i++){ // warm up
+    const t = a ^ (a << 11); a = b; b = c; c = d;
+    d = (d ^ (d >>> 19) ^ t ^ (t >>> 8)) >>> 0;
+  }
+  return {
+    u32(){ const t = a ^ (a << 11); a = b; b = c; c = d;
+           d = (d ^ (d >>> 19) ^ t ^ (t >>> 8)) >>> 0; return d; },
+    f(){ return this.u32() / 4294967296; },
+    range(lo, hi){ return lo + this.f() * (hi - lo); },
+    int(n){ return this.u32() % n; }
+  };
+}
+
+/* --------------------------------------------------------- authored chunks
+   §6 — 12 hand-authored lane patterns, sequenced by seed with position
+   jitter. Pure per-object randomness is unlearnable; these are not.
+   n = hazards in the lane, len = their lengths in dp, sm = speed multiplier,
+   t = the density tier at which the chunk unlocks. */
+const CHUNKS = [
+  { n:1, len:[ 74],              sm:0.68, t:0 },   // lone hauler, slow
+  { n:2, len:[ 46, 46],          sm:0.88, t:0 },   // pair
+  { n:2, len:[100, 46],          sm:0.76, t:0 },   // hauler + car
+  { n:1, len:[ 46],              sm:1.24, t:0 },   // lone sprinter
+  { n:2, len:[146, 46],          sm:0.64, t:1 },   // long hauler
+  { n:3, len:[ 46, 46, 46],      sm:0.92, t:1 },   // convoy
+  { n:2, len:[ 46, 46],          sm:1.20, t:1 },   // fast pair
+  { n:3, len:[ 46, 100, 46],     sm:0.84, t:1 },
+  { n:3, len:[ 74, 46, 74],      sm:0.80, t:2 },
+  { n:4, len:[ 46, 46, 46, 46],  sm:0.96, t:2 },   // heavy
+  { n:3, len:[ 46, 46, 46],      sm:1.16, t:3 },   // fast convoy
+  { n:4, len:[ 46, 74, 46, 74],  sm:0.88, t:3 },   // gauntlet
+];
+
+const SHORE = 0, LANE = 1;
+
+/* ======================================================================
+   THE SIM — pure, headless-capable, allocation-free per tick.
+   makeSim(seed) is used identically by live play, by __pump(), and by
+   replay(). There is exactly one code path.
+   ====================================================================== */
+function makeSim(seed){
+  const S = {
+    seed: seed >>> 0,
+    tick: 0, wt: 0, frz: 0, frzTotal: 0, over: false,
+    row: START_ROW, col: 3,
+    hopT: HOP_TICKS, hopFromR: START_ROW, hopFromC: 3,
+    score: 0, pool: 0, streak: 0, mult: 1,
+    maxScored: START_ROW, shoreRow: START_ROW, carry: 0,
+    bankT: 0,                     // ticks resting on a safe line, -1 = not on one
+    tideRow: START_ROW - LAG_0, tideNat: START_ROW - LAG_0,
+    clockDmg: 0, invuln: 0,
+    mistakes: 0, tideHits: 0, trafficHits: 0, full: false,
+    lastTier: -1, lastCause: 0,
+    poolPeak: 0, banks: 0, hops: 0, fwd: 0,
+    tierCount: [0,0,0],
+    lateScore: 0,                 // §13.2 closing-phase gate instrumentation
+    ev: [],                       // presentation events drained by the shell
+    trace: [], _lastTraceTick: 0,
+  };
+
+  /* ------------------------------------------------- world (seed, row) only
+     Pre-generated in full at init so lazy generation can never desynchronise
+     a replay. 460 rows is above the theoretical ceiling of 6 rows/s x 60s. */
+  const rows = new Array(460);
+  (function genWorld(){
+    const rg = RNG((seed ^ 0x5EED10C) >>> 0);
+    // §12 — the start apron. Four safe rows, so the onramp is genuinely
+    // threat-free and the player orients before the first lane exists.
+    let r = 0, band = 0;
+    for (; r < START_ROW + 1; r++) rows[r] = { kind: SHORE, wide: r === START_ROW };
+    while (r < rows.length){
+      const diff = Math.min(1, (r - START_ROW) / 58);    // C8: player_position
+      const bandLen = band === 0 ? 2 : Math.min(6, 2 + Math.floor(rg.f() * (1.6 + diff * 3.2)));
+      for (let i = 0; i < bandLen && r < rows.length; i++, r++){
+        // band 0 is the tutorial band: slow chunks only, so the very first
+        // wedge the player ever reads is a wide, slow one.
+        const dtier = band === 0 ? 0 : Math.min(3, Math.floor(diff * 3.9));
+        const pool  = CHUNKS.filter(c => c.t <= dtier && (band > 0 || c.sm <= 0.95));
+        const ch    = pool[rg.int(pool.length)];
+        const dir   = rg.f() < 0.5 ? 1 : -1;
+        // §5.2 handoff: base speed is clamped at generation so the runtime
+        // speed vector never clamps mid-run; density carries above it.
+        const baseV = Math.min(V_CLAMP, BASE_V * ch.sm * (0.86 + 0.30 * diff));
+        const step  = SPAN / ch.n, jit = step * 0.17;
+        const cars  = [];
+        for (let k = 0; k < ch.n; k++){
+          cars.push({ x0: k * step + rg.range(-jit, jit), len: ch.len[k % ch.len.length] });
+        }
+        rows[r] = { kind: LANE, dir, baseV, cars, wide:false };
+      }
+      band++;
+      if (r >= rows.length) break;
+      // the safe line. Every 4th is a WIDE bank — §6 guaranteed landmark.
+      const wide = (band % 4 === 0);
+      rows[r++] = { kind: SHORE, wide, tag: wide };
+      if (wide && r < rows.length) rows[r++] = { kind: SHORE, wide: true, tag: false };
+    }
+  })();
+  S.rows = rows;
+
+  /* ------------------------------------------------------------- geometry */
+  function carX(L, car, tick){
+    let x = car.x0 + L.dir * L.baseV * CUMS[tick];
+    x = x % SPAN; if (x < 0) x += SPAN;
+    return LX0 + x;
+  }
+  function cellL(c){ return GRID_X + c * CELL; }
+
+  /* Forward distance, along the direction of travel, from a car's leading
+     edge to the near edge of a cell. <= 0 and overlapping means HIT.
+     Returns Infinity for "not applicable". */
+  function gapTo(L, car, tick, c){
+    const x = carX(L, car, tick), lo = cellL(c), hi = lo + CELL;
+    if (L.dir > 0){
+      const nose = x + car.len;
+      if (nose >= lo && x <= hi) return -1;              // overlapping now
+      let d = lo - nose; if (d < 0) d += SPAN;           // wrapped round
+      return d;
+    } else {
+      const nose = x;
+      if (nose <= hi && x + car.len >= lo) return -1;
+      let d = nose - hi; if (d < 0) d += SPAN;
+      return d;
+    }
+  }
+  // seconds until the nearest hazard reaches this cell; -1 = occupied now
+  function ttcAt(r, c, tick){
+    const L = rows[r]; if (!L || L.kind !== LANE) return Infinity;
+    const v = L.baseV * SPDL[tick];
+    let best = Infinity;
+    for (let i = 0; i < L.cars.length; i++){
+      const d = gapTo(L, L.cars[i], tick, c);
+      if (d < 0) return -1;
+      const s = d / v; if (s < best) best = s;
+    }
+    return best;
+  }
+  S.ttcAt = ttcAt; S.carX = carX; S.cellL = cellL; S.gapTo = gapTo;
+
+  /* ------------------------------------------------------------ presentation
+     Events are queued, never rendered from the sim. Replay drains and drops. */
+  function emit(type, a, b, c2){ S.ev.push({ type, a, b, c: c2, t: S.tick }); }
+
+  const closing = () => S.tick >= SESSION_TICKS - CLOSING_TICKS;
+  S.closing = closing;
+
+  /* -------------------------------------------------------------- mistakes */
+  function loseHaul(cause){
+    const lost = Math.round(S.pool * S.mult);
+    S.pool = 0; S.streak = 0; S.mult = 1; S.carry = 0; S.full = false;
+    S.mistakes++; S.lastCause = cause;
+    S.invuln = INVULN;
+    /* §7.3/§7.9b hitstop, but implemented INSIDE the sim so it is
+       deterministic and replayable. The countdown is driven by S.tick and
+       keeps running through a freeze, while the world clock S.wt does not —
+       so a mistake COSTS the player time and can never buy any. This is
+       strictly stronger than the bible's "adds 0 ticks" merge gate. */
+    S.frz = FREEZE_HIT;
+    return lost;
+  }
+  /* Both mistakes push the tide back. Without it, a knockback lands you a row
+     above a tide that is already at your heels and the next catch cascades —
+     you cannot recover, which §5.3 forbids. It is not farmable: a hit costs
+     the pool and the whole multiplier, so buying 2.2 rows with one is always
+     a loss. */
+  function reprieve(atRow){
+    const want = atRow - REPRIEVE;
+    if (S.tideNat > want) S.tideNat = want;
+    if (S.tideRow > want) S.tideRow = want;
+  }
+  function hitTraffic(){
+    const lost = loseHaul(1); S.trafficHits++;
+    // knocked back to the safe line you left — but never into the tide
+    let back = Math.max(S.shoreRow, Math.ceil(S.tideRow) + 1);
+    if (back > S.row) back = S.row;
+    const from = S.row;
+    S.row = back; S.hopT = HOP_TICKS; S.maxScored = Math.max(START_ROW, back);
+    S.bankT = rows[back] && rows[back].kind === SHORE ? 0 : -1;
+    reprieve(back);
+    emit('hit', lost, from - back, 0);
+  }
+  function hitTide(){
+    const lost = loseHaul(2); S.tideHits++;
+    const dmg = Math.min(TIDE_DMG, DMG_CAP - S.clockDmg);
+    S.clockDmg += dmg;
+    const to = Math.ceil(S.tideRow) + 2;
+    S.row = to; S.hopT = HOP_TICKS;
+    S.maxScored = Math.max(S.maxScored, to);   // shoved rows never score
+    S.bankT = rows[to] && rows[to].kind === SHORE ? 0 : -1;
+    reprieve(to);
+    emit('tide', lost, dmg, 0);
+  }
+
+  /* ------------------------------------------------------------------ bank */
+  function bank(){
+    const cl = closing();
+    const v = Math.round(S.pool * S.mult * (cl ? LATE_BANK : 1));
+    S.score += v;
+    if (cl) S.lateScore += v;
+    emit('bank', v, S.mult, S.carry);
+    S.pool = 0; S.carry = 0; S.full = false; S.banks++;
+    /* LAST CALL, second half: the ladder survives a bank. Doubling the
+       payout alone did not move C14's number, and the reason was that the
+       two systems were fighting — a bank resets the streak, so cashing more
+       often in the closing phase means cashing at a LOWER multiplier, and
+       the median line stalled at 10% against a 25% floor.
+       Holding the ladder through a closing bank turns the run into two acts:
+       build for 45s, harvest for 15s. It never raises the multiplier CAP,
+       which is the thing §5.6 actually forbids, and it makes the first 45
+       seconds matter MORE rather than less — the ladder you carry into last
+       call is the entire size of your harvest. */
+    /* A bank HALVES the ladder, it does not wipe it. Measured with a full
+       reset, the median line entered last call at multiplier 1.17 — it banks
+       every ~5s because the carry window rarely lines up with a crossable
+       lane, so the ladder never got off the floor and the entire §9.2 system
+       was invisible to everyone except an expert. §5.3 is explicit that a
+       wiped player must be able to rebuild to tier 2 within ~15s of clean
+       play, and a total reset on every bank made that impossible by design.
+       Halving keeps banking genuinely costly (carrying is still strictly
+       better for the ladder) while letting a steady player converge on
+       tier 2 instead of sitting at 1x for sixty seconds. */
+    if (!cl){ S.streak = S.streak >> 1; S.mult = Math.min(MULT_CAP, 1 + MULT_STEP * S.streak); }
+    S.bankT = -1;
+  }
+
+  /* ------------------------------------------------------------------- hop */
+  function commit(d){
+    const dc = DIRS[d][0], dr = DIRS[d][1];
+    const nc = S.col + dc, nr = S.row + dr;
+    if (nc < 0 || nc >= COLS) return false;
+    if (nr < 0 || nr >= rows.length - 4) return false;
+    S.hopFromR = S.row; S.hopFromC = S.col; S.hopT = 0;
+    S.col = nc; S.row = nr; S.hops++;
+    land(nr, nc, dr);
+    return true;
+  }
+
+  function land(r, c, dr){
+    const kind = rows[r].kind;
+    if (kind === SHORE){
+      if (S.shoreRow !== r) S.shoreRow = r;
+      if (S.bankT < 0) S.bankT = 0;
+    } else {
+      // leaving a safe line without banking = CARRY (§9.2C press-your-luck)
+      if (S.bankT >= 0 && S.pool > 0 && dr > 0){ S.carry++; emit('carry', S.carry, 0, 0); }
+      S.bankT = -1;
+    }
+    if (dr > 0 && r > S.maxScored){
+      S.maxScored = r; S.fwd++;
+      if (kind === SHORE){
+        const b = closing() ? SHORE_BONUS * 3 : SHORE_BONUS;
+        S.pool = Math.min(POOL_CAP, S.pool + b);
+        S.full = S.pool >= POOL_CAP;
+        emit('cross', b, 0, 0);
+      }
+      if (kind === LANE){
+        const tt = ttcAt(r, c, S.wt);
+        // occupied-now is resolved by the collision pass, not scored here
+        const tier = tt < 0 ? 0 : tt <= SHAVE_T ? 2 : tt <= CLOSE_T ? 1 : 0;
+        const base = (closing() ? BASE_LATE : BASE)[tier];
+        const room = Math.max(0, POOL_CAP - S.pool);
+        S.pool += Math.min(base, room);          // the ladder still climbs at cap
+        S.full = S.pool >= POOL_CAP;
+        const before = S.streak;
+        S.streak += RUNG[tier];
+        S.mult = Math.min(MULT_CAP, 1 + MULT_STEP * S.streak);
+        S.tierCount[tier]++; S.lastTier = tier;
+        if (S.pool * S.mult > S.poolPeak) S.poolPeak = S.pool * S.mult;
+        emit('score', base, tier, tierOf(S.streak) > tierOf(before) ? tierOf(S.streak) : 0);
+      }
+    }
+  }
+  function tierOf(st){ return st >= 40 ? 4 : st >= 24 ? 3 : st >= 12 ? 2 : st >= 5 ? 1 : 0; }
+  S.tierOf = tierOf;
+
+  /* -------------------------------------------------------------- the tick */
+  let bufDir = -1, bufAge = 0;
+
+  function step(inDir){
+    if (S.over) return;
+
+    // 0. hitstop. The countdown (S.tick) runs; the world clock (S.wt) does not.
+    if (S.frz > 0){ S.frz--; S.frzTotal++; endOfTick(); return; }
+
+    if (inDir >= 0){ bufDir = inDir; bufAge = 0;
+      S.trace.push(S.tick - S._lastTraceTick, inDir); S._lastTraceTick = S.tick; }
+
+    // 1. input -> hop, honouring the buffer window
+    if (bufDir >= 0){
+      if (S.hopT >= HOP_TICKS){ commit(bufDir); bufDir = -1; }
+      else if (++bufAge > BUF_TICKS) bufDir = -1;
+    }
+    if (S.hopT < HOP_TICKS) S.hopT++;
+
+    // 2. the tide — time-driven rise, rubber-banded to the player (C8-legal:
+    //    elapsed_ticks + player_position, public and replayable)
+    const dEff = DEFF[S.wt] || 1;
+    const cl = closing();
+    let tv  = 0.34 * (0.5 + 0.5 * dEff);
+    let lag = LAG_0 - LAG_K * (dEff - 1);
+    if (cl){ tv *= 1.15; lag *= 0.90; }        // C14 — the closing surge
+    /* Two independent fronts, and the tide is whichever is higher. Keeping
+       them separate matters: if the natural rise accumulated ON TOP of the
+       rubber band, every row the player gained would permanently tighten the
+       lag, and by 0:40 the tide would be unavoidable no matter how well they
+       played. Measured that on the first build — lag read 2.1 rows where the
+       curve says 3.8. */
+    S.tideNat += tv * DT;
+    S.tideRow = Math.max(S.tideNat, S.maxScored - lag);
+
+    // 3. costly mistakes (§7.9b). Never ends the run — C13.
+    if (S.invuln > 0) S.invuln--;
+    else {
+      if (S.tideRow >= S.row) hitTide();
+      else if (rows[S.row].kind === LANE && ttcAt(S.row, S.col, S.wt) < 0) hitTraffic();
+    }
+
+    // 4. banking
+    if (S.bankT >= 0){
+      if (S.pool > 0){ if (++S.bankT >= BANK_TICKS) bank(); }
+      else S.bankT = 0;
+    }
+    endOfTick();
+  }
+
+  function endOfTick(){
+    S.tick++;
+    S.wt = S.tick - S.frzTotal;
+    if (S.tick + S.clockDmg >= SESSION_TICKS){
+      S.over = true;
+      emit('siren', Math.round(S.pool * S.mult), 0, 0);
+      S.pool = 0; S.mult = 1; S.streak = 0;      // §5.6 unbanked pool is LOST
+    }
+  }
+  S.step = step;
+  S.ticksLeft = () => Math.max(0, SESSION_TICKS - S.clockDmg - S.tick);
+  S.hash = () => [S.tick, S.wt, S.frzTotal, S.score, S.pool, S.streak, S.row, S.col,
+                  S.maxScored, Math.round(S.tideRow * 4096), S.clockDmg, S.mistakes,
+                  S.banks, S.tierCount.join('|')].join(',');
+  return S;
+}
+
+/* -------------------------------------------------------- trace + replay
+   §11.2 self-test support. LEB128 tick deltas — deliberately NOT run-length
+   clamped (see memory: prototype-build-gates, a clamping encoder silently
+   desynchronised 44/1000 seeds on an earlier prototype). */
+function serializeTrace(tr){
+  const out = [];
+  for (let i = 0; i < tr.length; i += 2){
+    let d = tr[i];
+    while (d >= 0x80){ out.push((d & 0x7F) | 0x80); d >>>= 7; }
+    out.push(d); out.push(tr[i + 1]);
+  }
+  return Uint8Array.from(out);
+}
+function deserializeTrace(buf){
+  const tr = []; let i = 0;
+  while (i < buf.length){
+    let d = 0, sh = 0, b;
+    do { b = buf[i++]; d |= (b & 0x7F) << sh; sh += 7; } while (b & 0x80);
+    tr.push(d >>> 0, buf[i++]);
+  }
+  return tr;
+}
+function replay(seed, buf){
+  const tr = deserializeTrace(buf), sim = makeSim(seed);
+  let at = 0, p = 0;
+  for (let t = 0; t < SESSION_TICKS && !sim.over; t++){
+    let d = -1;
+    if (p < tr.length){ if (at + tr[p] === t){ at = t; d = tr[p + 1]; p += 2; } }
+    sim.step(d); sim.ev.length = 0;
+  }
+  return sim;
+}
+
+/* ======================================================================
+   THE SHELL — chrome, juice, audio, meta. Owns the clock; the sim only
+   damages it (§11.1).
+   ====================================================================== */
+const qs = new URLSearchParams(location.search);
+const DEBUG = qs.has('debug');
+const dailySeed = () => (Math.floor(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(),
+                          new Date().getUTCDate()) / 86400000) * 2654435761) >>> 0;
+let SEED = qs.has('seed') ? (parseInt(qs.get('seed'), 10) >>> 0) : dailySeed();
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d', { alpha: false });
+let scl = 1, dpr = 1;
+function resize(){
+  const vw = innerWidth, vh = innerHeight;
+  scl = Math.min(vw / W, vh / H);
+  dpr = Math.min(devicePixelRatio || 1, 2.5);
+  cv.style.width = (W * scl) + 'px'; cv.style.height = (H * scl) + 'px';
+  cv.width = Math.round(W * scl * dpr); cv.height = Math.round(H * scl * dpr);
+  ctx.setTransform(scl * dpr, 0, 0, scl * dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+/* --------------------------------------------------------------- palette
+   Design system "STRATA": flat horizontal bands, cool safe / warm hazard /
+   gold score (§11.6 semantic colour is fixed platform-wide). Every semantic
+   carries on >=2 of {colour, shape, motion, size}. */
+const ROW_TOP = 43, ROW_FRONT = ROW_H - ROW_TOP;   // slab face, then its thickness
+
+/* ---------------------------------------------------------------- palette
+   Built to two rules from the 2D readability framework rather than to taste:
+
+   1. VALUE HIERARCHY. Lightness contrast is the primary priority signal, so
+      everything decorative lives in a tight dark band and everything the
+      player must read lives far above it. Environment sits at L 15-24%;
+      hazards at L 48-60%; the player at L 96%+. The first build had bright
+      saturated grass at the same value as the cars, so background and
+      foreground competed for the same read — that is what made it mush.
+   2. HUE BUDGET. Each hue family is reserved for exactly one gameplay
+      function and is never spent on decoration:
+        warm red/orange .. threat        (hazards, danger tiles, clock damage)
+        gold ............. reward        (haul, score, particles)
+        white/cyan ....... the player    — nothing else on screen is allowed it
+        cool teal ........ safe ground   (desaturated; only the rim is bright)
+        slate ............ environment   (roads, chrome)
+        violet ........... the flood     — a boundary, not a dodgeable hazard,
+                                           so it must never read as a car
+   Saturation is a gameplay resource here, not a mood. */
+const P = {
+  bg0:'#05070C', bg1:'#0D1220',
+  road:'#2F394C', roadHi:'#3B465E', roadF:'#161B27', roadDash:'rgba(226,238,255,.26)',
+  safe:'#2C574F', safeHi:'#376B60', safeF:'#12302B', safeRim:'#5CEFC0',
+  wide:'#367766', wideF:'#174038',
+  carTop:  ['#FF8A4C','#F4593C','#D9394F'],
+  carSide: ['#B04A1C','#A22C17','#8C1E31'],
+  glass:'#131C2A',
+  amber:'#FFC134', red:'#FF5340',
+  gold:'#FFD24A', gold2:'#FFA229',
+  play:'#FFFFFF', playF:'#89AFC6', rim:'#6FF0FF', playDark:'#07141E',
+  water:'#0B1430', waterDeep:'#04070F', foam:'#C79BFF', waterHot:'#FF6BD8',
+  ink:'#F2F7FC', dim:'rgba(214,230,244,.55)',
+  chip:'#0F1522', chipEdge:'rgba(150,190,225,.18)',
+};
+
+function shade(hex, amt){
+  const n = parseInt(hex.slice(1), 16);
+  const c = i => Math.max(0, Math.min(255, Math.round(((n >> i) & 255) * (1 + amt))));
+  return 'rgb(' + c(16) + ',' + c(8) + ',' + c(0) + ')';
+}
+// deterministic 0..1 from two ints — texture that never crawls between frames
+function hash2(a, b){
+  let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+// rounded car silhouette with a nose in the travel direction
+function carPath(x, y, len, h, dir){
+  const n = Math.min(10, len * 0.22), r = 6;
+  ctx.beginPath();
+  if (dir > 0){
+    ctx.moveTo(x + r, y); ctx.lineTo(x + len - n, y);
+    ctx.quadraticCurveTo(x + len, y + h * 0.14, x + len, y + h / 2);
+    ctx.quadraticCurveTo(x + len, y + h * 0.86, x + len - n, y + h);
+    ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+  } else {
+    ctx.moveTo(x + len - r, y); ctx.lineTo(x + n, y);
+    ctx.quadraticCurveTo(x, y + h * 0.14, x, y + h / 2);
+    ctx.quadraticCurveTo(x, y + h * 0.86, x + n, y + h);
+    ctx.lineTo(x + len - r, y + h); ctx.quadraticCurveTo(x + len, y + h, x + len, y + h - r);
+    ctx.lineTo(x + len, y + r); ctx.quadraticCurveTo(x + len, y, x + len - r, y);
+  }
+  ctx.closePath();
+}
+/* ------------------------------------------------------------------ audio
+   §7.7 — pentatonic ladder, every cue with a visual twin (§11.7). */
+let AC = null, master = null, tideGain = null;
+function audioInit(){
+  if (AC) return;
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){ return; }
+  master = AC.createGain(); master.gain.value = 0.30; master.connect(AC.destination);
+  // tide bed: filtered noise, gain follows tide proximity
+  const n = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate), d = n.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < d.length; i++){ last = (last * 0.96 + (Math.random() * 2 - 1) * 0.04); d[i] = last * 3; }
+  const src = AC.createBufferSource(); src.buffer = n; src.loop = true;
+  const flt = AC.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 260;
+  tideGain = AC.createGain(); tideGain.gain.value = 0;
+  src.connect(flt); flt.connect(tideGain); tideGain.connect(master); src.start();
+}
+function blip(freq, dur, type, gain, detune){
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'triangle'; o.frequency.value = freq;
+  if (detune) o.detune.value = detune;
+  g.gain.setValueAtTime(0.0001, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(gain || 0.3, AC.currentTime + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  o.connect(g); g.connect(master); o.start(); o.stop(AC.currentTime + dur + 0.02);
+}
+const PENTA = [0, 2, 4, 7, 9];
+function ladder(streak, tier){
+  if (!AC) return;
+  const n = streak;
+  const f = 360 * Math.pow(2, PENTA[n % 5] / 12) * Math.pow(2, Math.min(Math.floor(n / 5), 3));
+  blip(f, 0.12, 'triangle', 0.16 + tier * 0.05, (Math.random() * 14 - 7));
+  if (tier >= 1) blip(f * 2, 0.035, 'sine', 0.06 + streak * 0.0015);
+}
+function fallSweep(){   // the ladder falling — §7.7, heard before it is read
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(420, AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(70, AC.currentTime + 0.34);
+  g.gain.setValueAtTime(0.22, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + 0.36);
+  o.connect(g); g.connect(master); o.start(); o.stop(AC.currentTime + 0.38);
+}
+function chord(base, gain){
+  [0, 4, 7, 12].forEach((s, i) => setTimeout(() =>
+    blip(base * Math.pow(2, s / 12), 0.5, 'triangle', (gain || 0.18) * (1 - i * 0.12)), i * 26));
+}
+
+/* ------------------------------------------------------------------- juice */
+const FX = {
+  trauma: 0, shakeT: 0, timeScale: 1, flash: 0, chroma: 0,
+  parts: [], pops: [], camRow: 0, zoom: 1, desat: 0,
+  bankPulse: 0, poolPulse: 0, multPulse: 0, tideFlash: 0, clockTear: 0,
+  paletteShift: 0, sirenT: -1, pbCross: 0,
+};
+function shake(mag){ FX.trauma = Math.min(1, FX.trauma + mag); }
+function burst(x, y, tier, col, n){
+  const c = n || (10 + tier * 6), spread = (90 + tier * 30) * Math.PI / 180;
+  for (let i = 0; i < c && FX.parts.length < 400; i++){
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * spread + (Math.random() - 0.5) * 0.6;
+    const sp = 90 + Math.random() * 190 + tier * 30;
+    FX.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.55 + Math.random() * 0.4, max: 0.95, col, sz: 3 + Math.random() * 4 });
+  }
+}
+function pop(x, y, txt, col, big){ FX.pops.push({ x, y, txt, col, life: 0.62, big: !!big }); }
+
+/* --------------------------------------------------------------- meta/shell */
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+const RIVALS = ['ARBOR','KESTREL','NOVA','PILOT','RHEA','SABLE','TOVA','VESPER','WREN','ZEPH'];
+function rivalFor(seed){
+  const r = RNG((seed ^ 0x51DE0A7) >>> 0);
+  return { name: RIVALS[r.int(RIVALS.length)], score: RIVAL_LO + r.int(RIVAL_HI - RIVAL_LO) };
+}
+
+/* =========================== RUN STATE =========================== */
+let sim = null, RUN = null;
+function newRun(){
+  sim = makeSim(SEED);
+  const pbKey = 'graze.pb.' + SEED;
+  const recent = LS.get('graze.recent', []);
+  const pb = LS.get(pbKey, 0);
+  RUN = {
+    pb, pbIsSeed: pb > 0,
+    median: recent.length >= 3 ? recent.slice().sort((a,b)=>a-b)[recent.length >> 1] : 0,
+    rival: rivalFor(SEED),
+    started: false, ended: false, endAt: 0, shownScore: 0,
+    hinted: false, plays: LS.get('graze.plays', 0),
+    pbHit: false, beat: 0, layer: 0,
+  };
+  FX.parts.length = 0; FX.pops.length = 0;
+  FX.trauma = 0; FX.hitstop = 0; FX.desat = 0; FX.sirenT = -1; FX.camRow = 0;
+  FX.paletteShift = 0; FX.flash = 0; FX.chroma = 0; FX.pbCross = 0; FX.zoom = 1;
+  latch = -1; lastInputTick = -999;
+}
+
+/* ------------------------------------------------------------------ input
+   C5 — ONE verb: a flick. Its parameter is direction. A tap below the
+   distance threshold is the degenerate zero-length flick and resolves to
+   FORWARD, which is how the genre has always worked.
+   The press is LATCHED, not sampled (see memory: prototype-build-gates —
+   a pointerdown+pointerup inside one rendered frame must not vanish). */
+let latch = -1, downX = 0, downY = 0, downOK = false, lastInputTick = -999;
+const TAP_R = 18;
+
+function toLocal(e){
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / scl, y: (e.clientY - r.top) / scl };
+}
+function onDown(e){
+  audioInit();
+  if (RUN.ended){ if (performance.now() - RUN.endAt > 750) restart(); return; }
+  const p = toLocal(e); downX = p.x; downY = p.y; downOK = true;
+  e.preventDefault();
+}
+function onUp(e){
+  if (!downOK) return; downOK = false;
+  const p = toLocal(e), dx = p.x - downX, dy = p.y - downY;
+  let d;
+  if (Math.abs(dx) < TAP_R && Math.abs(dy) < TAP_R) d = 0;
+  else if (Math.abs(dy) >= Math.abs(dx)) d = dy < 0 ? 0 : 1;
+  else d = dx < 0 ? 2 : 3;
+  latch = d;                                   // consumed at the top of a tick
+  e.preventDefault();
+}
+cv.addEventListener('pointerdown', onDown, { passive: false });
+addEventListener('pointerup', onUp, { passive: false });
+addEventListener('pointercancel', () => { downOK = false; });
+addEventListener('keydown', e => {
+  audioInit();
+  const m = { ArrowUp:0, KeyW:0, ArrowDown:1, KeyS:1, ArrowLeft:2, KeyA:2, ArrowRight:3, KeyD:3 };
+  if (e.code in m){ if (RUN.ended){ restart(); return; } latch = m[e.code]; e.preventDefault(); }
+  else if (e.code === 'Space' || e.code === 'Enter'){ if (RUN.ended) restart(); e.preventDefault(); }
+});
+
+newRun();      // after the input latch is declared — TDZ
+
+function restart(){
+  const s = sim.score, rec = LS.get('graze.recent', []);
+  rec.push(s); while (rec.length > 20) rec.shift();
+  LS.set('graze.recent', rec);
+  if (s > LS.get('graze.pb.' + SEED, 0)) LS.set('graze.pb.' + SEED, s);
+  LS.set('graze.plays', (LS.get('graze.plays', 0) | 0) + 1);
+  newRun();
+}
+
+/* ---------------------------------------------------------- event handling
+   Everything the sim emits gets its juice here. The sim stays clean. */
+function drain(){
+  for (const e of sim.ev){
+    if (e.type === 'score'){
+      const tier = e.b, px = GRID_X + sim.col * CELL + CELL / 2, py = rowScreenY(sim.row);
+      const col = tier === 2 ? P.red : tier === 1 ? P.amber : P.gold;
+      pop(px, py - 26, (tier === 2 ? 'GRAZE ' : tier === 1 ? 'CLOSE ' : '') + '+' + e.a, col, tier === 2);
+      if (tier > 0){ burst(px, py, tier, col); FX.poolPulse = 1; }
+      if (tier === 2) shake(0.30);
+      ladder(sim.streak, tier);
+      if (e.c > 0){ shake(0.50); FX.multPulse = 1; FX.chroma = 1;
+        burst(px, py, e.c + 1, P.gold); blip(880 * (1 + e.c * .12), 0.18, 'square', 0.10); }
+    }
+    else if (e.type === 'cross'){
+      const px = GRID_X + sim.col * CELL + CELL / 2, py = rowScreenY(sim.row);
+      pop(px, py - 26, '+' + e.a, P.safeRim, false);
+      burst(px, py, 1, P.safeRim, 10); FX.poolPulse = 1;
+      blip(523, 0.10, 'sine', 0.09);
+    }
+    else if (e.type === 'carry'){
+      FX.poolPulse = 1;
+      pop(GRID_X + sim.col * CELL + CELL / 2, rowScreenY(sim.row) - 44, 'CARRY x' + e.a, P.gold2, true);
+      blip(220, 0.22, 'sawtooth', 0.10); blip(330, 0.16, 'sine', 0.08);
+    }
+    else if (e.type === 'bank'){
+      FX.bankPulse = 1; shake(0.55); FX.flash = 0.6;
+      const px = GRID_X + sim.col * CELL + CELL / 2, py = rowScreenY(sim.row);
+      burst(px, py, 3, P.gold, 34); burst(px, py, 2, P.playGlow, 16);
+      pop(px, py - 30, '+' + e.a, P.gold, true);
+      chord(392, 0.20);
+      if (!RUN.pbHit && RUN.pb > 0 && sim.score >= RUN.pb){
+        RUN.pbHit = true; FX.pbCross = 1; FX.timeScale = 0.25; FX.chroma = 1;
+        shake(0.70); blip(1320, 0.5, 'triangle', 0.22); chord(660, 0.16);
+      }
+    }
+    else if (e.type === 'hit'){
+      shake(0.85); FX.desat = 1; FX.zoom = 1.08; fallSweep();     // §7.9b push in
+      const px = GRID_X + sim.col * CELL + CELL / 2, py = rowScreenY(sim.row);
+      burst(px, py, 3, P.hazB, 26);
+      if (e.a > 0) pop(px, py - 24, '-' + e.a, P.hazA, true);
+      blip(90, 0.3, 'square', 0.2);
+    }
+    else if (e.type === 'tide'){
+      shake(1.0); FX.desat = 1; FX.zoom = 1.08; FX.tideFlash = 1; FX.clockTear = 1;
+      fallSweep(); blip(60, 0.5, 'sawtooth', 0.24);
+      const px = GRID_X + sim.col * CELL + CELL / 2;
+      burst(px, rowScreenY(sim.row), 3, P.tideHot, 30);
+      if (e.a > 0) pop(px, rowScreenY(sim.row) - 24, '-' + e.a, P.tideHot, true);
+    }
+    else if (e.type === 'siren'){
+      RUN.ended = true; RUN.endAt = performance.now(); FX.sirenT = 0;
+      FX.zoom = 0.96; shake(0.60);              // §7.9 pull BACK — never the push
+      if (e.a > 0){
+        pop(GRID_X + sim.col * CELL + CELL / 2, rowScreenY(sim.row) - 30, 'LOST ' + e.a, P.hazA, true);
+        burst(GRID_X + sim.col * CELL + CELL / 2, rowScreenY(sim.row), 2, P.gold2, 24);
+        fallSweep();
+      }
+      blip(150, 0.9, 'square', 0.20); setTimeout(() => blip(120, 0.9, 'square', 0.18), 130);
+    }
+  }
+  sim.ev.length = 0;
+}
+
+/* ----------------------------------------------------------------- beats
+   §5.6 beat schedule, rescaled to the 60s session. Palette + audio layers. */
+function beats(){
+  const t = sim.tick;
+  const marks = [ [660, 1], [1500, 2], [SESSION_TICKS - CLOSING_TICKS, 3] ];
+  for (const [tk, id] of marks){
+    if (RUN.beat < id && t >= tk){
+      RUN.beat = id; FX.paletteShift = 1;
+      if (id === 3){ chord(294, 0.16); shake(0.45); }
+      else blip(196 * id, 0.4, 'triangle', 0.12);
+    }
+  }
+}
+
+/* ================================ TICK LOOP ============================= */
+let acc = 0, prev = performance.now();
+function stepOnce(){
+  let d = -1;
+  if (sim.frz <= 0){                         // a frozen tick consumes no input
+    d = latch; latch = -1;
+    if (d >= 0){ RUN.started = true; lastInputTick = sim.tick; }
+  }
+  sim.step(d);
+  beats(); drain();
+}
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.1, (now - prev) / 1000); prev = now;
+  if (!RUN.ended){
+    acc += dt;
+    while (acc >= DT){ acc -= DT; if (!RUN.ended) stepOnce(); }
+  } else acc = 0;
+  render(dt);
+}
+requestAnimationFrame(frame);
+
+/* ================================ RENDER =============================== */
+function rowScreenY(r){ return ANCHOR_Y - (r - FX.camRow) * ROW_H; }
+
+function playerXY(){
+  const k = Math.min(1, sim.hopT / HOP_TICKS);
+  const e = k < 1 ? 1 - Math.pow(1 - k, 3) : 1;
+  const c = sim.hopFromC + (sim.col - sim.hopFromC) * e;
+  const r = sim.hopFromR + (sim.row - sim.hopFromR) * e;
+  return { x: GRID_X + c * CELL + CELL / 2, y: rowScreenY(r), hop: k, arc: Math.sin(Math.PI * k) };
+}
+
+function rr(x, y, w, h, r){
+  ctx.beginPath();
+  const rad = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.moveTo(x + rad, y); ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad); ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad); ctx.closePath();
+}
+
+let noiseTile = null, noisePat = null;
+function makeNoise(){
+  const c = document.createElement('canvas'); c.width = c.height = 96;
+  const g = c.getContext('2d'), d = g.createImageData(96, 96);
+  for (let i = 0; i < d.data.length; i += 4){
+    const v = 118 + Math.random() * 34;
+    d.data[i] = d.data[i+1] = d.data[i+2] = v; d.data[i+3] = 255;
+  }
+  g.putImageData(d, 0, 0); return c;
+}
+
+function render(dt){
+  if (!noiseTile){ noiseTile = makeNoise(); noisePat = ctx.createPattern(noiseTile, 'repeat'); }
+  const T = performance.now() / 1000;
+
+  /* --- juice integration (presentation layer only) --- */
+  FX.trauma = Math.max(0, FX.trauma - 1.2 * dt);
+  const sh = Math.pow(FX.trauma, 3);
+  FX.shakeT += dt;
+  FX.timeScale += (1 - FX.timeScale) * Math.min(1, dt * 3.2);
+  FX.flash = Math.max(0, FX.flash - dt * 3.4);
+  FX.chroma = Math.max(0, FX.chroma - dt * 7);
+  FX.desat = Math.max(0, FX.desat - dt * 6);
+  FX.bankPulse = Math.max(0, FX.bankPulse - dt * 2.4);
+  FX.poolPulse = Math.max(0, FX.poolPulse - dt * 3.4);
+  FX.multPulse = Math.max(0, FX.multPulse - dt * 2.6);
+  FX.tideFlash = Math.max(0, FX.tideFlash - dt * 2);
+  FX.clockTear = Math.max(0, FX.clockTear - dt * 1.3);
+  FX.paletteShift = Math.max(0, FX.paletteShift - dt * 1.2);
+  FX.pbCross = Math.max(0, FX.pbCross - dt * 1.5);
+  FX.zoom += (1 - FX.zoom) * Math.min(1, dt * 5.5);
+  if (FX.sirenT >= 0) FX.sirenT += dt;
+  const camK = 1 - Math.exp(-10 * dt);
+  FX.camRow += (sim.row - FX.camRow) * camK;
+
+  // §7.6 time dip — presentation only, applied to debris, NEVER the countdown
+  const fdt = dt * FX.timeScale;
+  for (let i = FX.parts.length - 1; i >= 0; i--){
+    const p = FX.parts[i];
+    p.life -= fdt; if (p.life <= 0){ FX.parts.splice(i, 1); continue; }
+    p.x += p.vx * fdt; p.y += p.vy * fdt; p.vy += 300 * fdt; p.vx *= 0.985;
+  }
+  for (let i = FX.pops.length - 1; i >= 0; i--){
+    const q = FX.pops[i]; q.life -= fdt; q.y -= 46 * fdt;
+    if (q.life <= 0) FX.pops.splice(i, 1);
+  }
+  if (tideGain && AC){
+    const prox = Math.max(0, 1 - (sim.row - sim.tideRow) / 7);
+    tideGain.gain.value = 0.05 + prox * prox * 0.40;
+  }
+
+  ctx.save();
+  const ox = 14 * sh * (Math.sin(FX.shakeT * 25 * 6.28) * 0.6 + Math.sin(FX.shakeT * 41) * 0.4);
+  const oy = 14 * sh * (Math.sin(FX.shakeT * 23 * 6.28 + 2) * 0.6 + Math.sin(FX.shakeT * 37 + 1) * 0.4);
+  ctx.translate(W / 2 + ox, H / 2 + oy);
+  ctx.rotate(2.0 * Math.PI / 180 * sh * Math.sin(FX.shakeT * 19));
+  ctx.scale(FX.zoom, FX.zoom);
+  ctx.translate(-W / 2, -H / 2);
+
+  /* --- background --- */
+  const hot = RUN.beat >= 3 ? 1 : 0;
+  const g0 = ctx.createLinearGradient(0, 0, 0, H);
+  g0.addColorStop(0, hot ? '#140A10' : P.bg1);
+  g0.addColorStop(1, hot ? '#0A0509' : P.bg0);
+  ctx.fillStyle = g0; ctx.fillRect(0, 0, W, H);
+
+  drawField(T, hot);
+  drawHUD(T, hot);
+
+  /* pops + particles above the field but below the panel */
+  ctx.save(); ctx.beginPath(); ctx.rect(0, FIELD_TOP - 2, W, FIELD_H + 4); ctx.clip();
+  for (const p of FX.parts){
+    const a = Math.min(1, p.life / 0.4);
+    ctx.globalAlpha = a; ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz);
+  }
+  ctx.globalAlpha = 1;
+  for (const q of FX.pops){
+    const a = Math.min(1, q.life / 0.3);
+    ctx.globalAlpha = a;
+    ctx.font = (q.big ? '800 21px ' : '800 15px ') + 'ui-monospace,Menlo,monospace';
+    ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(4,6,10,.9)';
+    ctx.strokeText(q.txt, q.x, q.y); ctx.fillStyle = q.col; ctx.fillText(q.txt, q.x, q.y);
+  }
+  ctx.globalAlpha = 1; ctx.restore();
+
+  if (RUN.ended) drawResult();
+  else if (!RUN.started && sim.tick > 60) drawHint(T);
+
+  /* --- grain + vignette --- */
+  ctx.globalAlpha = 0.045; ctx.globalCompositeOperation = 'overlay';
+  const nx = -(Math.floor(T * 30) % 96), ny = -(Math.floor(T * 47) % 96);
+  ctx.save(); ctx.translate(nx, ny); ctx.fillStyle = noisePat; ctx.fillRect(0, 0, W + 96, H + 96); ctx.restore();
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+
+  const vg = ctx.createRadialGradient(W / 2, H * 0.46, H * 0.34, W / 2, H * 0.46, H * 0.86);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.34)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+  // §7.6 chromatic aberration pulse — screen-edge fringe, 80-150ms, subtle
+  if (FX.chroma > 0.02){
+    const k = Math.min(1, FX.chroma * 3);
+    ctx.globalCompositeOperation = 'screen';
+    let cg = ctx.createLinearGradient(0, 0, 26, 0);
+    cg.addColorStop(0, 'rgba(255,40,40,' + (0.10 * k) + ')'); cg.addColorStop(1, 'rgba(255,40,40,0)');
+    ctx.fillStyle = cg; ctx.fillRect(0, 0, 26, H);
+    cg = ctx.createLinearGradient(W, 0, W - 26, 0);
+    cg.addColorStop(0, 'rgba(40,220,255,' + (0.10 * k) + ')'); cg.addColorStop(1, 'rgba(40,220,255,0)');
+    ctx.fillStyle = cg; ctx.fillRect(W - 26, 0, 26, H);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  if (FX.flash > 0){ ctx.globalAlpha = FX.flash * 0.4; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (FX.pbCross > 0){ ctx.globalAlpha = FX.pbCross * 0.35; ctx.fillStyle = P.gold; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  ctx.restore();
+
+  if (DEBUG) drawDebug();
+}
+
+/* ------------------------------------------------------------ the playfield
+   Every row is a SLAB: a walking surface (ROW_TOP) plus a visible front face
+   (ROW_FRONT). Rows are painted far-to-near so the faces stack, which is what
+   turns a flat diagram into a board you are looking down at. */
+function drawField(T, hot){
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, FIELD_TOP, W, FIELD_H); ctx.clip();
+  ctx.fillStyle = P.bg0; ctx.fillRect(0, FIELD_TOP, W, FIELD_H);
+
+  const r0 = Math.floor(FX.camRow - (ANCHOR_Y - FIELD_TOP) / ROW_H) - 1;
+  const r1 = Math.ceil(FX.camRow + (FIELD_BOT - ANCHOR_Y) / ROW_H) + 1;
+  const tick = Math.max(0, Math.min(sim.wt, DEFF.length - 1));
+
+  for (let r = r1; r >= r0; r--){
+    if (r < 0 || r >= sim.rows.length) continue;
+    const L = sim.rows[r], cy = rowScreenY(r), top = cy - ROW_H / 2;
+    if (top > FIELD_BOT || top + ROW_H < FIELD_TOP) continue;
+    if (L.kind === SHORE) drawShore(L, top, r, T);
+    else drawLane(L, top, r, tick);
+  }
+
+  drawReach();
+  drawTide(T);
+
+  /* Depth cue. A 2.5D board with no light falloff reads as wallpaper — the
+     far rows carry the same weight as the row you are standing on. One
+     vertical gradient does the whole job: dark at the horizon, clear through
+     the decision band, dark again at the near edge. */
+  const dg = ctx.createLinearGradient(0, FIELD_TOP, 0, FIELD_BOT);
+  dg.addColorStop(0.00, 'rgba(4,6,12,.40)');
+  dg.addColorStop(0.26, 'rgba(4,6,12,.07)');
+  dg.addColorStop(0.60, 'rgba(4,6,12,0)');
+  dg.addColorStop(1.00, 'rgba(4,6,12,.30)');
+  ctx.fillStyle = dg; ctx.fillRect(0, FIELD_TOP, W, FIELD_H);
+
+  // §5.6 palette shift 3 — the closing phase turns the whole board hot
+  if (hot){
+    ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = 0.22;
+    const g = ctx.createLinearGradient(0, FIELD_TOP, 0, FIELD_BOT);
+    g.addColorStop(0, '#FF7A2E'); g.addColorStop(1, '#FF3B6E');
+    ctx.fillStyle = g; ctx.fillRect(0, FIELD_TOP, W, FIELD_H); ctx.restore();
+  }
+
+  /* §7.9b — on a costly mistake everything except the player desaturates for
+     167ms. Blend mode, not ctx.filter: no per-frame filter cost. */
+  if (FX.desat > 0.02){
+    ctx.save();
+    ctx.globalCompositeOperation = 'saturation';
+    ctx.globalAlpha = Math.min(0.68, FX.desat * 0.68);
+    ctx.fillStyle = '#808080'; ctx.fillRect(0, FIELD_TOP, W, FIELD_H);
+    ctx.restore();
+  }
+
+  drawPlayer(T);
+  ctx.restore();
+
+  // the board dissolves into the chrome rather than being cut off by it
+  let f = ctx.createLinearGradient(0, FIELD_TOP, 0, FIELD_TOP + 44);
+  f.addColorStop(0, 'rgba(6,9,16,1)'); f.addColorStop(0.45, 'rgba(6,9,16,.55)');
+  f.addColorStop(1, 'rgba(6,9,16,0)');
+  ctx.fillStyle = f; ctx.fillRect(0, FIELD_TOP, W, 44);
+  const hz = ctx.createLinearGradient(0, FIELD_TOP, 0, FIELD_TOP + 26);
+  hz.addColorStop(0, 'rgba(92,239,192,.10)'); hz.addColorStop(1, 'rgba(92,239,192,0)');
+  ctx.fillStyle = hz; ctx.fillRect(0, FIELD_TOP, W, 26);
+  f = ctx.createLinearGradient(0, FIELD_BOT, 0, FIELD_BOT - 22);
+  f.addColorStop(0, 'rgba(7,10,17,1)'); f.addColorStop(1, 'rgba(7,10,17,0)');
+  ctx.fillStyle = f; ctx.fillRect(0, FIELD_BOT - 22, W, 22);
+}
+
+/* THE PRICE TAGS. Earlier builds painted the tier of every cell in the next
+   four rows. At speed a hazard's 1.20s shadow is longer than the board, so
+   almost every cell qualified and the read became wallpaper — the exact
+   failure the readability framework calls decoration competing with signal.
+   The tier is drawn on the four cells a flick can reach and nowhere else,
+   because that is the only place the number changes a decision. The traffic
+   itself is the plan-ahead information, and it always was. */
+function drawReach(){
+  if (RUN.ended) return;
+  const cells = [[sim.row, sim.col, true], [sim.row + 1, sim.col, false],
+                 [sim.row, sim.col - 1, false], [sim.row, sim.col + 1, false]];
+  ctx.save();
+  for (const [r, c, here] of cells){
+    if (c < 0 || c >= COLS || r < 0 || r >= sim.rows.length) continue;
+    const L = sim.rows[r], t2 = rowScreenY(r) - ROW_H / 2;
+    const x = GRID_X + c * CELL + 3, y = t2 + 4, w = CELL - 6, h = ROW_TOP - 8;
+    let tt = 99;
+    if (L.kind === LANE){ tt = sim.ttcAt(r, c, sim.wt); }
+    if (tt < 0){                                        // occupied right now
+      if (here) return;                                 // the hit is resolving
+      ctx.lineWidth = 2.4; ctx.strokeStyle = 'rgba(255,70,58,.9)';
+      ctx.setLineDash([5, 4]); rr(x, y, w, h, 6); ctx.stroke(); ctx.setLineDash([]);
+      continue;
+    }
+    const graze = tt <= SHAVE_T, close = !graze && tt <= CLOSE_T;
+    if (graze || close){
+      const g = ctx.createLinearGradient(0, y, 0, y + h);
+      if (graze){ g.addColorStop(0, 'rgba(255,110,76,.82)'); g.addColorStop(1, 'rgba(202,32,26,.60)'); }
+      else      { g.addColorStop(0, 'rgba(255,206,64,.50)'); g.addColorStop(1, 'rgba(220,146,18,.30)'); }
+      ctx.fillStyle = g; rr(x, y, w, h, 6); ctx.fill();
+      ctx.lineWidth = graze ? 2.4 : 1.8;
+      ctx.strokeStyle = graze ? '#FF9070' : 'rgba(255,224,120,.95)'; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.fillRect(x + 5, y + 3, w - 10, 2);
+      if (!here){
+        ctx.font = '800 11px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+        ctx.fillStyle = graze ? '#FFF0EA' : '#4A2E00';
+        ctx.fillText(graze ? 'x5' : 'x2.5', x + w / 2, y + h - 6);
+      }
+    } else if (!here){
+      ctx.lineWidth = 1.6; ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(240,250,255,.26)';
+      rr(x, y, w, h, 6); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+}
+
+function slabFront(top, faceCol){
+  const y = top + ROW_TOP;
+  const g = ctx.createLinearGradient(0, y, 0, y + ROW_FRONT);
+  g.addColorStop(0, faceCol); g.addColorStop(0.65, faceCol);
+  g.addColorStop(1, 'rgba(4,7,12,1)');
+  ctx.fillStyle = g; ctx.fillRect(0, y, W, ROW_FRONT);
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, y, W, 2);        // contact line
+  ctx.fillStyle = 'rgba(255,255,255,.05)'; ctx.fillRect(0, y + 2, W, 1);
+}
+
+function drawShore(L, top, r, T){
+  const g = ctx.createLinearGradient(0, top, 0, top + ROW_TOP);
+  g.addColorStop(0, L.wide ? P.wide : P.safeHi);
+  g.addColorStop(0.55, P.safe);
+  g.addColorStop(1, L.wide ? '#24594A' : '#20443E');
+  ctx.fillStyle = g; ctx.fillRect(0, top, W, ROW_TOP);
+
+  // tufts — deterministic per row so the ground never shimmers
+  for (let i = 0; i < 30; i++){
+    const x = hash2(r, i) * W, y = top + 5 + hash2(r, i + 91) * (ROW_TOP - 12);
+    const w2 = 2 + hash2(r, i + 17) * 6;
+    ctx.fillStyle = hash2(r, i + 43) > 0.5 ? 'rgba(150,225,205,.13)' : 'rgba(6,26,24,.34)';
+    ctx.fillRect(x, y, w2, 2);
+  }
+  // the one bright thing on a safe row, because "this row is safe" is the
+  // single piece of information it carries
+  ctx.fillStyle = P.safeRim; ctx.globalAlpha = 0.85; ctx.fillRect(0, top, W, 2.5);
+  ctx.globalAlpha = 0.16; ctx.fillStyle = P.safeRim; ctx.fillRect(0, top + 2.5, W, 5);
+  ctx.globalAlpha = 1;
+
+  if (L.tag){
+    ctx.globalAlpha = 0.5; ctx.fillStyle = '#0A2622';
+    ctx.font = '800 9px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('S A F E   L I N E', W / 2, top + ROW_TOP - 7);
+    ctx.globalAlpha = 1;
+  }
+  slabFront(top, L.wide ? P.wideF : P.safeF);
+}
+
+function drawLane(L, top, r, tick){
+  const v = L.baseV * SPDL[tick];
+  const g = ctx.createLinearGradient(0, top, 0, top + ROW_TOP);
+  g.addColorStop(0, P.roadHi); g.addColorStop(1, P.road);
+  ctx.fillStyle = g; ctx.fillRect(0, top, W, ROW_TOP);
+
+  ctx.fillStyle = 'rgba(190,220,255,.10)'; ctx.fillRect(0, top, W, 1.5);   // lit edge
+  ctx.fillStyle = 'rgba(255,255,255,.035)';          // asphalt grit
+  for (let i = 0; i < 20; i++)
+    ctx.fillRect(hash2(r, i + 5) * W, top + 5 + hash2(r, i + 61) * (ROW_TOP - 10), 2, 2);
+
+  ctx.fillStyle = P.roadDash;                          // centre dashes
+  const slide = (L.dir > 0 ? 1 : -1) * ((tick * 0.55) % 40);
+  for (let x = -40; x < W + 40; x += 40) ctx.fillRect(x + slide, top + ROW_TOP / 2 - 1.5, 18, 3);
+
+  ctx.fillStyle = 'rgba(255,255,255,.055)';
+  ctx.fillRect(GRID_X - 3, top, 2, ROW_TOP); ctx.fillRect(GRID_X + GRID_W + 1, top, 2, ROW_TOP);
+  slabFront(top, P.roadF);
+
+  for (const car of L.cars){
+    const x = sim.carX(L, car, tick);
+      const idx = car.len > 120 ? 2 : car.len > 60 ? 1 : (hash2(r, car.len) > 0.5 ? 0 : 1);
+    for (let w = -1; w <= 1; w++) drawCar(x + w * SPAN, top, car.len, L.dir, idx);
+  }
+}
+
+function drawCar(x, top, len, dir, idx){
+  if (x > W + 26 || x + len < -26) return;
+  const bh = 26, depth = 10;
+  const by = top + (ROW_TOP - bh - depth) / 2 + 1;
+  const ct = P.carTop[idx % 3], cs = P.carSide[idx % 3];
+
+  ctx.fillStyle = 'rgba(0,0,0,.34)';                   // cast shadow
+  rr(x + 4, by + bh + depth - 5, len - 4, 8, 4); ctx.fill();
+
+  carPath(x, by + depth, len, bh, dir);                // side/front face
+  ctx.fillStyle = cs; ctx.fill();
+
+  /* Flat top face, dark side face — the vector-voxel rule Crossy Road runs
+     on. Gradienting the roof down into the side colour is what made the
+     first pass read as brown mush instead of as bright orange traffic. */
+  carPath(x, by, len, bh, dir);                        // roof
+  const g = ctx.createLinearGradient(0, by, 0, by + bh);
+  g.addColorStop(0, ct); g.addColorStop(0.82, ct); g.addColorStop(1, shade(ct, -0.12));
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(8,4,6,.72)'; ctx.stroke();   // silhouette
+
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.34)'; ctx.fillRect(x, by + 1.5, len, 4);
+  ctx.fillStyle = 'rgba(20,32,48,.72)';
+  const gw = Math.min(11, len * 0.20);
+  ctx.fillRect(dir > 0 ? x + len - gw - 9 : x + 9, by + 7, gw, bh - 14);
+  if (len > 60) ctx.fillRect(dir > 0 ? x + 8 : x + len - gw - 8, by + 7, gw * 0.7, bh - 14);
+  ctx.fillStyle = 'rgba(255,255,255,.10)'; ctx.fillRect(x, by + bh - 5, len, 2);
+  ctx.restore();
+  // wheels, on the side face — silhouette cue that survives at 1/4 scale
+  ctx.fillStyle = 'rgba(12,8,10,.85)';
+  const wy = by + bh + depth - 5;
+  ctx.fillRect(x + 7, wy, 11, 5); ctx.fillRect(x + len - 18, wy, 11, 5);
+  if (len > 110) ctx.fillRect(x + len / 2 - 5, wy, 11, 5);
+}
+
+function drawTide(T){
+  const ty = rowScreenY(sim.tideRow) + ROW_H / 2;
+
+  /* Off-screen the flood still has to be legible or its cost is not (L5).
+     A bottom-edge swell that brightens as it closes — the visual twin of the
+     audio rumble, per §11.7 silent-play equivalence. */
+  if (ty > FIELD_BOT - 6){
+    const near = Math.max(0, 1 - (ty - (FIELD_BOT - 6)) / 190);
+    if (near > 0.01){
+      const g = ctx.createLinearGradient(0, FIELD_BOT, 0, FIELD_BOT - 64);
+      g.addColorStop(0, 'rgba(150,96,255,' + (0.66 * near) + ')');
+      g.addColorStop(1, 'rgba(150,96,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, FIELD_BOT - 64, W, 64);
+      const pu = 0.55 + 0.45 * Math.sin(T * (3 + near * 7));
+      ctx.fillStyle = 'rgba(199,155,255,' + (0.30 + 0.6 * near * pu) + ')';
+      ctx.fillRect(0, FIELD_BOT - 3.5, W, 3.5);
+    }
+    if (ty > FIELD_BOT + 40) return;
+  }
+
+  const crest = x => ty + Math.sin(x * 0.031 + T * 2.2) * 5 + Math.sin(x * 0.083 - T * 3.4) * 2.6;
+  ctx.beginPath(); ctx.moveTo(0, crest(0));
+  for (let x = 6; x <= W; x += 6) ctx.lineTo(x, crest(x));
+  ctx.lineTo(W, FIELD_BOT + 90); ctx.lineTo(0, FIELD_BOT + 90); ctx.closePath();
+  const g = ctx.createLinearGradient(0, ty - 8, 0, ty + 150);
+  g.addColorStop(0, FX.tideFlash > 0 ? '#5C2A6B' : P.water);
+  g.addColorStop(1, P.waterDeep);
+  ctx.fillStyle = g; ctx.fill();
+
+  // foam crest
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = 'rgba(199,155,255,.16)';
+  for (let i = 0; i < 22; i++){
+    const x = (i * 71 + (T * 26) % W) % W;
+    ctx.fillRect(x, crest(x) + 8 + (i % 4) * 11, 12 + (i % 3) * 9, 2);
+  }
+  ctx.restore();
+  ctx.strokeStyle = FX.tideFlash > 0 ? P.waterHot : P.foam;
+  ctx.lineWidth = 2.6; ctx.beginPath(); ctx.moveTo(0, crest(0));
+  for (let x = 6; x <= W; x += 6) ctx.lineTo(x, crest(x));
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(199,155,255,.30)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, crest(0) + 7);
+  for (let x = 6; x <= W; x += 6) ctx.lineTo(x, crest(x) + 7);
+  ctx.stroke();
+}
+
+function drawPlayer(T){
+  const p = playerXY(), lift = p.arc * 17;
+  const y = p.y - lift + 2;
+
+  ctx.globalAlpha = 0.42 - p.arc * 0.24; ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.ellipse(p.x, p.y + 15, 15 - p.arc * 4, 5.5 - p.arc * 2, 0, 0, 6.283); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // §7.4 squash & stretch, area-conserving
+  let sx = 1, sy = 1;
+  if (sim.hopT >= HOP_TICKS && sim.hopT < HOP_TICKS + 12){
+    const u = (sim.hopT - HOP_TICKS) / 12;
+    sx = 1 + 0.26 * (1 - u) * Math.cos(u * 3.5); sy = 1 / sx;
+  } else if (p.hop < 1){ sx = 0.87; sy = 1.17; }
+
+  const blink = sim.invuln > 0 && (Math.floor(T * 16) % 2 === 0);
+  const s = 15, d = 8;
+  ctx.save(); ctx.translate(p.x, y); ctx.scale(sx, sy);
+  ctx.globalAlpha = blink ? 0.4 : 1;
+
+  // glow pad — the player is the only lit object on the board
+  const gl = ctx.createRadialGradient(0, 0, 4, 0, 0, 34);
+  gl.addColorStop(0, 'rgba(111,240,255,.30)'); gl.addColorStop(1, 'rgba(111,240,255,0)');
+  ctx.fillStyle = gl; ctx.fillRect(-34, -34, 68, 68);
+
+  ctx.fillStyle = P.playF; rr(-s, -s + d, s * 2, s * 2 - 2, 8); ctx.fill();  // front face
+  const g = ctx.createLinearGradient(0, -s - 4, 0, s);                       // top face
+  g.addColorStop(0, '#FFFFFF'); g.addColorStop(0.62, P.play); g.addColorStop(1, '#CFE4F2');
+  // ears — the silhouette cue. Nothing else on the board has a notched top.
+  ctx.beginPath();
+  ctx.moveTo(-s + 2, -s - 5); ctx.lineTo(-s + 8, -s + 2); ctx.lineTo(s - 8, -s + 2);
+  ctx.lineTo(s - 2, -s - 5); ctx.closePath();
+  ctx.fillStyle = P.play; ctx.fill();
+  rr(-s, -s, s * 2, s * 2, 8); ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 2.4; ctx.strokeStyle = P.playDark; ctx.stroke();
+
+  ctx.fillStyle = P.playDark; rr(-s + 3.5, -6.5, s * 2 - 7, 10, 5); ctx.fill();  // visor
+  ctx.fillStyle = P.rim; rr(-s + 5, -5, s * 2 - 10, 5, 2.5); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fillRect(-6, -4, 3, 3);
+  // rim light, top-left, per the 2D lighting rule for defending a silhouette
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(150,245,255,.85)';
+  ctx.beginPath(); ctx.moveTo(-s + 1, s - 6); ctx.lineTo(-s + 1, -s + 6);
+  ctx.quadraticCurveTo(-s + 1, -s + 1, -s + 7, -s + 1); ctx.lineTo(s - 7, -s + 1);
+  ctx.stroke();
+  ctx.restore(); ctx.globalAlpha = 1;
+
+  // the bank ring — the one timer in the game, so it is drawn on the player
+  if (sim.bankT > 0 && sim.pool > 0 && !RUN.ended){
+    const u = Math.min(1, sim.bankT / BANK_TICKS);
+    ctx.save(); ctx.translate(p.x, p.y + 4);
+    ctx.lineWidth = 3.4; ctx.strokeStyle = 'rgba(255,210,74,.22)';
+    ctx.beginPath(); ctx.arc(0, 0, 27, 0, 6.283); ctx.stroke();
+    ctx.strokeStyle = P.gold; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(0, 0, 27, -1.5708, -1.5708 + 6.283 * u); ctx.stroke();
+    ctx.lineCap = 'butt'; ctx.restore();
+  }
+
+  // the haul rides above the head — it IS the thing that can be taken away
+  if (sim.pool > 0 && !RUN.ended){
+    const val = Math.round(sim.pool * sim.mult * (sim.closing() ? LATE_BANK : 1));
+    const jitter = sim.carry > 0 ? Math.sin(T * 26) * sim.carry * 0.45 : 0;
+    const tx = p.x + jitter, tyy = y - 34 - FX.poolPulse * 5;
+    const txt = '' + val, full = sim.full;
+    ctx.font = '800 17px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+    const wdt = ctx.measureText(txt).width + 24;
+    ctx.fillStyle = 'rgba(8,10,16,.90)'; rr(tx - wdt / 2, tyy - 14, wdt, 24, 12); ctx.fill();
+    ctx.lineWidth = full ? 2.4 : sim.carry > 0 ? 2.2 : 1.5;
+    ctx.strokeStyle = full ? P.red : sim.carry > 0 ? P.gold2 : 'rgba(255,210,74,.6)'; ctx.stroke();
+    ctx.fillStyle = full ? '#FFB0A4' : sim.carry > 0 ? P.gold2 : P.gold;
+    ctx.fillText(txt, tx, tyy + 5);
+    const tag = full ? 'FULL' : sim.carry > 0 ? 'x' + sim.carry : '';
+    if (tag){
+      ctx.font = '800 10px ui-monospace,Menlo,monospace';
+      const tw = ctx.measureText(tag).width + 12;
+      ctx.fillStyle = 'rgba(8,10,16,.92)';
+      rr(tx + wdt / 2 - 2, tyy - 12, tw, 18, 9); ctx.fill();
+      ctx.lineWidth = 1.4; ctx.strokeStyle = full ? P.red : P.gold2; ctx.stroke();
+      ctx.fillStyle = full ? '#FFB0A4' : P.gold2;
+      ctx.fillText(tag, tx + wdt / 2 - 2 + tw / 2, tyy + 1);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------- HUD */
+function fmtClock(ticks){
+  const s = Math.max(0, Math.ceil(ticks / 60));
+  return s >= 20 ? (Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'))
+                 : ('0:' + String(s).padStart(2, '0'));
+}
+function chipBox(x, y, w, h, edge, fill){
+  ctx.fillStyle = fill || P.chip; rr(x, y, w, h, 14); ctx.fill();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, 'rgba(255,255,255,.10)'); g.addColorStop(0.5, 'rgba(255,255,255,.02)');
+  g.addColorStop(1, 'rgba(0,0,0,.22)');
+  ctx.fillStyle = g; rr(x, y, w, h, 14); ctx.fill();
+  ctx.lineWidth = 1.4; ctx.strokeStyle = edge || P.chipEdge; ctx.stroke();
+}
+function label(txt, x, y, align, col){
+  ctx.textAlign = align; ctx.font = '800 9px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = col || P.dim;
+  ctx.fillText(txt.split('').join(' '), x, y);
+}
+
+function drawHUD(T, hot){
+  const left = sim.ticksLeft(), secs = left / 60;
+  const closing = sim.closing(), urgent = secs <= 10;
+
+  const bg = ctx.createLinearGradient(0, 0, 0, FIELD_TOP);
+  bg.addColorStop(0, '#0A0F1A'); bg.addColorStop(1, '#0D1422');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, FIELD_TOP);
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, FIELD_TOP - 3, W, 3);
+  ctx.fillStyle = 'rgba(160,215,245,.13)'; ctx.fillRect(0, FIELD_TOP - 4, W, 1);
+
+  // committed score, left (§8.1)
+  RUN.shownScore += (sim.score - RUN.shownScore) * 0.22;
+  label('SCORE', 18, SYS_TOP + 13, 'left');
+  ctx.textAlign = 'left';
+  ctx.font = '800 34px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = RUN.pbHit ? P.gold : P.ink;
+  ctx.save();
+  if (FX.bankPulse > 0){
+    const k = 1 + FX.bankPulse * 0.14;
+    ctx.translate(18, SYS_TOP + 43); ctx.scale(k, k); ctx.translate(-18, -(SYS_TOP + 43));
+  }
+  ctx.fillText(Math.round(RUN.shownScore).toLocaleString(), 18, SYS_TOP + 43);
+  ctx.restore();
+
+  // countdown, centre — mandatory, never hidden (§8.1)
+  const pulse = urgent ? 1 + 0.10 * Math.abs(Math.sin(T * Math.PI)) : 1;
+  ctx.save(); ctx.translate(W / 2, SYS_TOP + 38); ctx.scale(pulse, pulse);
+  if (FX.clockTear > 0) ctx.translate((Math.random() - 0.5) * 6 * FX.clockTear, 0);
+  ctx.textAlign = 'center'; ctx.font = '800 40px ui-monospace,Menlo,monospace';
+  const cCol = FX.clockTear > 0.05 ? '#FF7A5C' : urgent ? '#FF5A48' : closing ? P.gold2 : P.ink;
+  ctx.fillStyle = cCol;
+  if (urgent || closing){ ctx.shadowColor = cCol; ctx.shadowBlur = 18; }
+  ctx.fillText(fmtClock(left), 0, 0);
+  ctx.restore();
+  if (FX.clockTear > 0){
+    ctx.globalAlpha = FX.clockTear; ctx.textAlign = 'left';
+    ctx.font = '800 14px ui-monospace,Menlo,monospace'; ctx.fillStyle = '#FF7A5C';
+    ctx.fillText('-3.0s', W / 2 + 48, SYS_TOP + 44); ctx.globalAlpha = 1;
+  }
+  label(closing ? 'LAST CALL' : 'TIME', W / 2, SYS_TOP + 51, 'center',
+        closing ? P.gold2 : P.dim);
+
+  // multiplier, right, with the streak pip row (§8.1)
+  const tier = sim.tierOf(sim.streak);
+  const tcol = ['#9FB4C4', '#7FE8D2', '#FFD24A', '#FF9E2C', '#FF5A48'][tier];
+  label('MULT', W - 18, SYS_TOP + 13, 'right');
+  ctx.save(); ctx.translate(W - 18, SYS_TOP + 41);
+  const mp = 1 + FX.multPulse * 0.20; ctx.scale(mp, mp);
+  ctx.textAlign = 'right'; ctx.font = '800 26px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = tcol;
+  if (tier >= 2){ ctx.shadowColor = tcol; ctx.shadowBlur = 14; }
+  ctx.fillText('x' + (Math.round(sim.mult * 10) / 10).toFixed(1).replace(/\.0$/, ''), 0, 0);
+  ctx.restore();
+  for (let i = 0; i < 6; i++){
+    const on = i < Math.min(6, Math.ceil(sim.streak / 5));
+    ctx.fillStyle = on ? tcol : 'rgba(255,255,255,.12)';
+    rr(W - 18 - 7 - i * 10, SYS_TOP + 47, 7, 3.5, 1.8); ctx.fill();
+  }
+
+  drawMeter();
+  drawHaulBar(T);
+
+  /* The siren takes anything unbanked (§5.6), so the last seconds have to
+     say so. This is the visual twin of the per-second audio pulse and the
+     thing that turns the countdown into a decision instead of an ending. */
+  if (!RUN.ended && sim.pool > 0 && left <= 360){
+    const p2 = 0.55 + 0.45 * Math.sin(T * 9);
+    ctx.textAlign = 'center';
+    ctx.font = '800 22px ui-monospace,Menlo,monospace';
+    ctx.fillStyle = 'rgba(255,90,72,' + (0.65 + 0.35 * p2) + ')';
+    ctx.shadowColor = '#FF5A48'; ctx.shadowBlur = 20;
+    ctx.fillText('BANK IT', W / 2, FIELD_BOT - 34);
+    ctx.shadowBlur = 0;
+  }
+
+  if (closing && sim.tick < SESSION_TICKS - CLOSING_TICKS + 120 && !RUN.ended){
+    const u = (sim.tick - (SESSION_TICKS - CLOSING_TICKS)) / 120;
+    ctx.globalAlpha = Math.sin(u * Math.PI);
+    ctx.textAlign = 'center';
+    ctx.font = '800 30px ui-monospace,Menlo,monospace'; ctx.fillStyle = P.gold2;
+    ctx.shadowColor = P.gold2; ctx.shadowBlur = 22;
+    ctx.fillText('LAST CALL', W / 2, FIELD_TOP + 128);
+    ctx.shadowBlur = 0;
+    ctx.font = '800 12px ui-monospace,Menlo,monospace'; ctx.fillStyle = P.gold;
+    ctx.fillText('BANKS PAY x1.5 · MULT HOLDS', W / 2, FIELD_TOP + 150);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* The thumb zone (§8.1) — 164 dp that must never host anything that can cost
+   the player, so it hosts the one thing they most need under their thumb: the
+   haul, and how close it is to banking. Every state of the §9.2C decision is
+   named here in one line, which is also what makes the silent clip legible. */
+function drawHaulBar(T){
+  const x = 18, y = FIELD_BOT + 30, w = W - 36, h = 78;
+  const late = sim.closing() ? LATE_BANK : 1;
+  const val = Math.round(sim.pool * sim.mult * late);
+  const onShore = sim.bankT >= 0, carrying = sim.carry > 0, full = sim.full;
+  const hue = val === 0 ? 'rgba(160,196,220,.42)' : full ? '#FF7A62' : carrying ? P.gold2 : P.gold;
+  const edge = val === 0 ? P.chipEdge : full ? 'rgba(255,90,72,.55)' : 'rgba(255,210,74,.42)';
+
+  ctx.save();
+  const puls = 1 + FX.bankPulse * 0.045 + (carrying ? Math.sin(T * 9) * 0.005 * sim.carry : 0);
+  ctx.translate(W / 2, y + h / 2); ctx.scale(puls, puls); ctx.translate(-W / 2, -(y + h / 2));
+  chipBox(x, y, w, h, edge, val === 0 ? '#101724' : '#161B26');
+
+  label(val === 0 ? 'HAUL' : sim.closing() ? 'HAUL AT RISK  x1.5' : 'HAUL AT RISK',
+        x + 18, y + 22, 'left', val === 0 ? P.dim : 'rgba(255,210,74,.8)');
+  ctx.textAlign = 'left'; ctx.font = '800 34px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = hue;
+  if (val > 0 && (full || carrying)){ ctx.shadowColor = hue; ctx.shadowBlur = 16; }
+  ctx.fillText(val === 0 ? '—' : String(val), x + 18, y + 55);
+  ctx.shadowBlur = 0;
+
+  ctx.textAlign = 'right'; ctx.font = '800 11px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = val === 0 ? P.dim : full ? '#FF7A62' : onShore ? P.safeRim : '#FF9B7A';
+  ctx.fillText(val === 0 ? 'CROSS A LANE TO EARN'
+             : full ? 'HAUL FULL — BANK IT'
+             : onShore ? 'BANKING…'
+             : 'ONE HIT LOSES IT', x + w - 18, y + 24);
+  if (val > 0 && carrying){
+    ctx.font = '800 15px ui-monospace,Menlo,monospace'; ctx.fillStyle = P.gold2;
+    ctx.fillText('CARRY x' + sim.carry, x + w - 18, y + 50);
+  }
+
+  // the bank fill — the one timer in the game, drawn where the thumb is
+  const bx = x + 18, bw = w - 36, by = y + h - 17;
+  ctx.fillStyle = 'rgba(255,255,255,.09)'; rr(bx, by, bw, 7, 3.5); ctx.fill();
+  if (val > 0){
+    const u = onShore ? Math.min(1, sim.bankT / BANK_TICKS) : 1;
+    ctx.fillStyle = onShore ? P.safeRim : hue;
+    rr(bx, by, Math.max(7, bw * u), 7, 3.5); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* Score meter, left rail (§8.1). Deliberately slim and drawn ON the board
+   with no scrim — a dark gradient plate over full-bleed lanes reads as a
+   rendering fault, which is what the first pass looked like. */
+function drawMeter(){
+  const x = 7, y = FIELD_TOP + 14, h = FIELD_H - 34, w = 9;
+  const top = Math.max(sim.score, RUN.pb, RUN.rival.score, RUN.median, 1200) * 1.12;
+  ctx.fillStyle = 'rgba(4,7,12,.72)'; rr(x - 2, y - 2, w + 4, h + 4, (w + 4) / 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.07)'; rr(x, y, w, h, w / 2); ctx.fill();
+  const fh = h * Math.min(1, sim.score / top);
+  if (fh > 1){
+    const g = ctx.createLinearGradient(0, y + h - fh, 0, y + h);
+    g.addColorStop(0, P.gold); g.addColorStop(1, P.gold2);
+    ctx.fillStyle = g; rr(x, y + h - fh, w, fh, w / 2); ctx.fill();
+  }
+  const mark = (val, col, txt, dash) => {
+    if (val <= 0) return;
+    const yy = y + h - h * Math.min(1, val / top);
+    ctx.strokeStyle = col; ctx.lineWidth = dash ? 2 : 2.6;
+    ctx.setLineDash(dash ? [3, 3] : []);
+    ctx.beginPath(); ctx.moveTo(x - 3, yy); ctx.lineTo(x + w + 5, yy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.save(); ctx.translate(x + w + 12, yy - 4); ctx.rotate(-Math.PI / 2);
+    ctx.font = '800 8px ui-monospace,Menlo,monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(4,7,12,.9)'; ctx.fillRect(-2, -8, ctx.measureText(txt).width + 4, 10);
+    ctx.fillStyle = col; ctx.fillText(txt, 0, 0); ctx.restore();
+  };
+  mark(RUN.rival.score, sim.score >= RUN.rival.score ? 'rgba(170,195,215,.4)' : P.safeRim,
+       RUN.rival.name, false);
+  mark(RUN.pb || RUN.median, sim.score >= (RUN.pb || RUN.median) ? 'rgba(170,195,215,.4)' : P.ink,
+       RUN.pb ? 'BEST' : 'MEDIAN', true);
+}
+
+function drawHint(T){
+  const p = playerXY(), u = (T * 1.1) % 1;
+  ctx.save(); ctx.globalAlpha = 0.85 * Math.sin(u * Math.PI);
+  ctx.translate(p.x + 34, p.y - 6 - u * 30);
+  ctx.strokeStyle = P.ink; ctx.lineWidth = 2.6; ctx.beginPath();
+  ctx.moveTo(-9, 8); ctx.lineTo(0, -4); ctx.lineTo(9, 8); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 16, 7, 0, 6.283); ctx.fillStyle = 'rgba(237,248,255,.55)'; ctx.fill();
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+/* ------------------------------------------------------- result (§7.9) */
+function drawResult(){
+  const ms = performance.now() - RUN.endAt;
+  const dim = Math.min(0.8, ms / 167 * 0.8);
+  ctx.fillStyle = 'rgba(5,7,11,' + dim + ')'; ctx.fillRect(0, 0, W, H);
+  if (ms < 500) return;
+
+  const u = Math.min(1, (ms - 500) / 260), e = 1 - Math.pow(1 - u, 3);
+  const py = H - 300 * e;
+  ctx.save(); ctx.translate(0, py);
+  ctx.fillStyle = 'rgba(9,13,19,.98)'; rr(14, 0, W - 28, 300, 20); ctx.fill();
+  ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(160,215,240,.18)'; ctx.stroke();
+  ctx.fillStyle = P.shoreEdge; ctx.globalAlpha = 0.5; ctx.fillRect(14, 0, W - 28, 2); ctx.globalAlpha = 1;
+
+  const cu = Math.min(1, (ms - 500) / 260);
+  const shown = Math.round(sim.score * (1 - Math.pow(1 - cu, 2)));
+  ctx.textAlign = 'center';
+  ctx.font = '800 10px ui-monospace,Menlo,monospace'; ctx.fillStyle = P.dim;
+  ctx.fillText('FINAL', W / 2, 34);
+  ctx.font = '800 54px ui-monospace,Menlo,monospace';
+  ctx.fillStyle = (RUN.pb > 0 && sim.score > RUN.pb) ? P.gold : P.ink;
+  ctx.fillText(shown.toLocaleString(), W / 2, 82);
+
+  // §10.5 — the numerically smallest TRUE gap. Never manufactured.
+  const gaps = [];
+  if (RUN.pb > 0){
+    if (sim.score > RUN.pb) gaps.push({ v: sim.score - RUN.pb, s: 'NEW BEST  +' + (sim.score - RUN.pb), c: P.gold });
+    else gaps.push({ v: RUN.pb - sim.score, s: (RUN.pb - sim.score) + ' from your best', c: P.ink });
+  } else if (RUN.median > 0){
+    const d = Math.abs(RUN.median - sim.score);
+    gaps.push({ v: d, s: (sim.score >= RUN.median ? '+' : '-') + d + ' vs your median', c: P.ink });
+  }
+  const rd = RUN.rival.score - sim.score;
+  gaps.push(rd > 0 ? { v: rd, s: '+' + rd + ' to pass ' + RUN.rival.name, c: '#7FE8D2' }
+                   : { v: -rd, s: 'PASSED ' + RUN.rival.name + ' by ' + (-rd), c: '#7FE8D2' });
+  gaps.sort((a, b) => a.v - b.v);
+  ctx.font = '800 19px ui-monospace,Menlo,monospace'; ctx.fillStyle = gaps[0].c;
+  ctx.fillText(gaps[0].s, W / 2, 118);
+
+  // run readout — the honest breakdown
+  const st = [
+    ['GRAZES', sim.tierCount[2], P.red], ['CLOSE', sim.tierCount[1], P.amber],
+    ['BANKS', sim.banks, P.gold], ['HITS', sim.mistakes, '#FF8A6E'],
+  ];
+  const cw = (W - 56) / 4;
+  st.forEach((s, i) => {
+    const x = 28 + cw * (i + 0.5);
+    ctx.font = '800 9px ui-monospace,Menlo,monospace';
+    ctx.fillStyle = P.dim; ctx.fillText(s[0], x, 142);
+    ctx.font = '800 22px ui-monospace,Menlo,monospace';
+    ctx.fillStyle = s[1] > 0 ? s[2] : 'rgba(200,220,235,.35)';
+    ctx.fillText(s[1], x, 165);
+  });
+  ctx.fillStyle = 'rgba(160,215,240,.12)'; ctx.fillRect(34, 128, W - 68, 1);
+
+  // retry — bottom-centre, thumb arc (§8.2), interactive at 750ms
+  const live = ms > 750;
+  const by = 300 - 100 - 26;
+  ctx.globalAlpha = live ? 1 : 0.5;
+  const bs = live ? 1 : 0.86;
+  ctx.save(); ctx.translate(W / 2, by + 26); ctx.scale(bs, bs); ctx.translate(-W / 2, -(by + 26));
+  const gg = ctx.createLinearGradient(0, by, 0, by + 52);
+  gg.addColorStop(0, '#3FE3C4'); gg.addColorStop(1, '#14A98F');
+  ctx.fillStyle = gg; rr(W / 2 - 90, by, 180, 52, 26); ctx.fill();
+  ctx.fillStyle = '#04211C'; ctx.font = '800 19px ui-monospace,Menlo,monospace';
+  ctx.fillText('RETRY', W / 2, by + 33);
+  ctx.restore(); ctx.globalAlpha = 1;
+
+  ctx.font = '800 9px ui-monospace,Menlo,monospace'; ctx.fillStyle = P.dim;
+  ctx.fillText('SEED ' + SEED.toString(36).toUpperCase().slice(-6) + '  ·  TAP ANYWHERE', W / 2, 288);
+  ctx.restore();
+}
+
+function drawDebug(){
+  ctx.font = '10px ui-monospace,Menlo,monospace'; ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, H - 74, 210, 74);
+  ctx.fillStyle = '#8FE'; let y = H - 62;
+  const L = [
+    't=' + sim.tick + ' wt=' + sim.wt + ' dEff=' + (DEFF[Math.min(sim.wt, DEFF.length - 1)]).toFixed(2),
+    'row=' + sim.row + ' tide=' + sim.tideRow.toFixed(2) + ' lag=' + (sim.maxScored - sim.tideRow).toFixed(1),
+    'pool=' + sim.pool + ' x' + sim.mult.toFixed(2) + ' streak=' + sim.streak + ' carry=' + sim.carry,
+    'tiers ' + sim.tierCount.join('/') + '  hits ' + sim.trafficHits + '/' + sim.tideHits,
+    'late=' + sim.lateScore + ' (' + (sim.score ? Math.round(sim.lateScore / sim.score * 100) : 0) + '%)',
+  ];
+  for (const s of L){ ctx.fillText(s, 6, y); y += 12; }
+}
+
+/* =========================== TEST / BOT HOOKS ==========================
+   Exposed for src/_grazebot.js. __pump drives the REAL input path — the bots
+   dispatch actual pointer events (memory: prototype-exploit-testing) and the
+   latch is sampled at the top of the tick, so a press+release inside one
+   frame cannot be dropped (memory: prototype-build-gates). */
+window.__GRAZE = {
+  get sim(){ return sim; }, get RUN(){ return RUN; },
+  makeSim, replay, serializeTrace, deserializeTrace,
+  SESSION_TICKS, HOP_TICKS, BANK_TICKS, BASE, BASE_LATE, RUNG, MULT_CAP,
+  SHAVE_T, CLOSE_T, COLS, CELL, GRID_X, ROW_H, SPAN, LX0, DEFF, SPDL, CUMS,
+  TIDE_DMG, DMG_CAP, CLOSING_TICKS, SHORE, LANE, DIRS,
+  setSeed(s){ SEED = s >>> 0; newRun(); },
+  reset(s){ if (s !== undefined) SEED = s >>> 0; newRun(); },
+  // advance n ticks; fn(tick, sim) may dispatch DOM events or set the latch
+  pump(n, fn){
+    for (let i = 0; i < n && !RUN.ended; i++){
+      if (fn) fn(sim.tick, sim);
+      stepOnce();
+    }
+    FX.camRow = sim.row;          // headless pumping skips the camera lerp
+    return sim;
+  },
+  // real DOM gesture, resolved by the same handlers a finger uses
+  gesture(dir, subframe){
+    const r = cv.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const d = [[0, -60], [0, 60], [-60, 0], [60, 0]][dir];
+    const mk = (type, x, y) => new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, pointerId: 1 });
+    cv.dispatchEvent(mk('pointerdown', cx, cy));
+    if (subframe) { /* no tick between down and up — the §gate case */ }
+    dispatchEvent(mk('pointerup', cx + d[0] * scl, cy + d[1] * scl));
+  },
+  tap(){
+    const r = cv.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const mk = (t2, x, y) => new PointerEvent(t2, { clientX: x, clientY: y, bubbles: true, pointerId: 1 });
+    cv.dispatchEvent(mk('pointerdown', cx, cy)); dispatchEvent(mk('pointerup', cx, cy));
+  },
+  get latch(){ return latch; }, setLatch(d){ latch = d; },
+  /* The presentation loop itself. rAF does not fire in a backgrounded pane,
+     so this is the one link __pump cannot exercise — exposed so it can be
+     driven with synthetic timestamps and proven to advance the sim. */
+  frame(now){ frame(now); },
+};
+</script>
+</body>
+</html>
