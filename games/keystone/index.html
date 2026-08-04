@@ -1,0 +1,1752 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#100A05">
+<title>KEYSTONE — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0A0704;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,#241609 0%,#0A0704 76%)}
+  canvas{display:block;touch-action:none;image-rendering:auto;
+    box-shadow:0 0 90px rgba(0,0,0,.92), 0 0 0 1px rgba(255,197,66,.10)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+
+/* =========================================================================
+   KEYSTONE  —  Evermore Arcade prototype
+
+   Drop the swinging beam on the tower. It is worth more the longer you let
+   it swing, and only a beam landed in the gold notch banks the ladder you
+   have built. Miss the tower and the run is over.
+
+   Built against EVERMORE_ARCADE_GAME_BIBLE.md v1.1. The sim below is the
+   §11.1 platform contract: deterministic, DOM-free, and driven identically
+   by the renderer and by the bot harness in window.KSBOT. Every escalation
+   and scoring constant in it was fitted by that harness — including three
+   dominant-strategy exploits it caught and the design changes that killed
+   them (see the comments on VAL_BASE, RIPE_MUL and OK_FRAC).
+
+   Everything procedural: art, audio, physics. No assets, no libraries.
+   ========================================================================= */
+
+const TAU = Math.PI * 2;
+
+/* ------------------------------------------------------------------ tables */
+/* §11.2 forbids sin/pow in the sim — they are not bit-identical across
+   platforms. One sine table, and D_eff precomputed per tick at init(). */
+const SIN_N = 4096;
+const SIN_T = new Float64Array(SIN_N + 1);
+for (let i = 0; i <= SIN_N; i++) SIN_T[i] = Math.sin(i / SIN_N * TAU);
+function lsin(a) {
+  let u = a / TAU;
+  u = u - Math.floor(u);
+  const f = u * SIN_N, i = f | 0, t = f - i;
+  return SIN_T[i] + (SIN_T[i + 1] - SIN_T[i]) * t;
+}
+function lcos(a) { return lsin(a + TAU * 0.25); }
+
+/* --------------------------------------------------------------------- rng */
+/* PCG32. One stream per concern so adding a cosmetic roll never shifts a
+   gameplay roll (§11.2). */
+function PCG(seed, streamId) {
+  let s = (seed >>> 0) ^ 0x9E3779B9;
+  let inc = (((streamId >>> 0) << 1) | 1) >>> 0;
+  let state = 0;
+  function next() {
+    const old = state >>> 0;
+    state = (Math.imul(old, 747796405) + inc) >>> 0;
+    const word = Math.imul((old >>> ((old >>> 28) + 4)) ^ old, 277803737) >>> 0;
+    return ((word >>> 22) ^ word) >>> 0;
+  }
+  state = (s + inc) >>> 0; next();
+  return {
+    u32: next,
+    f: () => next() / 4294967296,
+    int: (n) => next() % n,
+  };
+}
+/* Order-independent hash — lets the lookahead read placement N+2's descriptor
+   without consuming a roll that gameplay depends on. */
+function hash2(a, b) {
+  let h = Math.imul(a ^ 0x27d4eb2d, 0x165667b1) >>> 0;
+  h = (h ^ (b + 0x9e3779b9 + (h << 6) + (h >>> 2))) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2545f491) >>> 0;
+  return (h ^ (h >>> 13)) >>> 0;
+}
+
+/* ------------------------------------------------------------------ tuning */
+const T = {
+  /* — difficulty (§5.1). K moves the tail, T_RAMP moves the median (§5.7). — */
+  ONRAMP_TICKS: 240,
+  K_ESC: 4.0,
+  T_RAMP: 120,
+  BREATHE_A: 0.10,
+  BREATHE_P: 12,
+  MAX_TICKS: 60 * 200,
+
+  /* — geometry, in design units (VW = 540) — */
+  W0: 168,              // starting block width
+  BH: 30,               // block height
+  CHAIN: 260,           // pendulum length
+  AMP_0: 0.72,          // base swing amplitude, radians
+
+  /* — escalation vectors (§5.2) —
+     band 1: block width narrows + swing rate rises, both from tick 0
+     band 2: chain wobble adds pattern complexity from D_eff >= 3.5
+     terminal: width floor x swing rate makes the window sub-tick by ~150s */
+  WIDTH_MIN_RATIO: 0.07,
+  WIDTH_K: 0.18,
+  WIDTH_BASE: 1.18,
+  OMEGA_0: 1.45,
+  OMEGA_D: 0.52,
+  OMEGA_FLOOR: 0.48,
+  WAIT_ACCEL: 0.36,     // per second of the CURRENT swing — what patience costs
+  WOBBLE_AT: 3.5,
+  WOBBLE_K: 0.055,
+  WOBBLE_MAX: 0.17,
+  WOBBLE_RATIO: 2.7,
+
+  /* — the falling block — */
+  GRAV: 2600,
+  LAND_Y: 355,          // sim units below the pivot — fixes the fall height
+                        // in SIM space so layout can never change the game
+
+  /* — scoring (§9) — */
+  /* Value must grow SUPERLINEARLY with the wait. Under a linear ramp, points
+     per second is B(1/t + k) — always falling — so dropping the instant the
+     beam is available strictly dominates, and the whole greed mechanic is
+     decoration. The bots found this at 13,565 vs 7,343 for optimal play. A
+     quadratic ramp makes points-per-second rise with the wait, so patience
+     pays and the swing rate is what charges you for it. */
+  VAL_BASE: 16,
+  VAL_G: 4.5,
+  VAL_REF: 2.8,         // seconds — value PLATEAUS here, so points-per-second
+                        // peaks exactly at the plateau: waiting less is worth
+                        // less, waiting more is worth the same but harder
+  /* The ladder is bought with PATIENCE, not with volume. A beam only counts
+     toward the streak if it was ripe when you dropped it — otherwise the
+     dominant line is to slap beams down as fast as they appear and ride the
+     multiplier on sheer count, which is how the bots got to 13,565. */
+  RIPE_MUL: 2.0,        // of VAL_BASE
+  MULT_PER: 2,          // +1x per N streak
+  MULT_MAX: 8,
+  KEY_EVERY: 4,
+  /* The gold slot sits near the OUTER EDGE of the seating window: reaching it
+     still seats the beam, but you are aiming at a narrow mark with almost no
+     margin left before the shear line. Banking costs the multiplier ladder,
+     the tempo, and the safety margin — not a guaranteed chunk of tower. */
+  SLOT_OFF_F: 1.15,     // of the seat window — the notch straddles the shear
+                        // line, so going for it means aiming at the edge of
+                        // safety: miss inward and you still seat, miss
+                        // outward and you shear
+  SLOT_HALF_F: 0.09,    // of block width
+  SLOT_HALF_MIN: 9,
+
+  /* — placement grades. Seat window is a FIXED distance in design units
+     (§7.8 idiom): the block either seats flush and keeps its full width, or
+     it shears down to the overlap. A fixed window against a shrinking block
+     is what turns width escalation into precision pressure. — */
+  RECOVER: 13,          // a seated beam may only cantilever this far past the
+  RECOVER_PERF: 22,     // stack, so rebuilding a whittled tower takes a RUN of
+                        // clean placements, not one lucky drop
+  SEAT_F: 0.205,        // seating window, as a fraction of the beam
+  SEAT_MIN: 3,
+  SEAT_PERF_F: 0.055,
+  SEAT_PERF_MIN: 1.5,
+  OK_FRAC: 0.45,
+  MISS_EPS: 3,
+  MAX_SWING: 4.2,       // the hook slips — you do not get to not commit
+
+  /* — the pool destabilises the tower. Uncapped in the pool, so hoarding is
+     never free: a big at-risk pile visibly lurches the target you are aiming
+     at, and it lurches under the block while it falls. See the design note
+     on C8's enumerated terms. — */
+  SWAY_MAX: 11,
+  SWAY_REF: 1400,
+  SWAY_CAP: 55,
+  SWAY_W: 1.15,
+
+  /* — unified streak tiers (§9.5, scaled — see design doc) — */
+  TIERS: [4, 9, 16, 26],
+};
+
+/* Ten authored swing chunks, 2–4 placements each, randomly sequenced with
+   jitter (§6). Per-object randomness is unlearnable; chunks are not. */
+const CHUNKS = [
+  { id: 'steady',  n: 3, amp: 1.00, om: 1.00, lean: 0 },
+  { id: 'wide',    n: 2, amp: 1.22, om: 0.94, lean: 0 },
+  { id: 'tight',   n: 3, amp: 0.74, om: 1.16, lean: 0 },
+  { id: 'leanL',   n: 2, amp: 1.00, om: 1.00, lean: -22 },
+  { id: 'leanR',   n: 2, amp: 1.00, om: 1.00, lean: 22 },
+  { id: 'breather',n: 2, amp: 0.86, om: 0.80, lean: 0 },
+  { id: 'rush',    n: 3, amp: 0.95, om: 1.18, lean: 0 },
+  { id: 'hitch',   n: 2, amp: 1.00, om: 1.02, lean: 0, wob: 0.05 },
+  { id: 'long',    n: 4, amp: 1.30, om: 0.90, lean: 0 },
+  { id: 'snap',    n: 3, amp: 0.80, om: 1.30, lean: 0 },
+];
+const BREATHER = 5;
+
+/* ===================================================================== SIM */
+class Keystone {
+  constructor() {
+    this.simVersion = '0.4.0';
+    this.gameId = 'keystone';
+    this.deff = null;
+  }
+
+  init(seed, config) {
+    seed = seed >>> 0;
+    this.seed = seed;
+    this.cfg = config || {};
+    this.tick = 0;
+
+    if (!this.deff) this.deff = new Float64Array(T.MAX_TICKS + 1);
+    for (let k = 0; k <= T.MAX_TICKS; k++) {
+      if (k < T.ONRAMP_TICKS) { this.deff[k] = 1; continue; }
+      const tau = (k - T.ONRAMP_TICKS) / 60;
+      const trend = 1 + T.K_ESC * Math.pow(tau / T.T_RAMP, 0.8);
+      this.deff[k] = trend * (1 + T.BREATHE_A * lsin(TAU * tau / T.BREATHE_P));
+    }
+
+    const rSeq = PCG(seed, 1);
+    this.chunkFor = new Uint8Array(600);
+    let p = 0, sinceBreather = 0;
+    while (p < 600) {
+      let c;
+      if (sinceBreather >= 8) { c = BREATHER; sinceBreather = 0; }
+      else { c = rSeq.int(CHUNKS.length); }
+      const n = CHUNKS[c].n;
+      for (let i = 0; i < n && p < 600; i++, p++) this.chunkFor[p] = c;
+      sinceBreather += n;
+    }
+
+    this.blocks = [{ x: 0, w: T.W0 }];
+    this.score = 0;
+    this.pool = 0;
+    this.mult = 1;
+    this.streak = 0;
+    this.maxStreak = 0;
+    this.placements = 0;
+    this.alive = true;
+    this.deathCauseId = 0;
+    this.falling = null;
+    this.prevDown = false;
+    this.lastPlaceTick = 0;
+    this.events = [];
+    this.trace = [];
+    this.traceRun = 0;
+    this.traceDown = false;
+    this.autoDrop = false;
+    this.dropTheta = 0;
+    this.newSwing(true);
+  }
+
+  /* ---------------------------------------------------------- derived state */
+  get dEff() { return this.deff[this.tick < T.MAX_TICKS ? this.tick : T.MAX_TICKS]; }
+  get top() { return this.blocks[this.blocks.length - 1]; }
+
+  blockWidth() {
+    const r = T.WIDTH_BASE - T.WIDTH_K * this.dEff;
+    return T.W0 * (r < T.WIDTH_MIN_RATIO ? T.WIDTH_MIN_RATIO : (r > 1 ? 1 : r));
+  }
+
+  /* Whether placement p carries the gold slot, and which side it sits on.
+     Hash-derived so the two-deep lookahead (§6) costs no gameplay roll. */
+  desc(p) {
+    const isKey = ((p + 1) % T.KEY_EVERY) === 0;
+    const side = (hash2(this.seed, p * 2 + 7) & 1) ? 1 : -1;
+    return { isKey, side };
+  }
+  chunk(p) { return CHUNKS[this.chunkFor[p < 600 ? p : p % 600]]; }
+
+  /* The tower leans under the weight of everything you have not banked. */
+  towerSway() {
+    const a = Math.min(T.SWAY_CAP, T.SWAY_MAX * (this.pool / T.SWAY_REF));
+    const w = T.SWAY_W * (1 + 0.22 * Math.min(2, this.pool / T.SWAY_REF));
+    return a * lsin(this.tick / 60 * w);
+  }
+
+  newSwing(first) {
+    const ch = this.chunk(this.placements);
+    this.swingTicks = 0;
+    this.phase = -TAU * 0.25;      // starts held at one extreme, never centred
+    const r = PCG(this.seed, 2 + (this.placements & 1023));
+    this.dir = (hash2(this.seed, this.placements * 3 + 11) & 1) ? 1 : -1;
+    this.ampScale = ch.amp * (0.96 + r.f() * 0.08);
+    this.omScale = ch.om * (0.97 + r.f() * 0.06);
+    this.lean = ch.lean;
+    this.chunkWob = ch.wob || 0;
+    if (first) this.swingTicks = 0;
+  }
+
+  omega() {
+    const d = this.dEff;
+    return T.OMEGA_0 * (T.OMEGA_FLOOR + T.OMEGA_D * d) * this.omScale
+         * (1 + T.WAIT_ACCEL * (this.swingTicks / 60));
+  }
+  amp() { return T.AMP_0 * this.ampScale; }
+  wobble() {
+    const d = this.dEff;
+    let w = this.chunkWob + (d > T.WOBBLE_AT ? T.WOBBLE_K * (d - T.WOBBLE_AT) : 0);
+    return w > T.WOBBLE_MAX ? T.WOBBLE_MAX : w;
+  }
+
+  /* Angle of the chain from vertical. The beam hangs from it and tilts with
+     it, which is the whole read: slow at the extremes, fastest through dead
+     centre, so a centred landing is the hardest timing in the game and the
+     gold notch out on the shoulder is the easier — but costlier — mark. */
+  swingTheta() {
+    return this.amp() * lsin(this.phase) * this.dir
+         + this.wobble() * lsin(this.phase * T.WOBBLE_RATIO);
+  }
+  swingX() { return this.lean + T.CHAIN * lsin(this.swingTheta()); }
+  swingY() { return T.CHAIN * lcos(this.swingTheta()); }
+  value() {
+    let u = (this.swingTicks / 60) / T.VAL_REF;
+    if (u > 1) u = 1;
+    return T.VAL_BASE * (1 + T.VAL_G * u * u);
+  }
+  /* The seating window shrinks with the beam, so the notch the player has to
+     hit narrows visibly all run. This is the vector that eventually makes the
+     window smaller than one tick of swing — the 180s ceiling (§5.4). */
+  seat(bw) { return Math.max(T.SEAT_MIN, T.SEAT_F * bw); }
+  seatPerfect(bw) { return Math.max(T.SEAT_PERF_MIN, T.SEAT_PERF_F * bw); }
+
+  slotGeom(bw) {
+    const half = Math.max(T.SLOT_HALF_MIN, T.SLOT_HALF_F * bw);
+    return { half, off: this.seat(bw) * T.SLOT_OFF_F };
+  }
+  slot() {
+    const d = this.desc(this.placements);
+    if (!d.isKey) return null;
+    /* Same width the beam will actually arrive at — otherwise the mark the
+       player is shown is not the mark the sim scores against. */
+    const bw = this.blockWidth();
+    const g = this.slotGeom(bw);
+    return { c: this.top.x + this.towerSway() + d.side * g.off, w: g.half * 2, side: d.side };
+  }
+
+  /* ------------------------------------------------------------------ step */
+  step(tick, input) {
+    this.tick = tick;
+    const down = !!(input && input.down);
+    const edge = down && !this.prevDown;
+    this.prevDown = down;
+    if (down !== this.traceDown) { this.trace.push(this.traceRun); this.traceRun = 0; this.traceDown = down; }
+    this.traceRun++;
+    if (!this.alive) return;
+
+    if (this.falling) {
+      const f = this.falling;
+      f.vy += T.GRAV / 60;
+      f.y += f.vy / 60;
+      if (f.y >= f.landY) { f.y = f.landY; this.resolve(); }
+      return;
+    }
+
+    if (edge) { this.drop(); return; }
+
+    this.swingTicks++;
+    this.phase += this.omega() / 60;
+    if (this.swingTicks >= T.MAX_SWING * 60) { this.autoDrop = true; this.drop(); }
+  }
+
+  drop() {
+    this.dropTheta = this.swingTheta();
+    /* The beam arrives at its full allowance, NOT trimmed to the stack. A
+       wide beam centred on a whittled stack is stable and bridges back out
+       to full width — which is how clean play recovers a battered tower.
+       Off-centre by more than SEAT and it shears down to the contact. */
+    const bw = this.blockWidth();
+    this.falling = {
+      x: this.swingX(),
+      w: bw,
+      y: this.swingY(),
+      landY: T.LAND_Y,
+      vy: 0,
+      value: this.value(),
+    };
+  }
+
+  resolve() {
+    const f = this.falling;
+    const t = this.top;
+    const tx = t.x + this.towerSway();
+    const l = Math.max(f.x - f.w * 0.5, tx - t.w * 0.5);
+    const r = Math.min(f.x + f.w * 0.5, tx + t.w * 0.5);
+    const ov = r - l;
+    const dropX = f.x;
+    const val = f.value;
+    this.falling = null;
+
+    if (ov <= T.MISS_EPS) {
+      this.alive = false;
+      this.deathCauseId = 1;
+      this.lostPool = this.pool;
+      this.pool = 0;
+      this.events.push({ t: this.tick, k: 'miss', x: dropX, ov, auto: !!this.autoDrop });
+      this.missAuto = !!this.autoDrop;
+      return;
+    }
+
+    const reach = Math.min(f.w, t.w);
+    const dx = Math.abs(dropX - tx);
+    const q = ov / reach;
+
+    const seatW = this.seat(f.w);
+    const sl = this.slotAt(t, f.w);
+    const inSlot = !!sl && Math.abs(dropX - sl.c) <= sl.w * 0.5;
+    let grade;
+    if (dx <= this.seatPerfect(f.w)) grade = 'perfect';
+    else if (dx <= seatW) grade = 'solid';
+    /* Graded against the BEAM, not against the overlap. Measured against the
+       overlap, the middle grade silently vanishes once the tower is narrower
+       than seat/OK_FRAC, so every slip became a multiplier break and the bots
+       chipped on 36% of placements. */
+    else if (dx <= T.OK_FRAC * f.w) grade = 'ok';
+    else grade = 'chip';
+    /* The notch is a notch: drop into it and the beam locks, however far out
+       it is. That is what makes reaching for it a bounded risk. */
+    const seated = dx <= seatW || inSlot;
+    if (inSlot && grade === 'chip') grade = 'ok';
+
+    /* Base value commits immediately; everything the LADDER adds is what sits
+       at risk. So the multiplier itself is the losable resource (§L3), the
+       committed score moves on every placement (§9.1, §9.6 both want that),
+       and a player who never banks still has a real number at the end. */
+    let banked = false;
+    this.score += val;
+    this.pool += val * (this.mult - 1);
+    if (inSlot) {
+      this.score += this.pool;
+      this.pool = 0;
+      this.streak = 0;
+      this.mult = 1;
+      banked = true;
+    }
+
+    if (!banked) {
+      if (grade === 'chip') { this.streak = 0; this.mult = 1; }
+      else if ((grade === 'perfect' || grade === 'solid') && val >= T.VAL_BASE * T.RIPE_MUL) {
+        this.streak++;
+        if (this.streak > this.maxStreak) this.maxStreak = this.streak;
+        const m = 1 + Math.floor(this.streak / T.MULT_PER);
+        this.mult = m > T.MULT_MAX ? T.MULT_MAX : m;
+      }
+    }
+
+    /* A seated beam does not shear — but it can only cantilever so far past
+       the stack, so a whittled tower is rebuilt over several clean placements
+       and the silhouette stays an honest record of the run. */
+    const cap = t.w + (grade === 'perfect' ? T.RECOVER_PERF : T.RECOVER);
+    const w = seated ? Math.min(f.w, cap) : ov;
+    /* A seated beam settles flush into the notch — the stack does not walk.
+       Only a shear moves the tower, which keeps drift a consequence of
+       mistakes rather than an accumulating tax on clean play. */
+    const nx = seated ? t.x : (l + r) * 0.5 - this.towerSway();
+    this.blocks.push({ x: nx, w });
+    this.placements++;
+    this.lastPlaceTick = this.tick;
+    this.events.push({ t: this.tick, k: grade, banked, q, dx, val, x: dropX });
+    this.newSwing(false);
+  }
+
+  slotAt(t, bw) {
+    const d = this.desc(this.placements);
+    if (!d.isKey) return null;
+    const g = this.slotGeom(bw);
+    return { c: t.x + this.towerSway() + d.side * g.off, w: g.half * 2, side: d.side };
+  }
+
+  getState() {
+    return {
+      committedScore: Math.round(this.score),
+      atRiskPool: Math.round(this.pool),
+      multiplier: this.mult,
+      streak: this.streak,
+      alive: this.alive,
+      deathCauseId: this.alive ? null : this.deathCauseId,
+      dEff: this.dEff,
+    };
+  }
+
+  /* Run-length encoded input, one byte per run, 255 meaning "add 255 and keep
+     reading". Clamping instead of continuing silently truncated any run longer
+     than 4.25 s — which is most of them — and desynchronised every tick after
+     it. The 1,000-seed replay gate caught it at 44 failures. */
+  serializeTrace() {
+    const runs = this.trace.slice();
+    runs.push(this.traceRun);
+    const out = [];
+    for (let n of runs) {
+      while (n >= 255) { out.push(255); n -= 255; }
+      out.push(n);
+    }
+    return Uint8Array.from(out);
+  }
+
+  static replay(seed, trace, maxTicks) {
+    const g = new Keystone();
+    g.init(seed, {});
+    const cap = maxTicks || T.MAX_TICKS;
+    let down = false, i = 0, k = 0;
+    while (i < trace.length && k < cap && g.alive) {
+      let n = 0;
+      while (i < trace.length && trace[i] === 255) { n += 255; i++; }
+      if (i < trace.length) { n += trace[i]; i++; }
+      for (let j = 0; j < n && k < cap && g.alive; j++, k++) g.step(k, { down });
+      down = !down;
+    }
+    return g.getState();
+  }
+}
+
+/* ===================================================================== BOTS */
+/* §11.5 requires a bot. The lesson that matters more than §11.5: a harness
+   that only models good play measures the wrong thing. Half of these are
+   written to cheat, and the bar is that every one of them scores at or below
+   careless-but-honest play. */
+
+function xAtPhase(g, ph) {
+  const th = g.amp() * lsin(ph) * g.dir + g.wobble() * lsin(ph * T.WOBBLE_RATIO);
+  return g.lean + T.CHAIN * lsin(th);
+}
+
+/* A bot brain: waits per its policy, predicts the crossing of its target,
+   compensates its own reaction latency, and misses by a human amount. */
+function brain(opts) {
+  const o = opts;
+  let armed = -1, jit = 0, lastPlace = -1;
+  return function (g, rng) {
+    if (g.placements !== lastPlace) { lastPlace = g.placements; armed = -1; }
+    if (g.falling) return { down: false };
+
+    const sw = g.swingTicks / 60;
+    let ready;
+    if (o.wait === 'first') ready = true;
+    else if (o.wait === 'late') ready = sw >= 3.4;
+    else ready = sw >= 2.2;
+    if (!ready) return { down: false };
+
+    if (armed >= 0) {
+      if (g.swingTicks >= armed) { armed = -1; return { down: true }; }
+      return { down: false };
+    }
+
+    const tx = o.target(g);
+    const om = g.omega() / 60;
+    /* Find the crossing AHEAD of time so error can be symmetric — a player
+       who is sometimes early and sometimes late, not one whose mistakes only
+       ever make them more accurate. */
+    let n = -1;
+    let prev = xAtPhase(g, g.phase);
+    for (let i = 1; i <= 70; i++) {
+      const cur = xAtPhase(g, g.phase + om * i);
+      if ((prev - tx) * (cur - tx) <= 0) { n = i; break; }
+      prev = cur;
+    }
+    /* Only commit when the crossing is imminent — a player tracking a moving
+       target re-reads it constantly rather than locking in a second early. */
+    if (n < 0 || n > 10) return { down: false };
+    jit = o.lateTicks + (rng.f() + rng.f() + rng.f() - 1.5) * 2 * o.jitterTicks;
+    const fire = g.swingTicks + n + Math.round(jit);
+    if (fire <= g.swingTicks) return { down: true };
+    armed = fire;
+    return { down: false };
+  };
+}
+
+const CENTRE = (g) => g.top.x + g.towerSway();
+const SLOT = (g) => { const s = g.slot(); return s ? s.c : CENTRE(g); };
+const ripeAt = (m) => (g) => (g.slot() && g.mult >= m) ? g.slot().c : CENTRE(g);
+const RIPE = ripeAt(5);
+
+const STRATS = {
+  /* The §11.5 safe-play bot: survival only, no interest in score. */
+  /* The genuine survival maximiser: tick-perfect, takes the earliest safe
+     crossing, and banks at every opportunity to keep the tower calm. This is
+     the bot the 180s ceiling is verified against. */
+  survivor:  () => brain({ wait: 'first', target: SLOT,   lateTicks: 0, jitterTicks: 0 }),
+  safe:      () => brain({ wait: 'first', target: CENTRE, lateTicks: 0, jitterTicks: 0 }),
+  /* Careless but honest — the bar every exploit must fail to beat. */
+  honest:    () => brain({ wait: 'plateau', target: CENTRE, lateTicks: 3, jitterTicks: 4.5 }),
+  /* Competent human: banks when the ladder is ripe. */
+  skilled:   () => brain({ wait: 'plateau', target: RIPE,   lateTicks: 0, jitterTicks: 1.7 }),
+  /* The p50 reference player: slightly behind the beat, ordinary noise. */
+  /* The p50 reference. 2.2 ticks is ~37 ms SD, which is where untrained
+     adults sit on a periodic tap task — the pendulum is exactly that. This
+     models a player; it does not certify p50. §5.7 requires refitting K and
+     T_ramp against >=500 real runs before ship. */
+  median:    () => brain({ wait: 'plateau', target: ripeAt(3), lateTicks: 1.0, jitterTicks: 2.2 }),
+  /* Plays scared: takes every slot going. The floor of sensible play. */
+  cautious:  () => brain({ wait: 'plateau', target: SLOT, lateTicks: 1.0, jitterTicks: 2.2 }),
+  /* Tick-perfect. Establishes the per-seed plausibility band (§10.8). */
+  perfect:   () => brain({ wait: 'plateau', target: RIPE,   lateTicks: 0, jitterTicks: 0 }),
+
+  /* ---- exploit strategies ---- */
+  instant:   () => (g) => ({ down: !g.falling && g.swingTicks <= 1 }),
+  spam:      () => (g, rng, k) => ({ down: (k % 2) === 0 }),
+  maxwait:   () => brain({ wait: 'late',  target: CENTRE, lateTicks: 1.0, jitterTicks: 2.2 }),
+  neverbank: () => brain({ wait: 'plateau', target: CENTRE, lateTicks: 1.0, jitterTicks: 2.2 }),
+  alwaysbank:() => brain({ wait: 'plateau', target: SLOT,   lateTicks: 1.0, jitterTicks: 2.2 }),
+  still:     () => () => ({ down: false }),
+};
+
+function runBot(seed, strat) {
+  const g = new Keystone();
+  g.init(seed, {});
+  const rng = PCG(seed ^ 0xABCD, 9);
+  const fn = STRATS[strat]();
+  let k = 0;
+  for (; k < T.MAX_TICKS && g.alive; k++) g.step(k, fn(g, rng, k));
+  return {
+    seconds: k / 60,
+    score: Math.round(g.score),
+    lostPool: Math.round(g.lostPool || 0),
+    placements: g.placements,
+    maxStreak: g.maxStreak,
+    finalW: Math.round(g.top.w),
+  };
+}
+
+function suite(n) {
+  const rows = [];
+  for (const s of Object.keys(STRATS)) {
+    const secs = [], scores = [], plc = [];
+    let over180 = 0;
+    for (let i = 0; i < n; i++) {
+      const r = runBot(1000 + i * 7919, s);
+      secs.push(r.seconds); scores.push(r.score); plc.push(r.placements);
+      if (r.seconds >= 179.9) over180++;
+    }
+    secs.sort((a, b) => a - b); scores.sort((a, b) => a - b);
+    const pc = (a, p) => a[Math.min(a.length - 1, Math.floor(a.length * p))];
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    rows.push({
+      strat: s,
+      p10s: +pc(secs, 0.1).toFixed(1), p50s: +pc(secs, 0.5).toFixed(1),
+      p90s: +pc(secs, 0.9).toFixed(1), p99s: +pc(secs, 0.99).toFixed(1),
+      medScore: pc(scores, 0.5), p90Score: pc(scores, 0.9),
+      placements: Math.round(mean(plc)), over180,
+    });
+  }
+  return rows;
+}
+
+function table(n) {
+  const rows = suite(n || 60);
+  const pad = (s, w) => String(s).padEnd(w);
+  const head = ['strategy', 'p10s', 'p50s', 'p90s', 'p99s', 'medScore', 'p90Score', 'blocks', '>=180'];
+  const wid = [12, 7, 7, 7, 7, 10, 10, 8, 6];
+  console.log(head.map((h, i) => pad(h, wid[i])).join(''));
+  for (const r of rows) {
+    console.log([r.strat, r.p10s, r.p50s, r.p90s, r.p99s, r.medScore, r.p90Score, r.placements, r.over180]
+      .map((v, i) => pad(v, wid[i])).join(''));
+  }
+  return rows;
+}
+
+
+
+/* ================================================================== SHELL */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+const eBack = t => { const c = 2.70158; return 1 + c * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2); };
+
+function HX(h) {
+  h = h.trim();
+  if (h[0] === '#') { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+  const m = h.match(/[\d.]+/g); return [+m[0], +m[1], +m[2]];
+}
+function mix(a, b, t) {
+  const A = HX(a), B = HX(b);
+  return 'rgb(' + Math.round(A[0] + (B[0] - A[0]) * t) + ',' + Math.round(A[1] + (B[1] - A[1]) * t) + ',' + Math.round(A[2] + (B[2] - A[2]) * t) + ')';
+}
+function rgba(h, a) { const A = HX(h); return 'rgba(' + A[0] + ',' + A[1] + ',' + A[2] + ',' + a + ')'; }
+function tone(h, f) { const A = HX(h); return 'rgb(' + clamp(A[0] * f | 0, 0, 255) + ',' + clamp(A[1] * f | 0, 0, 255) + ',' + clamp(A[2] * f | 0, 0, 255) + ')'; }
+function commas(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+/* Smooth reproducible noise for the trauma model (§7.2 — never random()). */
+function vnoise(seed, x) {
+  const i = Math.floor(x), f = x - i;
+  const h = (n) => { let t = Math.imul((n ^ seed) >>> 0, 2654435761) >>> 0; t ^= t >>> 15; return (t >>> 0) / 2147483648 - 1; };
+  const a = h(i), b = h(i + 1);
+  return a + (b - a) * (f * f * (3 - 2 * f));
+}
+
+/* ----------------------------------------------------------------- palette */
+/* The shipped Evermore kit: carved wood, warm tan plaque faces, near-black
+   HUD pills, gold. The at-risk pool is deliberately EMBER, not gold, so the
+   quantity that can vanish is never confusable with the one that cannot (C6). */
+const C = {
+  ink:      '#100A05',
+  night:    '#1A1008',
+  woodDeep: '#1C1008',
+  woodDark: '#3E2210',
+  woodMid:  '#6A4022',
+  woodHi:   '#C9924F',
+  tan:      '#F0C382',
+  tanMid:   '#DCA662',
+  tanDeep:  '#C08148',
+  gold:     '#FFC542',
+  goldLite: '#FFE9A8',
+  goldMid:  '#C87D14',
+  goldDeep: '#8A5406',
+  brass:    '#C9A227',
+  brassLite:'#F3E3A6',
+  brassDeep:'#6B4E0C',
+  cream:    '#FFF3DC',
+  hud:      '#221C18',
+  risk:     '#FF8A1E',
+  riskLite: '#FFC48A',
+  red:      '#E8452C',
+  ember:    '#FF7A29',
+  stone:    '#8A7A66',
+};
+
+const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ================================================================== AUDIO */
+class Audio_ {
+  constructor() { this.ctx = null; this.on = true; this.master = null; this.layers = []; }
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) { this.on = false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = 0.42;
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -16; comp.knee.value = 22; comp.ratio.value = 9; comp.attack.value = .003; comp.release.value = .18;
+    this.master.connect(comp); comp.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 1.1, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    let s = 12345; for (let i = 0; i < n; i++) { s = (Math.imul(s, 1103515245) + 12345) >>> 0; d[i] = (s / 2147483648) - 1; }
+    this.noise = buf;
+    this.buildBed();
+  }
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+
+  /* Three stems on one bed, added at the §5.6 beats (15 / 45 / 75 s). */
+  buildBed() {
+    const c = this.ctx, t = c.currentTime;
+    const mk = (freq, type, gain, detune) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.value = freq; o.detune.value = detune || 0;
+      g.gain.value = 0; o.connect(g); g.connect(this.master); o.start(t);
+      return { o, g };
+    };
+    this.layers = [
+      mk(60, 'sine', 0, 0),
+      mk(180, 'triangle', 0, -6),
+      mk(360, 'triangle', 0, 5),
+    ];
+    const lfo = c.createOscillator(), lg = c.createGain();
+    lfo.frequency.value = 0.16; lg.gain.value = 8;
+    lfo.connect(lg); lg.connect(this.layers[1].o.frequency); lfo.start(t);
+  }
+  setLayers(n) {
+    if (!this.ctx) return;
+    const amps = [0.085, 0.05, 0.032];
+    for (let i = 0; i < 3; i++) {
+      const want = i < n ? amps[i] : 0;
+      this.layers[i].g.gain.setTargetAtTime(want, this.t, 0.9);
+    }
+  }
+  quiet() { if (this.ctx) for (const l of this.layers) l.g.gain.setTargetAtTime(0, this.t, 0.25); }
+
+  blip(freq, dur, type, vol, detune) {
+    if (!this.ctx || !this.on) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'triangle'; o.frequency.value = freq; o.detune.value = detune || 0;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol === undefined ? .3 : vol, t + .012);
+    g.gain.exponentialRampToValueAtTime(.0001, t + (dur || .12));
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + (dur || .12) + .04);
+  }
+  /* §7.7 — a real pentatonic ladder, not a linear Hz ramp. */
+  ladder(streak) {
+    const deg = [0, 2, 4, 7, 9];
+    const f = 360 * Math.pow(2, deg[streak % 5] / 12) * Math.pow(2, Math.min(Math.floor(streak / 5), 3));
+    const dt = (Math.random() - .5) * 14;
+    this.blip(f, .12, 'triangle', .30, dt);
+    this.blip(f * 2, .035, 'sine', Math.min(.16, .0015 * streak + .02), dt);
+  }
+  /* The break must be HEARD before it is read (§7.7, L3). */
+  breakDown() {
+    if (!this.ctx || !this.on) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(430, t);
+    o.frequency.exponentialRampToValueAtTime(96, t + .42);
+    g.gain.setValueAtTime(.24, t); g.gain.exponentialRampToValueAtTime(.0001, t + .46);
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1500;
+    o.connect(f); f.connect(g); g.connect(this.master); o.start(t); o.stop(t + .5);
+  }
+  seat(perfect) {
+    this.blip(perfect ? 300 : 220, .09, 'sine', .26);
+    this.thud(perfect ? .5 : .34);
+  }
+  thud(v) {
+    if (!this.ctx || !this.on) return;
+    const c = this.ctx, t = c.currentTime;
+    const s = c.createBufferSource(); s.buffer = this.noise;
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
+    const g = c.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.0001, t + .22);
+    s.connect(f); f.connect(g); g.connect(this.master); s.start(t); s.stop(t + .26);
+  }
+  bank() {
+    const seq = [523, 659, 784, 1047];
+    seq.forEach((f, i) => setTimeout(() => this.blip(f, .16, 'triangle', .26), i * 55));
+  }
+  death() {
+    if (!this.ctx || !this.on) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + .7);
+    g.gain.setValueAtTime(.42, t); g.gain.exponentialRampToValueAtTime(.0001, t + .8);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + .85);
+    this.thud(.85);
+  }
+  pb() { [784, 988, 1175, 1568].forEach((f, i) => setTimeout(() => this.blip(f, .22, 'triangle', .3), i * 70)); }
+  ui() { this.blip(560, .06, 'square', .12); }
+}
+const S = new Audio_();
+function vib(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+/* ================================================================= LAYOUT */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha: false });
+const VW = 540;
+let VH = 960, DPR = 1;
+const L = {};
+function layout() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  const ratio = VW * wh / ww;
+  VH = clamp(Number.isFinite(ratio) ? Math.round(ratio) : 960, 880, 1240);
+  const s = Math.min(ww / VW, wh / VH);
+  DPR = clamp(window.devicePixelRatio || 1, 1, 2.6);
+  cv.width = Math.round(VW * s * DPR);
+  cv.height = Math.round(VH * s * DPR);
+  cv.style.width = Math.round(VW * s) + 'px';
+  cv.style.height = Math.round(VH * s) + 'px';
+
+  /* §8.1 bands, disjoint and summing to the screen. Nothing lethal is ever
+     drawn below playB — the thumb owns that strip. */
+  L.hudY = 20; L.hudH = 58;
+  L.playT = L.hudY + L.hudH + 14;
+  L.thumbH = Math.round(VH * 0.195);
+  L.playB = VH - L.thumbH;
+  L.pivotY = L.playT + 24;
+  L.topY = L.pivotY + T.LAND_Y;
+  L.meterX = 12; L.meterW = 30;
+  L.retryY = VH - 104;
+}
+layout();
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+
+/* =============================================================== ART BITS */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  r = Math.min(r, w * .5, h * .5);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function txt(t, x, y, size, fill, stroke, sw, align, weight) {
+  ctx.font = (weight || 900) + ' ' + size + 'px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (stroke && sw) { ctx.lineWidth = sw; ctx.strokeStyle = stroke; ctx.strokeText(t, x, y); }
+  ctx.fillStyle = fill; ctx.fillText(t, x, y);
+}
+function sphere(x, y, r, col, o) {
+  o = o || {};
+  const dark = o.dark || tone(col, .45), lite = o.lite || tone(col, 1.3);
+  const rim = o.rim || C.ink, rw = o.rimW !== undefined ? o.rimW : r * .11;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+  ctx.fillStyle = dark; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  ctx.beginPath(); ctx.arc(x - r * .13, y - r * .15, r * .99, 0, TAU); ctx.fillStyle = col; ctx.fill();
+  ctx.beginPath(); ctx.arc(x - r * .30, y - r * .33, r * .76, 0, TAU); ctx.fillStyle = lite; ctx.fill();
+  ctx.restore();
+  if (o.spec !== false) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+    ctx.globalAlpha = o.specA || .9;
+    ctx.translate(x - r * .34, y - r * .40); ctx.rotate(-.5);
+    ctx.beginPath(); ctx.ellipse(0, 0, r * .27, r * .155, 0, 0, TAU);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.restore();
+  }
+  if (rw > 0) { ctx.beginPath(); ctx.arc(x, y, r - rw * .5, 0, TAU); ctx.lineWidth = rw; ctx.strokeStyle = rim; ctx.stroke(); }
+}
+function glow(x, y, r, col, a) {
+  if (a <= .003 || r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(col, a)); g.addColorStop(.45, rgba(col, a * .38)); g.addColorStop(1, rgba(col, 0));
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function pill(x, y, w, h, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.42)'; ctx.save(); ctx.translate(0, 3); rr(x, y, w, h, h * .5); ctx.fill(); ctx.restore();
+  rr(x, y, w, h, h * .5); ctx.fillStyle = o.bg || C.hud; ctx.fill();
+  ctx.save(); ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h * .55);
+  g.addColorStop(0, 'rgba(255,255,255,.16)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h * .55);
+  ctx.restore();
+  ctx.lineWidth = 1.6; ctx.strokeStyle = o.line || 'rgba(190,175,165,.55)';
+  rr(x, y, w, h, h * .5); ctx.stroke();
+  ctx.restore();
+}
+function plaque(x, y, w, h, r, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(x + 3, y + 6, w, h, r + 2); ctx.fill();
+  rr(x, y, w, h, r); ctx.fillStyle = o.border || C.woodDark; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; ctx.stroke();
+  const b = o.b !== undefined ? o.b : 9;
+  const g = ctx.createLinearGradient(0, y + b, 0, y + h - b);
+  const f0 = o.f0 || C.tan, f1 = o.f1 || C.tanDeep;
+  g.addColorStop(0, f0); g.addColorStop(.55, mix(f0, f1, .5)); g.addColorStop(1, f1);
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.fillStyle = g; ctx.fill();
+  ctx.save(); rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.30)'; ctx.fillRect(x + b, y + b, w - b * 2, 3);
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(x + b, y + h - b - 4, w - b * 2, 4);
+  ctx.restore();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.stroke();
+  if (o.rivets !== false && w > 70) {
+    const rv = (px, py) => sphere(px, py, 4.2, C.goldDeep, { lite: C.gold, rimW: 1.4, specA: .8 });
+    rv(x + 11, y + 11); rv(x + w - 11, y + 11); rv(x + 11, y + h - 11); rv(x + w - 11, y + h - 11);
+  }
+  ctx.restore();
+}
+function coinIcon(x, y, r) {
+  ctx.save(); ctx.translate(x, y);
+  sphere(0, 0, r, C.goldMid, { lite: C.gold, dark: '#7A4405', rimW: r * .17, rim: '#4A2803', specA: .9 });
+  ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(0, 0, r * .52, 0, TAU);
+  ctx.lineWidth = r * .13; ctx.strokeStyle = C.goldLite; ctx.stroke();
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+/* A carved beam. Same visual grammar as the shipped plaques so the play
+   objects and the chrome read as one kit (§11.6: silhouette + contrast). */
+function beam(x, y, w, h, o) {
+  o = o || {};
+  if (w < 3) return;
+  const r = Math.min(5, w * .3);
+  ctx.save();
+  if (o.shadow !== false) { ctx.fillStyle = 'rgba(0,0,0,.42)'; rr(x + 2, y + 5, w, h, r); ctx.fill(); }
+  rr(x, y, w, h, r); ctx.fillStyle = o.rim || C.woodDark; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = C.ink; ctx.stroke();
+  const b = Math.min(5, w * .16, h * .22);
+  if (w - b * 2 > 1.5) {
+    const g = ctx.createLinearGradient(0, y + b, 0, y + h - b);
+    const f0 = o.f0 || C.tan, f1 = o.f1 || C.tanDeep;
+    g.addColorStop(0, f0); g.addColorStop(.5, mix(f0, f1, .45)); g.addColorStop(1, f1);
+    rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(1.5, r - 2)); ctx.fillStyle = g; ctx.fill();
+    ctx.save(); rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(1.5, r - 2)); ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,.26)'; ctx.fillRect(x + b, y + b, w - b * 2, 2);
+    ctx.fillStyle = 'rgba(0,0,0,.20)'; ctx.fillRect(x + b, y + h - b - 3, w - b * 2, 3);
+    if (w > 46) {
+      ctx.globalAlpha = .13; ctx.strokeStyle = C.woodDeep; ctx.lineWidth = 1;
+      for (let i = 1; i < 3; i++) {
+        const gy = y + b + (h - b * 2) * i / 3;
+        ctx.beginPath(); ctx.moveTo(x + b, gy); ctx.lineTo(x + w - b, gy); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* ================================================================ THE RUN */
+const G = {
+  state: 'play',           // play | dying | result
+  sim: new Keystone(),
+  tick: 0,
+  seed: 0,
+  competitive: true,
+  down: false,
+  pendingDown: false,
+  camOff: 0,
+  trauma: 0,
+  hitstop: 0,
+  flash: 0, flashCol: '#fff',
+  chroma: 0,
+  parts: [],
+  floats: [],
+  shatter: 0,
+  bankPulse: 0,
+  scorePulse: 0,
+  seatPulse: 0,
+  shown: 0,                // animated committed score
+  pbCrossed: false,
+  layersOn: 0,
+  deathT: 0,
+  deathTrail: [],
+  deathX: 0, deathY: 0,
+  gap: null,
+  lastGrade: '',
+  T: 0,                    // presentation clock
+};
+
+/* -------------------------------------------------------------- meta (§10) */
+const META = {
+  key: (k) => 'ks_' + k,
+  today() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  },
+  /* One global seed per day. Served server-side in production; derived here
+     so the prototype behaves the same way for everyone on the same date. */
+  dailySeed() {
+    const s = this.today(); let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  },
+  /* §10.1 — free play must NEVER be able to reach the live daily seed. */
+  practiceSeed(n) { return hash2(0xF00D, n * 2654435761 % 4294967291); },
+  get(k, d) { try { const v = localStorage.getItem(this.key(k)); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(this.key(k), JSON.stringify(v)); } catch (e) {} },
+  attempts() { const a = this.get('att_' + this.today(), { n: 0, best: 0 }); return a; },
+  useAttempt(score) {
+    const a = this.attempts();
+    a.n++; a.best = Math.max(a.best, score);
+    this.set('att_' + this.today(), a);
+    const h = this.get('hist', []); h.push(score); while (h.length > 20) h.shift(); this.set('hist', h);
+    const pb = this.get('pb_' + G.seed, 0);
+    if (score > pb) this.set('pb_' + G.seed, score);
+    return a;
+  },
+  hist() { return this.get('hist', []); },
+  seedPB() { return this.get('pb_' + G.seed, 0); },
+  rollingMedian() {
+    const h = this.hist().slice().sort((a, b) => a - b);
+    return h.length ? h[Math.floor(h.length / 2)] : 0;
+  },
+  sd() {
+    const h = this.hist(); if (h.length < 4) return Infinity;
+    const m = h.reduce((a, b) => a + b, 0) / h.length;
+    return Math.sqrt(h.reduce((a, b) => a + (b - m) * (b - m), 0) / h.length);
+  },
+  /* Prototype stand-in for the bracket. Deterministic from the seed so the
+     rival is the same for everyone today, which is the property that matters. */
+  rival() {
+    const r = PCG(G.seed, 77);
+    const names = ['ALEX', 'PRIYA', 'SAM', 'NOOR', 'JUNO', 'KIT', 'MARA', 'DEV'];
+    return { name: names[r.int(names.length)], score: 1800 + r.int(2600) };
+  },
+};
+
+/* §10.5 — the numerically SMALLEST true gap, inside 1.0 SD. Not a priority
+   order, not a manufactured near-miss: sort by size and take the smallest. */
+function computeGap(score) {
+  const cands = [];
+  const pb = META.seedPB();
+  if (pb > score) cands.push({ d: pb - score, s: 'to beat your best on today’s seed' });
+  else if (!pb) { const rm = META.rollingMedian(); if (rm > score) cands.push({ d: rm - score, s: 'to your recent median' }); }
+  const rv = META.rival();
+  if (rv.score > score) cands.push({ d: rv.score - score, s: 'to pass ' + rv.name });
+  const step = score < 1000 ? 500 : 1000;
+  const nextRound = Math.ceil((score + 1) / step) * step;
+  cands.push({ d: nextRound - score, s: 'to ' + commas(nextRound) });
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.d - b.d);
+  const g = cands[0];
+  const sd = META.sd();
+  /* A gap wider than the player's own run-to-run spread is a rebuke, not a
+     near-miss. Show nothing rather than something discouraging. */
+  if (g.d > sd) return null;
+  return g;
+}
+
+/* ------------------------------------------------------------------- juice */
+function shakeIt(a) { if (REDUCED) return; G.trauma = clamp(G.trauma + a, 0, 1); }
+function flashIt(a, col) { G.flash = Math.max(G.flash, a); G.flashCol = col || '#fff'; }
+function burst(x, y, tier, col) {
+  if (REDUCED) tier = Math.min(tier, 1);
+  const n = 10 + tier * 6, spread = (90 + tier * 30) * Math.PI / 180;
+  for (let i = 0; i < n && G.parts.length < 400; i++) {
+    const a = -Math.PI / 2 + (Math.random() - .5) * spread + (Math.random() - .5) * .6;
+    const sp = 90 + Math.random() * 180 + tier * 26;
+    G.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: .55 + Math.random() * .4, t: 0, s: 10, col: col || C.tan });
+  }
+}
+function floatUp(x, y, text, col, size) { G.floats.push({ x, y, text, col: col || C.cream, t: 0, size: size || 26 }); }
+
+function tierOf(streak) {
+  const t = T.TIERS;
+  return streak >= t[3] ? 4 : streak >= t[2] ? 3 : streak >= t[1] ? 2 : streak >= t[0] ? 1 : 0;
+}
+
+/* --------------------------------------------------------------- run flow */
+function startRun(competitive) {
+  S.init();
+  G.competitive = competitive !== false;
+  const runIdx = META.get('practiceN', 0) + 1;
+  if (!G.competitive) { META.set('practiceN', runIdx); G.seed = META.practiceSeed(runIdx); }
+  else G.seed = META.dailySeed();
+  G.sim = new Keystone();
+  G.sim.init(G.seed, {});
+  G.tick = 0; G.state = 'play';
+  G.camOff = 0; G.trauma = 0; G.hitstop = 0; G.flash = 0; G.chroma = 0;
+  G.parts.length = 0; G.floats.length = 0;
+  G.shown = 0; G.pbCrossed = false; G.layersOn = 0; G.deathT = 0;
+  G.deathTrail.length = 0; G.gap = null; G.shatter = 0; G.bankPulse = 0;
+  G.lastTier = 0; G.lastScore = 0; G.lastPlacements = 0; G.lastMult = 1;
+  S.setLayers(0);
+}
+
+/* One 60 Hz sim tick plus everything the presentation layer hangs off it. */
+function simTick() {
+  const g = G.sim;
+  const before = { score: g.score, pool: g.pool, mult: g.mult, streak: g.streak, placements: g.placements, alive: g.alive };
+  if (g.falling) { G.deathTrail.push([g.falling.x, g.falling.y]); if (G.deathTrail.length > 14) G.deathTrail.shift(); }
+
+  /* Latch the press. A tap whose down AND up both land inside one rendered
+     frame would otherwise never be sampled by any tick — on a throttled or
+     slow frame the player's input just vanishes. Sampling the latch at the top
+     of the tick is what §7.1 means by "touch sampled, consumed same tick". */
+  const pressed = G.down || G.pendingDown;
+  G.pendingDown = false;
+  g.step(G.tick, { down: pressed });
+  G.tick++;
+
+  const ev = g.events[g.events.length - 1];
+  if (g.placements !== before.placements && ev) onPlacement(ev, before);
+  if (before.alive && !g.alive) onDeath(ev);
+
+  /* §5.6 beats — music layers at 15 / 45 / 75 s. */
+  const secs = G.tick / 60;
+  const want = secs >= 75 ? 3 : secs >= 45 ? 2 : secs >= 15 ? 1 : 0;
+  if (want !== G.layersOn) { G.layersOn = want; S.setLayers(want); }
+}
+
+function onPlacement(ev, before) {
+  const g = G.sim;
+  const sx = VW * .5 + ev.x, sy = L.topY + G.camOff;
+  /* Clamped: on a slow frame several sim ticks run before the camera lerps,
+     and an unbounded offset walks the whole tower off the bottom of the
+     screen. The camera may never owe more than a course and a half. */
+  G.camOff = Math.min(G.camOff + T.BH, T.BH * 1.6);
+  G.seatPulse = 1;
+  G.lastGrade = ev.k;
+
+  if (ev.k === 'perfect' || ev.k === 'solid') {
+    const tier = tierOf(g.streak);
+    S.ladder(g.streak);
+    S.seat(ev.k === 'perfect');
+    burst(sx, sy, tier, ev.k === 'perfect' ? C.goldLite : C.tan);
+    if (tier > (G.lastTier || 0)) { shakeIt(.50); G.lastTier = tier; if (tier >= 3) G.chroma = 1; }
+    if (ev.k === 'perfect') floatUp(sx, sy - 20, 'FLUSH', C.goldLite, 22);
+    vib(ev.k === 'perfect' ? 14 : 8);
+  } else if (ev.k === 'ok') {
+    S.seat(false); burst(sx, sy, 0, C.tanDeep); vib(6);
+  } else if (ev.k === 'chip') {
+    S.breakDown(); shakeIt(.55); G.shatter = 1; G.lastTier = 0;
+    burst(sx, sy, 1, C.stone); vib([12, 40, 12]);
+    floatUp(sx, sy - 20, 'CHIPPED', C.red, 22);
+  }
+
+  const gained = Math.round(g.score - before.score);
+  if (gained > 0) floatUp(sx + 40, sy - 34, '+' + commas(gained), C.cream, 24);
+
+  if (ev.banked) {
+    G.bankPulse = 1; S.bank(); shakeIt(.55);
+    burst(sx, sy - 6, 3, C.gold);
+    const banked = Math.round(before.pool + 0);
+    if (banked > 0) floatUp(VW * .5, sy - 62, 'BANKED ' + commas(banked), C.gold, 30);
+    vib([10, 30, 10, 30, 18]);
+  }
+  G.lastTier = tierOf(g.streak);
+}
+
+function onDeath(ev) {
+  G.state = 'dying'; G.deathT = 0;
+  G.hitstop = 10;
+  G.deathX = VW * .5 + (ev ? ev.x : 0);
+  G.deathY = L.topY + G.camOff;
+  shakeIt(1); flashIt(.5, C.red);
+  S.death(); S.quiet(); vib([30, 60, 90]);
+  const score = Math.round(G.sim.score);
+  if (G.competitive) META.useAttempt(score);
+  G.gap = computeGap(score);
+}
+
+/* ================================================================ RENDERS */
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, '#2A1B0C'); g.addColorStop(.45, '#1C1108'); g.addColorStop(1, '#0D0804');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  ctx.save();
+  ctx.globalAlpha = .16; ctx.strokeStyle = C.woodMid; ctx.lineWidth = 1.4;
+  for (let i = 0; i < 26; i++) {
+    const y = (i * 41 + 9) % VH;
+    ctx.beginPath();
+    for (let x = 0; x <= VW; x += 30) ctx.lineTo(x, y + vnoise(i * 31 + 7, x * .012) * 11);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = .08; ctx.strokeStyle = C.woodDeep; ctx.lineWidth = 3;
+  for (let i = 0; i < 9; i++) {
+    const x = (i * 71 + 25) % VW;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + vnoise(i * 91, 3) * 24, VH); ctx.stroke();
+  }
+  ctx.restore();
+  const v = ctx.createRadialGradient(VW * .5, VH * .44, VH * .22, VW * .5, VH * .5, VH * .82);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.72)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, VW, VH);
+}
+
+function drawGantry() {
+  const px = VW * .5 + G.sim.lean, py = L.pivotY;
+  ctx.save();
+  ctx.fillStyle = C.woodDeep;
+  rr(30, L.playT - 4, VW - 60, 26, 5); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = C.ink; ctx.stroke();
+  ctx.save(); rr(30, L.playT - 4, VW - 60, 26, 5); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.10)'; ctx.fillRect(30, L.playT - 4, VW - 60, 4);
+  ctx.restore();
+  ctx.restore();
+  sphere(px, py, 9, C.brassDeep, { lite: C.brass, rimW: 2.4, specA: .85 });
+}
+
+function drawChain(px, py, bx, by) {
+  const dx = bx - px, dy = by - py;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const a = -Math.atan2(dx, dy);
+  const n = Math.max(6, Math.round(len / 15));
+  ctx.save();
+  ctx.translate(px, py); ctx.rotate(a);
+  ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(1, 2); ctx.lineTo(1, len); ctx.stroke();
+  for (let i = 0; i < n; i++) {
+    const y = (i + .5) * (len / n);
+    ctx.save(); ctx.translate(0, y); ctx.rotate(i % 2 ? .5 : 0);
+    ctx.beginPath(); ctx.ellipse(0, 0, 5.0, 9.4, 0, 0, TAU);
+    ctx.lineWidth = 3.2; ctx.strokeStyle = C.brassDeep; ctx.stroke();
+    ctx.lineWidth = 1.6; ctx.strokeStyle = i % 2 ? C.brass : C.brassLite; ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawTower() {
+  const g = G.sim;
+  const sway = g.towerSway();
+  const toppling = G.state !== 'play';
+  if (toppling) {
+    const k = clamp((G.deathT - .18) / 1.1, 0, 1);
+    const a = 0.42 * k * k * (G.sim.blocks.length % 2 ? 1 : -1);
+    const px = VW * .5 + g.top.x, py = L.topY + G.camOff + 13 * T.BH;
+    ctx.translate(px, py); ctx.rotate(a); ctx.translate(-px, -py);
+  }
+  const n = g.blocks.length;
+  const start = Math.max(0, n - 16);
+  for (let i = n - 1; i >= start; i--) {
+    const b = g.blocks[i];
+    const y = L.topY + G.camOff + (n - 1 - i) * T.BH;
+    if (y > L.playB + T.BH) continue;
+    const isTop = i === n - 1;
+    const fade = clamp((L.playB - y) / 90, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = 0.25 + 0.75 * fade;
+    let sq = 1, sqy = 1;
+    if (isTop && G.seatPulse > 0) {
+      const t = 1 - G.seatPulse;
+      sq = 1 + 0.22 * Math.sin(t * Math.PI) * (1 - t);
+      sqy = 1 - 0.16 * Math.sin(t * Math.PI) * (1 - t);
+    }
+    const cx = VW * .5 + b.x + sway, w = b.w * sq, h = (T.BH - 4) * sqy;
+    beam(cx - w * .5, y + (T.BH - 4 - h), w, h, {
+      f0: isTop ? C.tan : mix(C.tanMid, C.tanDeep, .3 + (1 - fade) * .5),
+      f1: isTop ? C.tanDeep : mix(C.tanDeep, C.woodMid, .4),
+    });
+    ctx.restore();
+  }
+  /* The seating notch — the fixed forgiveness window made visible, and it
+     narrows all run. This is the silent-play twin of the whole difficulty
+     curve: you can SEE the target shrinking. */
+  const top = g.blocks[n - 1];
+  const bw = g.blockWidth();
+  const seat = g.seat(bw);
+  const ty = L.topY + G.camOff;
+  const tcx = VW * .5 + top.x + sway;
+  ctx.save();
+  const sw2 = Math.min(seat, top.w * .48);
+  /* The seating groove, cut into the top course at its TRUE width. It narrows
+     with the beam all run, so the whole difficulty curve is legible without a
+     single number — and it is drawn, never implied. */
+  ctx.fillStyle = rgba(C.woodDeep, .95);
+  rr(tcx - sw2, ty - 2, sw2 * 2, 9, 3); ctx.fill();
+  ctx.fillStyle = rgba('#000000', .45);
+  rr(tcx - sw2 + 2, ty, sw2 * 2 - 4, 4, 2); ctx.fill();
+  ctx.fillStyle = rgba(C.cream, .34);
+  ctx.fillRect(tcx - sw2 + 2, ty + 5.2, sw2 * 2 - 4, 1.6);
+  ctx.strokeStyle = rgba(C.brassLite, .85); ctx.lineWidth = 2.4;
+  for (const sgn of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(tcx + sgn * sw2, ty - 7);
+    ctx.lineTo(tcx + sgn * sw2, ty + 7);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(tcx + sgn * sw2, ty - 7);
+    ctx.lineTo(tcx + sgn * (sw2 - 5), ty - 7);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const slot = g.slot();
+  if (slot) {
+    const sx = VW * .5 + slot.c, half = slot.w * .5;
+    const pulse = .68 + .32 * Math.sin(G.T * 6);
+    ctx.save();
+    glow(sx, ty + 2, 62, C.gold, .42 * pulse);
+    /* A bracket, not a stripe: two brass posts and a gold sill. Shape carries
+       it as well as colour, so it survives a colourblind palette (§11.6). */
+    ctx.fillStyle = C.woodDeep; rr(sx - half - 3, ty - 12, half * 2 + 6, 20, 3); ctx.fill();
+    const gg = ctx.createLinearGradient(0, ty - 8, 0, ty + 6);
+    gg.addColorStop(0, C.goldLite); gg.addColorStop(.55, C.gold); gg.addColorStop(1, C.goldMid);
+    ctx.fillStyle = gg; rr(sx - half, ty - 9, half * 2, 15, 2); ctx.fill();
+    ctx.fillStyle = rgba('#ffffff', .55); ctx.fillRect(sx - half + 1, ty - 8, half * 2 - 2, 2);
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(sx + sgn * half, ty - 14); ctx.lineTo(sx + sgn * half, ty + 7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx + sgn * half, ty - 14); ctx.lineTo(sx + sgn * (half - 6), ty - 14);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = .55 * pulse; ctx.strokeStyle = C.gold; ctx.lineWidth = 2.4;
+    ctx.setLineDash([5, 9]);
+    ctx.beginPath(); ctx.moveTo(sx, ty - 18); ctx.lineTo(sx, L.pivotY + 70); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    txt('BANK', sx, ty - 30, 13, rgba(C.goldLite, .95 * pulse), C.ink, 4);
+    ctx.restore();
+  }
+}
+
+function drawBeamInPlay(alpha) {
+  const g = G.sim;
+  if (!g.alive) return;
+  const px = VW * .5 + g.lean, py = L.pivotY;
+  let bx, by, th, w, val;
+  if (g.falling) {
+    bx = VW * .5 + g.falling.x; by = L.pivotY + g.falling.y; th = g.dropTheta;
+    w = g.falling.w; val = g.falling.value;
+  } else {
+    bx = VW * .5 + g.swingX(); by = L.pivotY + g.swingY(); th = g.swingTheta();
+    w = g.blockWidth(); val = g.value();
+  }
+  if (!g.falling) drawChain(px, py, bx, by - T.BH * .5);
+
+  const ripe = val >= T.VAL_BASE * T.RIPE_MUL;
+  ctx.save();
+  ctx.translate(bx, by);
+  ctx.rotate(g.falling ? 0 : th * .55);
+  if (ripe && !g.falling) glow(0, 0, w * .9 + 30, C.gold, .22);
+  beam(-w * .5, -T.BH * .5, w, T.BH - 4, {
+    f0: ripe ? C.goldLite : '#FFDCA8', f1: ripe ? C.goldMid : C.tanMid,
+    rim: ripe ? '#6A3A02' : C.woodMid,
+  });
+  ctx.globalAlpha = .5; ctx.strokeStyle = ripe ? C.goldLite : C.cream; ctx.lineWidth = 1.4;
+  rr(-w * .5 - 2, -T.BH * .5 - 2, w + 4, T.BH, 6); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.restore();
+
+  /* Value readout rides with the beam. Gold once ripe — the visible gate on
+     the multiplier ladder (§7.7's silent-play twin for the ripeness rule). */
+  if (!g.falling) {
+    const ty = by - T.BH * .5 - 26;
+    ctx.save();
+    const label = '+' + Math.round(val);
+    ctx.font = '900 25px system-ui,-apple-system,sans-serif';
+    const w2 = ctx.measureText(label).width + 26;
+    pill(bx - w2 * .5, ty - 15, w2, 30, ripe ? { bg: '#3A2606', line: rgba(C.gold, .9) } : null);
+    txt(label, bx, ty, 22, ripe ? C.goldLite : C.cream, null, 0);
+    ctx.restore();
+  }
+}
+
+/* Two-deep lookahead — the board-archetype equivalent of the 600 ms
+   visibility floor (§6). You always know whether a notch is coming. */
+function drawQueue() {
+  const g = G.sim;
+  const bx = VW - 92, by = L.playT + 62;
+  ctx.save();
+  txt('NEXT', bx + 30, by - 24, 13, rgba(C.cream, .55), C.ink, 3, 'center');
+  for (let i = 1; i <= 2; i++) {
+    const d = g.desc(g.placements + i);
+    const w = 50 - i * 8, y = by + (i - 1) * 28;
+    ctx.globalAlpha = 1 - i * .22;
+    beam(bx + 30 - w * .5, y, w, 15, { f0: C.tanMid, f1: C.tanDeep, shadow: false });
+    if (d.isKey) {
+      const kx = bx + 30 + d.side * (w * .28);
+      glow(kx, y + 7, 20, C.gold, .5);
+      ctx.fillStyle = C.gold; rr(kx - 5, y + 1, 10, 6, 2); ctx.fill();
+      ctx.strokeStyle = C.ink; ctx.lineWidth = 1.4; rr(kx - 5, y + 1, 10, 6, 2); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawMeter() {
+  const g = G.sim;
+  const x = L.meterX, y = L.playT + 6, w = L.meterW, h = L.playB - L.playT - 12;
+  const pb = META.seedPB() || META.rollingMedian();
+  const rv = META.rival();
+  const top = Math.max(g.score * 1.12, pb * 1.25, rv.score * 1.25, 900);
+  ctx.save();
+  ctx.fillStyle = rgba(C.ink, .55); rr(x, y, w, h, 8); ctx.fill();
+  ctx.lineWidth = 1.6; ctx.strokeStyle = rgba(C.woodMid, .7); rr(x, y, w, h, 8); ctx.stroke();
+
+  ctx.save(); rr(x, y, w, h, 8); ctx.clip();
+  const fh = clamp(G.shown / top, 0, 1) * h;
+  const gg = ctx.createLinearGradient(0, y + h - fh, 0, y + h);
+  gg.addColorStop(0, C.gold); gg.addColorStop(1, C.goldDeep);
+  ctx.fillStyle = gg; ctx.fillRect(x, y + h - fh, w, fh);
+  /* The at-risk pool sits ON TOP of the committed fill in ember, so the two
+     quantities share a scale but can never be misread for one another. */
+  const ph = clamp(g.pool / top, 0, 1) * h;
+  if (ph > 0.5) {
+    const pg = ctx.createLinearGradient(0, y + h - fh - ph, 0, y + h - fh);
+    pg.addColorStop(0, rgba(C.risk, .95)); pg.addColorStop(1, rgba(C.ember, .5));
+    ctx.fillStyle = pg; ctx.fillRect(x, y + h - fh - ph, w, ph);
+    ctx.strokeStyle = rgba(C.riskLite, .8); ctx.lineWidth = 1.4; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x, y + h - fh - ph); ctx.lineTo(x + w, y + h - fh - ph); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+
+  const markY = (v) => y + h - clamp(v / top, 0, 1) * h;
+  if (pb > 0) {
+    const my = markY(pb);
+    ctx.strokeStyle = G.shown >= pb ? rgba(C.goldLite, .95) : rgba(C.cream, .8);
+    ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(x - 3, my); ctx.lineTo(x + w + 3, my); ctx.stroke();
+    ctx.setLineDash([]);
+    txt(META.seedPB() ? 'PB' : 'MED', x + w + 16, my, 12, rgba(C.cream, .8), C.ink, 3, 'left');
+  }
+  const ry = markY(rv.score);
+  const passed = G.shown >= rv.score;
+  ctx.strokeStyle = passed ? rgba(C.stone, .5) : rgba(C.ember, .95);
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x - 3, ry); ctx.lineTo(x + w + 3, ry); ctx.stroke();
+  txt(rv.name, x + w + 16, ry, 12, passed ? rgba(C.stone, .7) : rgba(C.ember, .95), C.ink, 3, 'left');
+  ctx.restore();
+}
+
+function drawHUD() {
+  const g = G.sim;
+  ctx.save();
+  const sc = 1 + G.scorePulse * .18;
+  const lw = 168;
+  pill(14, L.hudY, lw, L.hudH);
+  ctx.save(); ctx.translate(46, L.hudY + L.hudH * .5); ctx.scale(sc, sc); coinIcon(0, 0, 15); ctx.restore();
+  const st = commas(G.shown);
+  txt(st, 14 + lw - 16, L.hudY + L.hudH * .5 + 1, st.length > 6 ? 26 : 32, G.pbCrossed ? C.goldLite : '#fff', null, 0, 'right');
+
+  if (g.pool > 0.5) {
+    const cwid = 128, cx = VW * .5 - cwid * .5;
+    const hot = .5 + .5 * Math.sin(G.T * 5);
+    pill(cx, L.hudY + 6, cwid, L.hudH - 12, { bg: mix('#2A1405', '#5A2A05', hot * .5), line: rgba(C.risk, .85) });
+    txt('AT RISK', cx + cwid * .5, L.hudY + 18, 11, rgba(C.riskLite, .9), null, 0);
+    txt(commas(g.pool), cx + cwid * .5, L.hudY + 36, 22, C.risk, C.ink, 3.5);
+  }
+
+  const rwid = 132, rx = VW - 14 - rwid;
+  const tier = tierOf(g.streak);
+  const mc = [C.cream, C.tan, C.gold, C.ember, C.riskLite][tier];
+  pill(rx, L.hudY, rwid, L.hudH, tier >= 2 ? { line: rgba(mc, .85) } : null);
+  const mp = 1 + G.bankPulse * .2 + (G.shatter > 0 ? -G.shatter * .18 : 0);
+  ctx.save(); ctx.translate(rx + 40, L.hudY + L.hudH * .5); ctx.scale(mp, mp);
+  txt(g.mult.toFixed(0) + '×', 0, 1, 30, G.shatter > 0 ? C.red : mc, C.ink, 4);
+  ctx.restore();
+  /* Streak pips: the visible twin of the audio ladder (§7.7 silent play). */
+  const pipN = 5;
+  const span = T.TIERS[tier] || T.TIERS[3];
+  const prev = tier === 0 ? 0 : T.TIERS[tier - 1];
+  const on = clamp(Math.round((g.streak - prev) / Math.max(1, span - prev) * pipN), 0, pipN);
+  for (let i = 0; i < pipN; i++) {
+    const px = rx + 70 + i * 11, py = L.hudY + L.hudH * .5;
+    ctx.beginPath(); ctx.arc(px, py, 3.6, 0, TAU);
+    ctx.fillStyle = i < on ? mc : rgba(C.cream, .18); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawParticles(dt) {
+  for (let i = G.parts.length - 1; i >= 0; i--) {
+    const p = G.parts[i];
+    p.t += dt;
+    if (p.t >= p.life) { G.parts.splice(i, 1); continue; }
+    p.vy += -300 * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    const a = 1 - p.t / p.life;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.col;
+    const s = p.s * (0.4 + a * 0.6);
+    ctx.fillRect(p.x - s * .5, p.y - s * .5, s, s);
+  }
+  ctx.globalAlpha = 1;
+  for (let i = G.floats.length - 1; i >= 0; i--) {
+    const f = G.floats[i];
+    f.t += dt;
+    if (f.t > .9) { G.floats.splice(i, 1); continue; }
+    const k = f.t / .9;
+    ctx.globalAlpha = 1 - k * k;
+    const sq = f.t < .18 ? 1 + (0.25 * (1 - f.t / .18)) : 1;
+    ctx.save(); ctx.translate(f.x, f.y - 40 * eOut(k)); ctx.scale(sq, 2 - sq);
+    txt(f.text, 0, 0, f.size, f.col, C.ink, 5);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* §7.9 — the exact death timeline. The 167→500 ms slow-motion replay is the
+   segment that makes the death legible; everything else can be cut first. */
+function drawDeath() {
+  const t = G.deathT;
+  const g = G.sim;
+  if (t >= .167 && t < .5 && G.deathTrail.length) {
+    const k = (t - .167) / .333;
+    const idx = Math.min(G.deathTrail.length - 1, Math.floor(k * G.deathTrail.length));
+    for (let i = 0; i <= idx; i++) {
+      const p = G.deathTrail[i];
+      ctx.globalAlpha = .25 + .6 * (i / Math.max(1, idx));
+      const w = g.falling ? g.falling.w : g.blockWidth();
+      beam(VW * .5 + p[0] - w * .5, L.pivotY + p[1] - T.BH * .5, w, T.BH - 4, { f0: C.red, f1: '#7A1A0C', shadow: false });
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (t < .5) return;
+
+  const k = clamp((t - .5) / .35, 0, 1);
+  /* Short enough that the toppled tower stays visible above it — the panel
+     must not bury the thing that just killed you. */
+  const h = 198;
+  const rest = Math.min(L.playB - 34, VH - 356);
+  const py = lerp(VH + 40, rest, eOut(k));
+  plaque(28, py, VW - 56, h, 18);
+  const cx = VW * .5;
+  const cnt = clamp((t - .55) / .25, 0, 1);
+  const shown = Math.round(G.sim.score * (cnt * cnt * (3 - 2 * cnt)));
+  txt('SCORE', cx, py + 34, 14, rgba(C.woodDeep, .75), null, 0);
+  txt(commas(shown), cx, py + 70, 46, C.woodDeep, null, 0);
+
+  if (G.sim.lostPool > 0) txt(commas(Math.round(G.sim.lostPool)) + ' at risk, lost', cx, py + 104, 16, '#8A3A12', null, 0);
+
+  if (G.gap) {
+    txt('+' + commas(G.gap.d), cx, py + 140, 34, '#5A2A08', null, 0);
+    txt(G.gap.s, cx, py + 170, 15, rgba(C.woodDeep, .8), null, 0);
+  } else {
+    txt(G.sim.missAuto ? 'the hook slipped' : 'you missed the tower', cx, py + 150, 17, rgba(C.woodDeep, .7), null, 0);
+  }
+
+  const ready = t >= .75;
+  const bw = 250, bx = cx - bw * .5, by = L.retryY - 30;
+  const bs = ready ? (t < .85 ? eBack(clamp((t - .75) / .1, 0, 1)) : 1) : 0;
+  if (bs > 0) {
+    ctx.save(); ctx.translate(cx, by + 30); ctx.scale(bs, bs); ctx.translate(-cx, -(by + 30));
+    plaque(bx, by, bw, 62, 16, { f0: C.gold, f1: C.goldMid });
+    txt('TAP TO PLAY AGAIN', cx, by + 32, 20, C.woodDeep, null, 0);
+    ctx.restore();
+  }
+  const att = META.attempts();
+  if (G.competitive) txt(Math.max(0, 3 - att.n) + ' of 3 attempts left today', cx, L.retryY + 46, 15, rgba(C.cream, .55), null, 0);
+  else txt('free play · practice seed', cx, L.retryY + 46, 15, rgba(C.cream, .55), null, 0);
+}
+
+function render(dt) {
+  ctx.setTransform(cv.width / VW, 0, 0, cv.height / VH, 0, 0);
+  drawBackground();
+
+  ctx.save();
+  /* Trauma model: cubic on trauma, Perlin-driven, translation AND rotation,
+     presentation-layer only — it never touches the sim (§7.2). */
+  const sh = G.trauma * G.trauma * G.trauma;
+  if (sh > .001) {
+    ctx.translate(VW * .5, VH * .5);
+    ctx.rotate(2.0 * Math.PI / 180 * sh * vnoise(3, G.T * 25));
+    ctx.translate(-VW * .5, -VH * .5);
+    ctx.translate(14 * sh * vnoise(1, G.T * 25), 14 * sh * vnoise(2, G.T * 25));
+  }
+  if (G.state === 'dying' && G.deathT < .5) {
+    const z = lerp(1, 1.15, clamp(G.deathT / .167, 0, 1));
+    ctx.translate(G.deathX, G.deathY); ctx.scale(z, z); ctx.translate(-G.deathX, -G.deathY);
+  }
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, L.playT - 30, VW, L.playB - L.playT + 30); ctx.clip();
+  drawGantry();
+  ctx.save(); drawTower(); ctx.restore();
+  drawBeamInPlay();
+  if (G.state === 'play') drawQueue();
+  drawParticles(dt);
+  if (G.state === 'dying' && G.deathT < .5) {
+    /* Desaturate everything except the beam that killed you and the course it
+       missed, so the cause of death is the only thing left lit. */
+    ctx.fillStyle = rgba(C.ink, .78);
+    ctx.fillRect(0, L.playT - 30, VW, L.playB - L.playT + 30);
+    const w = G.sim.falling ? G.sim.falling.w : G.sim.blockWidth();
+    const top = G.sim.blocks[G.sim.blocks.length - 1];
+    beam(VW * .5 + top.x + G.sim.towerSway() - top.w * .5, G.deathY, top.w, T.BH - 4, { f0: C.tan, f1: C.tanDeep });
+    const wf = G.deathT < .1 ? 1 : 0;
+    const k = clamp((G.deathT - .167) / .8, 0, 1);
+    ctx.save();
+    ctx.translate(G.deathX + 90 * k * k * Math.sign(G.deathX - VW * .5 || 1), G.deathY - T.BH + 420 * k * k);
+    ctx.rotate(1.9 * k * k * Math.sign(G.deathX - VW * .5 || 1));
+    beam(-w * .5, -T.BH * .5, w, T.BH - 4, { f0: wf ? '#fff' : C.red, f1: wf ? '#fff' : '#7A1A0C' });
+    ctx.restore();
+  }
+  ctx.restore();
+
+  drawMeter();
+  drawHUD();
+  ctx.restore();
+
+  if (G.state !== 'play') drawDeath();
+
+  if (G.flash > .004) {
+    ctx.globalAlpha = G.flash; ctx.fillStyle = G.flashCol; ctx.fillRect(0, 0, VW, VH); ctx.globalAlpha = 1;
+  }
+  if (G.chroma > .004 && !REDUCED) {
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = G.chroma * .16;
+    ctx.fillStyle = '#FF3060'; ctx.fillRect(-3, 0, VW, VH);
+    ctx.fillStyle = '#30C0FF'; ctx.fillRect(3, 0, VW, VH);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* Onboarding: no text, no menu. If the player has not touched the glass
+     after a second, show the gesture once and never again (§12). */
+  if (G.state === 'play' && G.tick < 300 && !META.get('touched', false)) {
+    const a = clamp((G.tick - 60) / 40, 0, 1) * (.55 + .45 * Math.sin(G.T * 4));
+    if (a > 0) {
+      ctx.globalAlpha = a;
+      const fy = L.playB + L.thumbH * .42;
+      ctx.beginPath(); ctx.arc(VW * .5, fy, 26, 0, TAU);
+      ctx.strokeStyle = C.cream; ctx.lineWidth = 3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(VW * .5, fy, 11, 0, TAU); ctx.fillStyle = C.cream; ctx.fill();
+      txt('TAP', VW * .5, fy + 52, 17, rgba(C.cream, .8), null, 0);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+/* ================================================================== INPUT */
+function pointerDown(e) {
+  if (e.cancelable) e.preventDefault();
+  S.init();
+  META.set('touched', true);
+  if (G.state === 'play') { G.down = true; G.pendingDown = true; return; }
+  if (G.state === 'dying' && G.deathT >= .75) {
+    /* 250 ms lockout so a panic tap cannot skip the player past their gap. */
+    const att = META.attempts();
+    startRun(G.competitive ? att.n < 3 : false);
+    S.ui();
+  }
+}
+function pointerUp() { G.down = false; }
+/* Test hook: runs the real input path at wall-clock-independent speed so the
+   exploit harness can be replayed through the page rather than around it. */
+window.__pump = function (n, downFn) {
+  const out = [];
+  for (let i = 0; i < n && G.state === 'play'; i++) {
+    const want = !!downFn(G.tick, G);
+    if (want && !G.down) pointerDown({ cancelable: false, preventDefault() {} });
+    else if (!want && G.down) pointerUp();
+    simTick();
+    out.push(G.tick);
+  }
+  return { ticks: G.tick, state: G.state, score: Math.round(G.sim.score), blocks: G.sim.placements };
+};
+cv.addEventListener('pointerdown', pointerDown);
+window.addEventListener('pointerup', pointerUp);
+window.addEventListener('pointercancel', pointerUp);
+window.addEventListener('keydown', (e) => { if (e.code === 'Space') pointerDown(e); });
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') pointerUp(); });
+
+/* =================================================================== LOOP */
+let last = performance.now(), acc = 0;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > .25) dt = .25;
+  G.T += dt;
+
+  /* Hitstop is implemented as SKIPPED SIM TICKS (§7.3 determinism note). The
+     trace is tick-indexed, so a replay reproduces exactly regardless of how
+     many frames the freeze occupied on any given device. */
+  if (G.hitstop > 0) G.hitstop -= dt * 60;
+  else if (G.state === 'play') {
+    acc += dt * 60;
+    if (acc > 12) acc = 12;
+    let guard = 0;
+    while (acc >= 1 && guard++ < 12) { acc -= 1; simTick(); if (G.state !== 'play') break; }
+  }
+
+  if (G.state === 'dying') G.deathT += dt;
+
+  const g = G.sim;
+  G.camOff = lerp(G.camOff, 0, 1 - Math.exp(-10 * dt));
+  G.trauma = clamp(G.trauma - 1.2 * dt, 0, 1);
+  G.flash = Math.max(0, G.flash - dt * 3.2);
+  G.chroma = Math.max(0, G.chroma - dt * 3.2);
+  G.shatter = Math.max(0, G.shatter - dt * 2.2);
+  G.bankPulse = Math.max(0, G.bankPulse - dt * 2.4);
+  G.seatPulse = Math.max(0, G.seatPulse - dt * 2.4);
+  G.scorePulse = Math.max(0, G.scorePulse - dt * 3.4);
+
+  const target = g.score;
+  if (Math.abs(target - G.shown) > .6) {
+    G.shown = lerp(G.shown, target, 1 - Math.exp(-9 * dt));
+    G.scorePulse = Math.max(G.scorePulse, .35);
+  } else G.shown = target;
+
+  /* The single best moment the game has — never let it pass silently (§9.6).
+     No time-scale dip here: a mid-swing slow-motion would corrupt the exact
+     timing skill this game measures. Flash, gold, sting, trauma instead. */
+  const pb = META.seedPB() || META.rollingMedian();
+  if (!G.pbCrossed && pb > 0 && G.shown >= pb && G.state === 'play') {
+    G.pbCrossed = true; flashIt(.55, C.goldLite); shakeIt(.70); G.chroma = 1; S.pb(); vib([20, 40, 60]);
+    floatUp(VW * .5, L.playB - 120, 'NEW BEST', C.goldLite, 40);
+  }
+
+  render(dt);
+  requestAnimationFrame(frame);
+}
+
+startRun(META.attempts().n < 3);
+requestAnimationFrame(frame);
+
+/* Exposed so the exploit harness can drive the REAL page, not just a headless
+   copy of the sim — a bot that passes in isolation has proved nothing about
+   the code path a player actually touches. */
+window.KS = { G, T, META, Keystone };
+window.KSBOT = { STRATS, runBot, suite, table, PCG };
+
+</script>
+</body>
+</html>
