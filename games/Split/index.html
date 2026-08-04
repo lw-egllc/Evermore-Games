@@ -1,0 +1,1576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#120A05">
+<title>SPLIT — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0A0603;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,#241408 0%,#0A0603 75%)}
+  canvas{display:block;touch-action:none;image-rendering:auto;
+    box-shadow:0 0 90px rgba(0,0,0,.9), 0 0 0 1px rgba(255,190,110,.10)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+/* =========================================================================
+   SPLIT  —  Evermore Arcade prototype
+   Swipe to cleave an orb in two. Four cuts turns one orb into gold.
+   One swipe through many orbs is a chain, and the chain is the score.
+   No fail state — sixty seconds, one blade.
+   Everything procedural: art, audio, physics. No assets, no libraries.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const inv   = (a, b, v) => (v - a) / (b - a);
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+const eBack = t => { const c = 1.70158 + 1; return 1 + c * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2); };
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+
+const _hxCache = {};
+function HX(h) {
+  const c = _hxCache[h]; if (c) return c;
+  let v;
+  if (h.charCodeAt(0) === 35) {
+    v = [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+    _hxCache[h] = v;
+  } else {
+    const m = h.match(/\d+(\.\d+)?/g);
+    v = m && m.length >= 3 ? [m[0] | 0, m[1] | 0, m[2] | 0] : [255, 255, 255];
+  }
+  return v;
+}
+function mix(a, b, t) {
+  const A = HX(a), B = HX(b); t = clamp(t, 0, 1);
+  return 'rgb(' + (A[0]+(B[0]-A[0])*t | 0) + ',' + (A[1]+(B[1]-A[1])*t | 0) + ',' + (A[2]+(B[2]-A[2])*t | 0) + ')';
+}
+function rgba(h, a) { const A = HX(h); return 'rgba(' + A[0] + ',' + A[1] + ',' + A[2] + ',' + a + ')'; }
+function tone(h, f) {
+  const A = HX(h);
+  return 'rgb(' + clamp(A[0]*f|0,0,255) + ',' + clamp(A[1]*f|0,0,255) + ',' + clamp(A[2]*f|0,0,255) + ')';
+}
+function commas(n) { return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+/* ----------------------------------------------------------------- palette */
+const C = {
+  ink:      '#160C05',
+  ink2:     '#2A1709',
+  woodDeep: '#1C1008',
+  woodDark: '#3E2210',
+  woodMid:  '#6A4022',
+  woodLite: '#8E5C31',
+  woodHi:   '#C08A4E',
+  tan:      '#F0C382',
+  tanMid:   '#DCA662',
+  tanDeep:  '#C08148',
+  gold:     '#FFC542',
+  goldLite: '#FFE9A8',
+  goldDeep: '#B76E0C',
+  ember:    '#FF7A29',
+  cream:    '#FFF3DC',
+  white:    '#FFFFFF',
+  red:      '#E8412F',
+  redDeep:  '#7E1509',
+  hud:      '#221C18',
+  steel:    '#5E6874',
+  teal:     '#3FD2C7',
+  blade:    '#FFF6D8',
+};
+
+/* Candy shells with a much brighter interior — the cut face is the whole
+   reason the art has a second colour, so the inner tone reads as "wet". */
+/* Four flavours, not six. Clumps form from same-flavour attraction, so the
+   flavour count sets the clump size and therefore the chain ceiling: six
+   colours meant ~4-orb clumps and every expert swipe flattened out at a 6.
+   Four makes clumps big enough to thread a 9 or 10, and reads calmer too. */
+const FLAV = [
+  { shell: '#E8412F', inner: '#FFD3B0', glow: '#FF6A4A' },  // cherry
+  { shell: '#2FA9E8', inner: '#C6F1FF', glow: '#5FD0FF' },  // blueberry
+  { shell: '#5FBE2A', inner: '#DCFFB8', glow: '#96EE55' },  // lime
+  { shell: '#FF8C1A', inner: '#FFE6B8', glow: '#FFB454' },  // tangerine
+];
+
+/* ================================================================== AUDIO */
+class Audio_ {
+  constructor() { this.ctx = null; this.on = true; this.master = null; this.noise = null; }
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) { this.on = false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = 0.55;
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -15; comp.knee.value = 22; comp.ratio.value = 8; comp.attack.value = .003; comp.release.value = .16;
+    this.master.connect(comp); comp.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 1.2, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    this.noise = buf;
+  }
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+
+  blip(freq, dur, type, vol, freq2, delay) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const o = this.ctx.createOscillator(); o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    if (freq2) o.frequency.exponentialRampToValueAtTime(Math.max(20, freq2), t + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + Math.min(.012, dur * .25));
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + .03);
+  }
+  noiseHit(dur, vol, type, f0, f1, q, delay) {
+    if (!this.on || !this.ctx) return;
+    const t = this.t + (delay || 0);
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise;
+    const f = this.ctx.createBiquadFilter(); f.type = type || 'bandpass';
+    f.frequency.setValueAtTime(f0, t);
+    if (f1) f.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
+    f.Q.value = q || 1;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + .005);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t + dur + .05);
+  }
+
+  /* The promise of the design: a chain plays as an ascending run, so long
+     swipes are audible before they are legible. Semitone per link.        */
+  cut(tier, chain) {
+    const p = Math.pow(1.0595, Math.min(chain - 1, 16) * 2);
+    const f0 = [520, 700, 950, 1250][tier] * p;
+    this.noiseHit(.055 + tier * .006, .16, 'bandpass', f0 * 3.4, f0 * 1.2, 3.2);
+    this.blip(f0, .10, 'triangle', .075, f0 * 1.9);
+    this.blip(f0 * 2, .06, 'sine', .035, null, .008);
+  }
+  burst(chain) {
+    const p = Math.pow(1.0595, Math.min(chain - 1, 16) * 2);
+    this.noiseHit(.09, .17, 'highpass', 3800 * Math.min(p, 3), 1400, .8);
+    this.blip(1180 * p, .16, 'triangle', .085, 1770 * p);
+    for (let i = 0; i < 3; i++) this.blip((1500 + i * 520) * Math.min(p, 2.4) + Math.random() * 120, .13, 'sine', .04, null, .015 + i * .03);
+  }
+  chainPay(chain) {
+    const n = clamp(chain, 3, 10);
+    const scale = [523, 659, 784, 988, 1175, 1319, 1568, 1976];
+    for (let i = 0; i < n; i++) this.blip(scale[Math.min(i, scale.length - 1)] * (i >= scale.length ? 2 : 1), .34, 'triangle', .062, null, i * .045);
+    this.noiseHit(.18, .16, 'bandpass', 420, 180, 1.6);
+  }
+  /* the heartbeat of the bowl — felt more than heard, so it never competes
+     with the cut sounds it exists to cue */
+  thump(fast) {
+    this.blip(fast ? 82 : 66, .30, 'sine', .17, fast ? 44 : 34);
+    this.noiseHit(.13, .07, 'lowpass', 260, 90, 1.1);
+  }
+  /* the edge gives out — a short, flat, unrewarding scrape */
+  dull() { this.noiseHit(.10, .10, 'lowpass', 900, 220, 1.0); this.blip(190, .12, 'triangle', .05, 120); }
+  stale() { this.blip(150, .22, 'sine', .045, 70); }
+  spawn() { this.noiseHit(.07, .10, 'bandpass', 300, 150, 2.4); }
+  wall() { this.noiseHit(.035, .045, 'bandpass', 700, 420, 4); }
+  frenzy() {
+    this.noiseHit(.6, .22, 'bandpass', 260, 1400, 1.1);
+    [392, 523, 659, 784, 1047].forEach((f, i) => this.blip(f, .5, 'triangle', .085, null, i * .06));
+  }
+  ui() { this.blip(880, .07, 'triangle', .07, 1320); }
+  go() { this.blip(523, .12, 'triangle', .10); this.blip(1047, .3, 'sine', .09, null, .04); }
+  end() {
+    this.noiseHit(.5, .20, 'bandpass', 300, 90, 1.2);
+    [392, 523, 659, 880].forEach((f, i) => this.blip(f, .7, 'triangle', .075, null, i * .085));
+  }
+}
+const S = new Audio_();
+
+function vib(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+/* ============================================================ CANVAS SETUP */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha: false });
+const VW = 540;
+let VH = 960, DPR = 1, SCALE = 1;
+const L = {};
+
+function layout() {
+  const ww = Math.max(1, window.innerWidth || 0), wh = Math.max(1, window.innerHeight || 0);
+  const ratio = VW * wh / ww;
+  VH = clamp(Number.isFinite(ratio) ? Math.round(ratio) : 960, 760, 1300);
+  const s = Math.min(ww / VW, wh / VH);
+  DPR = clamp(window.devicePixelRatio || 1, 1, 2.6);
+  cv.width  = Math.round(VW * s * DPR);
+  cv.height = Math.round(VH * s * DPR);
+  cv.style.width  = Math.round(VW * s) + 'px';
+  cv.style.height = Math.round(VH * s) + 'px';
+  SCALE = s * DPR;
+
+  L.hudY = 16; L.hudH = 46;
+  L.plaqueH = 74;
+  L.plaqueY = VH - L.plaqueH - 20;
+  // the arena is a closed wooden box — nothing ever leaves it
+  L.aT = L.hudY + L.hudH + 20;
+  L.aB = L.plaqueY - 18;
+  L.aL = 18; L.aR = VW - 18;
+  L.cx = (L.aL + L.aR) * .5; L.cy = (L.aT + L.aB) * .5;
+}
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+layout();
+
+/* ================================================================ ART BITS */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  r = Math.min(r, w * .5, h * .5);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function txt(t, x, y, size, fill, stroke, sw, align, weight) {
+  ctx.font = (weight || 900) + ' ' + size + 'px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (stroke && sw) { ctx.lineWidth = sw; ctx.strokeStyle = stroke; ctx.strokeText(t, x, y); }
+  ctx.fillStyle = fill; ctx.fillText(t, x, y);
+}
+
+/* Cel-shaded sphere: hard terminator bands, chunky rim, punchy specular. */
+function sphere(x, y, r, col, o) {
+  o = o || {};
+  const dark = o.dark || tone(col, .48);
+  const lite = o.lite || tone(col, 1.28);
+  const rim  = o.rim || C.ink;
+  const rw   = o.rimW !== undefined ? o.rimW : r * .10;
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+  ctx.fillStyle = dark; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  ctx.beginPath(); ctx.arc(x - r * .13, y - r * .15, r * .99, 0, TAU); ctx.fillStyle = col; ctx.fill();
+  ctx.beginPath(); ctx.arc(x - r * .30, y - r * .33, r * .78, 0, TAU); ctx.fillStyle = lite; ctx.fill();
+  if (o.bounce) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath(); ctx.arc(x + r * .46, y + r * .58, r * .62, 0, TAU);
+    ctx.fillStyle = rgba(o.bounce, o.bounceA || .3); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (o.inner) o.inner();
+  ctx.restore();
+
+  if (o.spec !== false) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+    ctx.globalAlpha = o.specA || .95;
+    ctx.translate(x - r * .36, y - r * .40); ctx.rotate(-.5);
+    ctx.beginPath(); ctx.ellipse(0, 0, r * .27, r * .16, 0, 0, TAU);
+    ctx.fillStyle = o.specC || '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(r * .40, r * .34, r * .10, r * .07, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  if (rw > 0) {
+    ctx.beginPath(); ctx.arc(x, y, r - rw * .5, 0, TAU);
+    ctx.lineWidth = rw; ctx.strokeStyle = rim; ctx.stroke();
+  }
+}
+
+/* A freshly cleaved face: the bright interior beyond a chord, plus the wet
+   white edge. `amt` 1 = just cut (chord through the middle, a big flat face)
+   → 0 = healed back into a sphere. `side` is which way the half was shoved.
+   Shared by the game and the title so they can never drift apart.        */
+function cutFace(x, y, r, ang, side, amt, innerCol) {
+  if (amt <= .01) return;
+  const k = lerp(.12, 1.02, 1 - amt);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+  ctx.translate(x, y); ctx.rotate(ang);
+  const yc = -side * r * k;
+  ctx.globalAlpha = clamp(amt * 1.15, 0, 1);
+  ctx.fillStyle = innerCol;
+  if (side > 0) ctx.fillRect(-r, -r, r * 2, Math.max(0, r + yc));
+  else          ctx.fillRect(-r, yc, r * 2, Math.max(0, r - yc));
+  const hw = r * Math.sqrt(Math.max(0, 1 - k * k));
+  ctx.globalAlpha = clamp(amt * 1.6, 0, 1);
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = Math.max(1.5, r * .09); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-hw, yc); ctx.lineTo(hw, yc); ctx.stroke();
+  ctx.restore();
+}
+
+function glow(x, y, r, col, a) {
+  if (a <= 0.002 || r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(col, a));
+  g.addColorStop(.45, rgba(col, a * .38));
+  g.addColorStop(1, rgba(col, 0));
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* Carved-wood plaque — Evermore chrome: thick dark border, warm tan face. */
+function plaque(x, y, w, h, r, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.42)'; rr(x + 3, y + 6, w, h, r + 2); ctx.fill();
+  rr(x, y, w, h, r); ctx.fillStyle = o.border || C.woodDark; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; ctx.stroke();
+  const b = o.b !== undefined ? o.b : 9;
+  const g = ctx.createLinearGradient(0, y + b, 0, y + h - b);
+  const f0 = o.f0 || C.tan, f1 = o.f1 || C.tanDeep;
+  g.addColorStop(0, f0); g.addColorStop(.55, o.fm || mix(f0, f1, .5)); g.addColorStop(1, f1);
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.fillStyle = g; ctx.fill();
+  ctx.save(); rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.30)'; ctx.fillRect(x + b, y + b, w - b * 2, 3);
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(x + b, y + h - b - 4, w - b * 2, 4);
+  ctx.restore();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  rr(x + b, y + b, w - b * 2, h - b * 2, Math.max(2, r - b * .6)); ctx.stroke();
+  if (o.rivets !== false) {
+    const rv = (px, py) => { sphere(px, py, 4.2, C.goldDeep, { lite: C.gold, rimW: 1.4, specA: .8 }); };
+    rv(x + 11, y + 11); rv(x + w - 11, y + 11); rv(x + 11, y + h - 11); rv(x + w - 11, y + h - 11);
+  }
+  ctx.restore();
+}
+
+function pill(x, y, w, h, o) {
+  o = o || {};
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.save(); ctx.translate(0, 3); rr(x, y, w, h, h * .5); ctx.fill(); ctx.restore();
+  rr(x, y, w, h, h * .5);
+  ctx.fillStyle = o.bg || C.hud; ctx.fill();
+  ctx.save(); ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h * .55);
+  g.addColorStop(0, 'rgba(255,255,255,.16)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h * .55);
+  ctx.restore();
+  ctx.lineWidth = 1.6; ctx.strokeStyle = o.line || 'rgba(190,175,165,.55)';
+  rr(x, y, w, h, h * .5); ctx.stroke();
+  ctx.restore();
+}
+
+function coinIcon(x, y, r, rot) {
+  ctx.save(); ctx.translate(x, y);
+  const sx = Math.abs(Math.cos(rot || 0));
+  ctx.scale(clamp(sx, .12, 1), 1);
+  sphere(0, 0, r, C.goldDeep, { lite: C.gold, dark: '#7A4405', rimW: r * .17, rim: '#4A2803', specA: .9, bounce: C.gold, bounceA: .35 });
+  ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(0, 0, r * .52, 0, TAU);
+  ctx.lineWidth = r * .13; ctx.strokeStyle = C.goldLite; ctx.stroke();
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+/* ================================================================== ORBS  */
+/* Four tiers. Each cut halves the area, so radius scales by 1/sqrt(2) and
+   mass is conserved — one XL really is sixteen smalls' worth of gold.     */
+const TIER_R    = [66, 46.7, 33, 23.3];
+const TIER_SPD  = [86, 116, 152, 196];       // smaller == faster: the screen speeds up as you work
+
+/* WHERE the orbs bunch is the whole spatial game, and it took three tries.
+
+   A central spring bunched them, but always in the same place — so the best
+   stroke became a fixed circle in the middle of the screen, every time, with
+   nothing to read. Pinning the target is worse than not bunching at all.
+
+   So: orbs of the same flavour attract each other. Clumps form wherever the
+   splitting happens to leave them, drift, merge, and come apart, and children
+   inherit their parent's flavour so every cut seeds the next clump. The good
+   line is somewhere new every second and you have to actually look for it.
+   The centring pull that remains is only containment, to stop the swarm from
+   settling against a wall where it can't be seen.                        */
+const ATTRACT_R = 300, ATTRACT_K = 150;
+const PULL_X = 0.10, PULL_Y = 0.05, SWIRL = 0.16;
+/* The golden window is 41% of the beat, not a narrow spike. At ×2 that makes
+   timing worth a real but modest edge (≈1.5× vs ≈1.4× for ignoring it) — a
+   player who paces their strokes wins, a player who idles waiting for it
+   loses more swipes than the bonus returns. A tighter window measured
+   strictly worse than ignoring the beat, which made it decorative.       */
+const PERIOD = 2.0, GOLD_AT = 0.42;
+const CUT_VAL   = [30, 40, 60];              // per-cut value for XL / L / M
+const BURST_VAL = 200;                       // bursting a small is the actual payout
+const STALE_AT  = 9.5;                       // a small left uncut goes dull and is lost
+const STALE_WARN= 2.6;
+/* Splitting conserves area exactly — two children have the same total area as
+   their parent. So AREA, not count, is the honest measure of how much is on
+   the board, and gating the feed on it keeps the stage equally full whether
+   the player leaves XLs whole or shatters everything into smalls. Gating on
+   count instead silts the board up with smalls and starves out the big orbs. */
+const MAX_ORBS  = 34;                        // safety valve for readability
+const AREA_CAP  = 62000;                     // ≈4.5 XL-equivalents of stuff
+
+const orbs = [];
+let flavIdx = 0;
+
+function spawnOrb(x, y, vx, vy, tier, flav) {
+  if (orbs.length >= MAX_ORBS) return null;
+  const f = flav !== undefined ? flav : (flavIdx = (flavIdx + 1) % FLAV.length);
+  const o = {
+    x, y, vx, vy, r: TIER_R[tier], tier, flav: f,
+    cutT: 0, cutA: 0, cutSide: 1,
+    age: 0, sq: 0, sqA: 0, spin: Math.random() * TAU,
+    swipeId: -1, born: T,
+  };
+  orbs.push(o);
+  return o;
+}
+
+/* Spawn an XL just above the ceiling so it slides into play. */
+function feedOrb() {
+  const x = lerp(L.aL + 80, L.aR - 80, Math.random());
+  const o = spawnOrb(x, L.aT - 70, (Math.random() - .5) * 90, 190 + Math.random() * 90, 0);
+  if (o) { o.entering = 1; S.spawn(); }
+  return o;
+}
+
+function orbsStep(dt) {
+  const n = orbs.length;
+  for (let i = n - 1; i >= 0; i--) {
+    const o = orbs[i];
+    o.age += dt;
+    o.x += o.vx * dt; o.y += o.vy * dt;
+    o.spin += dt * .6;
+    if (o.cutT > 0) o.cutT = Math.max(0, o.cutT - dt * 3.4);
+    if (o.sq > 0) o.sq = Math.max(0, o.sq - dt * 5.2);
+
+    // entering orbs fall through the ceiling once, then the box closes on them
+    if (o.entering) { if (o.y - o.r > L.aT) o.entering = 0; }
+
+    // containment only — just enough to keep the swarm off the walls
+    if (!o.entering) {
+      const dx = o.x - L.cx, dy = o.y - L.cy;
+      o.vx += (-dx * PULL_X - dy * SWIRL) * dt;
+      o.vy += (-dy * PULL_Y + dx * SWIRL) * dt;
+    }
+
+    // walls
+    if (o.x - o.r < L.aL) { o.x = L.aL + o.r; o.vx = Math.abs(o.vx) * .94; hitWall(o); }
+    if (o.x + o.r > L.aR) { o.x = L.aR - o.r; o.vx = -Math.abs(o.vx) * .94; hitWall(o); }
+    if (!o.entering && o.y - o.r < L.aT) { o.y = L.aT + o.r; o.vy = Math.abs(o.vy) * .94; hitWall(o); }
+    if (o.y + o.r > L.aB) { o.y = L.aB - o.r; o.vy = -Math.abs(o.vy) * .94; hitWall(o); }
+
+    // keep speed inside a band rather than pinned to a value — a hard target
+    // would flatten the bowl's orbits back into uniform drift
+    const sp = Math.hypot(o.vx, o.vy), tgt = TIER_SPD[o.tier] * G.speedMul;
+    const lo = tgt * .34, hi = tgt * 2.0;   // a low floor, so clumps can actually settle together
+    if (sp > hi)      { const k = 1 + (hi / sp - 1) * clamp(dt * 3, 0, 1); o.vx *= k; o.vy *= k; }
+    else if (sp > 1e-3 && sp < lo) { const k = 1 + (lo / sp - 1) * clamp(dt * 2, 0, 1); o.vx *= k; o.vy *= k; }
+    else if (sp <= 1e-3) { const a = Math.random() * TAU; o.vx = Math.cos(a) * tgt; o.vy = Math.sin(a) * tgt; }
+
+    // smalls are perishable: cash them or lose them
+    if (o.tier === 3) {
+      const left = STALE_AT - o.age;
+      if (left <= 0) {
+        goStale(o);
+        orbs.splice(i, 1);
+      }
+    }
+  }
+
+  /* flavour attraction — the clump-maker. Heavier orbs move less, so smalls
+     visibly swarm to their big sibling instead of everything sliding equally. */
+  for (let i = 0; i < orbs.length; i++) {
+    const a = orbs[i]; if (a.entering) continue;
+    for (let j = i + 1; j < orbs.length; j++) {
+      const b = orbs[j];
+      if (b.entering || b.flav !== a.flav) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      if (dx > ATTRACT_R || dx < -ATTRACT_R || dy > ATTRACT_R || dy < -ATTRACT_R) continue;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > ATTRACT_R * ATTRACT_R || d2 < 4) continue;
+      const d = Math.sqrt(d2);
+      if (d < a.r + b.r + 2) continue;                 // already touching: stop pulling
+      const acc = ATTRACT_K * (1 - d / ATTRACT_R) * dt;
+      const ux = dx / d, uy = dy / d;
+      const ma = a.r * a.r, mb = b.r * b.r, mt = ma + mb;
+      a.vx += ux * acc * (mb / mt) * 2; a.vy += uy * acc * (mb / mt) * 2;
+      b.vx -= ux * acc * (ma / mt) * 2; b.vy -= uy * acc * (ma / mt) * 2;
+    }
+  }
+
+  // pairwise elastic response, mass ∝ area
+  for (let it = 0; it < 3; it++) {
+    for (let i = 0; i < orbs.length; i++) {
+      const a = orbs[i]; if (a.entering) continue;
+      for (let j = i + 1; j < orbs.length; j++) {
+        const b = orbs[j]; if (b.entering) continue;
+        const dx = b.x - a.x, dy = b.y - a.y, rr2 = a.r + b.r;
+        if (dx > rr2 || dx < -rr2 || dy > rr2 || dy < -rr2) continue;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= rr2 * rr2 || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, pen = rr2 - d;
+        const ma = a.r * a.r, mb = b.r * b.r, mt = ma + mb;
+        // positional correction, heavier orb moves less
+        a.x -= nx * pen * (mb / mt) * .8; a.y -= ny * pen * (mb / mt) * .8;
+        b.x += nx * pen * (ma / mt) * .8; b.y += ny * pen * (ma / mt) * .8;
+        if (it === 0) {
+          const rvx = b.vx - a.vx, rvy = b.vy - a.vy, vn = rvx * nx + rvy * ny;
+          if (vn < 0) {
+            const jn = -(1 + .94) * vn / (1 / ma + 1 / mb);
+            a.vx -= nx * jn / ma; a.vy -= ny * jn / ma;
+            b.vx += nx * jn / mb; b.vy += ny * jn / mb;
+            if (-vn > 150) {
+              a.sq = Math.max(a.sq, clamp(-vn / 700, 0, .5)); a.sqA = Math.atan2(ny, nx);
+              b.sq = Math.max(b.sq, clamp(-vn / 700, 0, .5)); b.sqA = a.sqA;
+              if (Math.random() < .16) S.wall();
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function hitWall(o) {
+  o.sq = Math.max(o.sq, .18); o.sqA = 0;
+  if (Math.random() < .06) S.wall();
+}
+
+function goStale(o) {
+  G.stale++;
+  S.stale();
+  for (let i = 0; i < 7; i++) {
+    const a = Math.random() * TAU, s = 30 + Math.random() * 70;
+    parts.push({ x: o.x, y: o.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, r: 3 + Math.random() * 4,
+      life: 1, dec: 1.5, col: '#6B5A4E', g: 40, add: 0, drag: 1.2, soft: .5 });
+  }
+}
+
+/* ------------------------------------------------------------------- cut  */
+/* Split perpendicular to the blade: the two halves are shoved apart along
+   the cut normal and dragged a little along the blade's own direction.    */
+const SEP = 168;
+
+function cutOrb(idx, ang, bladeSpd) {
+  const o = orbs[idx];
+  const chain = ++G.chain;
+  G.cuts++;
+  const nx = -Math.sin(ang), ny = Math.cos(ang);          // cut normal
+  const dx = Math.cos(ang), dy = Math.sin(ang);           // blade direction
+  const drag = clamp(bladeSpd * .045, 0, 90);
+  const golden = G.sq > GOLD_AT;
+  const mult = (G.frenzy ? 2 : 1) * (golden ? 2 : 1);
+  if (golden) { G.goldenCuts++; G.swipeGold = true; }
+
+  orbs.splice(idx, 1);
+
+  if (o.tier === 3) {
+    /* the payout: a small bursts into gold instead of splitting */
+    const val = BURST_VAL * chain * mult;
+    G.score += val; G.swipeScore += val;
+    G.swipeX += o.x; G.swipeY += o.y; G.swipeN++;
+    G.bursts++;
+    S.burst(chain);
+    ring(o.x, o.y, o.r * .5, o.r * 3.2, C.goldLite, .34, 8);
+    spark(o.x, o.y, 16, C.goldLite, 460, 40, 3.4);
+    spark(o.x, o.y, 8, FLAV[o.flav].glow, 300, 20, 4);
+    const nc = clamp(2 + chain, 3, 9);
+    for (let i = 0; i < nc; i++) {
+      flyCoin(o.x + (Math.random() - .5) * 26, o.y + (Math.random() - .5) * 26,
+              VW - 16 - 128 + 24, L.hudY + L.hudH * .5, i * .028);
+    }
+    flashIt(clamp(.06 + chain * .035, 0, .5), '#FFF3C8');
+    shakeIt(clamp(2 + chain * 1.1, 2, 13), .2);
+    return;
+  }
+
+  const val = CUT_VAL[o.tier] * chain * mult;
+  G.score += val; G.swipeScore += val;
+  G.swipeX += o.x; G.swipeY += o.y; G.swipeN++;
+  S.cut(o.tier, chain);
+  const r2 = TIER_R[o.tier + 1];
+  for (let s = -1; s <= 1; s += 2) {
+    const c = spawnOrb(
+      o.x + nx * r2 * .5 * s, o.y + ny * r2 * .5 * s,
+      o.vx + nx * SEP * s + dx * drag,
+      o.vy + ny * SEP * s + dy * drag,
+      o.tier + 1, o.flav);
+    if (c) { c.cutT = 1; c.cutA = ang; c.cutSide = s; c.swipeId = G.swipeId; }
+  }
+  cutFlash(o.x, o.y, ang, o.r * 1.5);   // short and local — long ones read as extra blade strokes
+  spark(o.x, o.y, 5 + o.tier * 2, FLAV[o.flav].inner, 260, 0, 2.6);
+  shakeIt(clamp(1.5 + chain * .5, 1.5, 8), .14);
+}
+
+/* ------------------------------------------------------------------ blade */
+/* Cuts are resolved inside the pointer event, not the frame loop, so a fast
+   flick can never tunnel past an orb between two frames.
+
+   THE BLADE DULLS. Without a length budget the whole game collapses: one
+   continuous stroke is one unbounded chain, so the dominant strategy is to
+   plant a finger and spin it in circles forever, hitting everything. Giving
+   each stroke a fixed distance turns that into the real decision — you have
+   this much edge, where do you spend it? A circle wastes budget on curvature,
+   so a straight line through the densest part wins, which is exactly the
+   skill the chain was supposed to be testing.                            */
+const trail = [];
+const TRAIL_LIFE = .13;
+const BLADE_LEN = 460;
+/* Turning binds the blade. Length alone still let a tight finger-circle spend
+   its whole budget inside one clump; charging for curvature makes a spin cost
+   roughly a third more edge than the same arc drawn straight, so a clean line
+   through the orbs beats scribbling on top of them. The deadzone keeps finger
+   jitter free, and the per-sample cap stops one erratic reading from eating
+   the whole stroke.                                                       */
+const TURN_COST = 55, TURN_FREE = 0.12, TURN_MAX = 0.55;
+
+function bladeSegment(x0, y0, x1, y1) {
+  if (G.state !== 'play' || G.bladeSpent) return;
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return;
+  const spd = len / Math.max(1 / 240, T - G.lastSegT);
+  G.lastSegT = T;
+  if (spd < 90) return;                          // a slow drag is not a blade
+  const ang = Math.atan2(dy, dx);
+
+  // spend the edge on this segment — distance, plus a toll for curving
+  let turn = 0;
+  if (G.lastAng !== null) {
+    turn = Math.abs(((ang - G.lastAng + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    turn = clamp(turn - TURN_FREE, 0, TURN_MAX);
+  }
+  G.lastAng = ang;
+  G.bladeLeft -= len + TURN_COST * turn;
+  if (G.bladeLeft <= 0) {
+    G.bladeLeft = 0; G.bladeSpent = true;
+    S.dull();
+    spark(x1, y1, 6, '#8A7A6A', 150, 10, 2.4);
+  }
+
+  // collect every orb this segment crosses, then cut nearest-to-start first
+  // so the chain numbers rise along the stroke instead of arbitrarily
+  const hits = [];
+  for (let i = 0; i < orbs.length; i++) {
+    const o = orbs[i];
+    if (o.swipeId === G.swipeId || o.entering) continue;
+    const t = clamp(((o.x - x0) * dx + (o.y - y0) * dy) / (len * len), 0, 1);
+    const px = x0 + dx * t, py = y0 + dy * t;
+    const hitR = o.r + 6;                        // forgiving: a sloppy arc still cleaves
+    if ((o.x - px) * (o.x - px) + (o.y - py) * (o.y - py) <= hitR * hitR) hits.push([t, o]);
+  }
+  hits.sort((a, b) => a[0] - b[0]);
+  for (let k = 0; k < hits.length; k++) {
+    const o = hits[k][1];
+    o.swipeId = G.swipeId;
+    const idx = orbs.indexOf(o);
+    if (idx >= 0) cutOrb(idx, ang, spd);
+  }
+  if (hits.length) G.freeze = Math.max(G.freeze, Math.min(.05, hits.length * .018));
+  // the segment that empties the blade still cuts — then the stroke closes
+  if (G.bladeSpent) endSwipe();
+}
+
+/* One number per swipe, not one per cut. Ten "+400"s stacked on top of each
+   other read as noise; a single "+3,200 · 7-CHAIN" reads as an achievement,
+   and it teaches that the swipe — not the orb — is the unit of scoring.   */
+function endSwipe() {
+  const c = G.chain;
+  if (c > 0) {
+    G.bestChain = Math.max(G.bestChain, c);
+    const bonus = c >= 3 ? c * c * 25 * (G.frenzy ? 2 : 1) * (G.swipeGold ? 2 : 1) : 0;
+    G.score += bonus;
+    const total = G.swipeScore + bonus;
+    const px = clamp(G.swipeN ? G.swipeX / G.swipeN : L.cx, L.aL + 70, L.aR - 70);
+    const py = clamp(G.swipeN ? G.swipeY / G.swipeN : L.cy, L.aT + 60, L.aB - 40);
+    const label = (c >= 2 ? c + '-CHAIN' : '') + (G.swipeGold ? (c >= 2 ? '  ×2' : 'GOLDEN ×2') : '');
+    popSwipe(px, py, '+' + commas(total), G.swipeGold || c >= 5 ? C.goldLite : C.cream,
+        c >= 6 ? 42 : c >= 3 ? 33 : 25, label || null);
+    if (c >= 4) { S.chainPay(c); G.chainFlash = 1; }
+    if (c >= 6) {
+      banner(c + '-CHAIN', C.goldLite, '+' + commas(bonus));
+      flashIt(clamp(.10 + c * .03, 0, .5), '#FFF3C8');
+      vib([10, 20, 12]);
+    }
+  }
+  G.chain = 0; G.swipeScore = 0; G.swipeX = 0; G.swipeY = 0; G.swipeN = 0; G.swipeGold = false;
+  G.swipeId++;
+}
+
+/* ------------------------------------------------------------------ FX    */
+const parts = [], rings = [], pops = [], flashes = [], flyers = [];
+
+function spark(x, y, n, col, spd, up, sz) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, s = spd * (.35 + Math.random());
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (up || 0), r: (sz || 3) * (.5 + Math.random()),
+      life: 1, dec: 1.1 + Math.random() * 1.6, col, g: 420, add: 1, drag: 1.8 });
+  }
+}
+function confetti(x, y, n) {
+  const cols = [C.gold, C.red, C.teal, C.cream, C.ember, '#FF9BD2'];
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI * .5 + (Math.random() - .5) * 2.1, s = 260 + Math.random() * 560;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 4 + Math.random() * 4, life: 1, dec: .48,
+      col: cols[i % cols.length], g: 780, add: 0, drag: .6, flat: 1, rot: Math.random() * TAU, vr: (Math.random() - .5) * 22 });
+  }
+}
+function partsStep(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.vy += p.g * dt; p.vx *= (1 - p.drag * dt); p.vy *= (1 - p.drag * dt * .5);
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.rot !== undefined) p.rot += p.vr * dt;
+    p.life -= dt * p.dec;
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+}
+function ring(x, y, r0, r1, col, dur, w) { rings.push({ x, y, r0, r1, col, t: 0, dur: dur || .45, w: w || 6 }); }
+function ringsStep(dt) { for (let i = rings.length - 1; i >= 0; i--) { rings[i].t += dt; if (rings[i].t >= rings[i].dur) rings.splice(i, 1); } }
+
+function pop(x, y, s, col, size, sub) {
+  const p = { x, y, s, col, size: size || 30, sub, t: 0, dur: .85, vx: (Math.random() - .5) * 24 };
+  pops.push(p); return p;
+}
+/* Only ever one swipe total on screen. Two overlapping "+2,970"s from strokes
+   half a second apart are unreadable, and the older one is already stale. */
+function popSwipe(x, y, s, col, size, sub) {
+  for (let i = pops.length - 1; i >= 0; i--) if (pops[i].swipe) pops.splice(i, 1);
+  const p = pop(x, y, s, col, size, sub); p.swipe = true; return p;
+}
+function popsStep(dt) { for (let i = pops.length - 1; i >= 0; i--) { pops[i].t += dt; if (pops[i].t >= pops[i].dur) pops.splice(i, 1); } }
+
+function cutFlash(x, y, ang, len) { flashes.push({ x, y, ang, len, t: 0, dur: .22 }); }
+function flashesStep(dt) { for (let i = flashes.length - 1; i >= 0; i--) { flashes[i].t += dt; if (flashes[i].t >= flashes[i].dur) flashes.splice(i, 1); } }
+
+function flyCoin(x, y, tx, ty, delay) {
+  flyers.push({ x0: x, y0: y, x, y, tx, ty, t: -(delay || 0), dur: .42 + Math.random() * .16,
+    r: 7 + Math.random() * 3, rot: Math.random() * TAU, arc: -50 - Math.random() * 90, sx: (Math.random() - .5) * 80 });
+}
+function flyersStep(dt) {
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const f = flyers[i]; f.t += dt;
+    if (f.t < 0) continue;
+    const p = clamp(f.t / f.dur, 0, 1), e = smooth(p);
+    f.x = lerp(f.x0, f.tx, e) + f.sx * Math.sin(p * Math.PI);
+    f.y = lerp(f.y0, f.ty, e) + f.arc * Math.sin(p * Math.PI);
+    f.rot += dt * 15;
+    if (p >= 1) { flyers.splice(i, 1); G.coinPulse = Math.max(G.coinPulse, .5); }
+  }
+}
+
+/* ================================================================== GAME  */
+const ROUND = 60;
+const FRENZY_AT = 10;
+const KEY = 'evermore.split.v1';
+
+const G = {
+  state: 'title',
+  t: 0, time: ROUND,
+  score: 0, scoreShown: 0,
+  chain: 0, bestChain: 0, cuts: 0,
+  swipeScore: 0, swipeX: 0, swipeY: 0, swipeN: 0, swipeGold: false, goldenCuts: 0,
+  bursts: 0, stale: 0, swipes: 0,
+  swipeId: 0, lastSegT: 0,
+  bladeLeft: BLADE_LEN, bladeSpent: false, lastAng: null,
+  feed: 0, speedMul: 1, frenzy: false,
+  beat: 0, beatN: 0, sq: 0, beatFlash: 0,
+  shake: 0, shakeT: 0, flash: 0, flashCol: '#fff', freeze: 0,
+  banner: null, bannerT: 0, hint: 1, endT: 0,
+  coinPulse: 0, chainFlash: 0, newBest: false,
+  day: 0,
+};
+
+let PB = { score: 0, chain: 0 }, T = 0;
+try { const raw = localStorage.getItem(KEY); if (raw) PB = JSON.parse(raw); } catch (e) {}
+
+function dayIndex() { return Math.floor((Date.now() - Date.UTC(2025, 0, 1)) / 86400000); }
+
+function resetRun() {
+  G.day = dayIndex();
+  G.time = ROUND; G.score = 0; G.scoreShown = 0;
+  G.chain = 0; G.bestChain = 0; G.cuts = 0; G.bursts = 0; G.stale = 0; G.swipes = 0;
+  G.swipeScore = 0; G.swipeX = 0; G.swipeY = 0; G.swipeN = 0;
+  G.swipeId++;
+  G.bladeLeft = BLADE_LEN; G.bladeSpent = false; G.lastAng = null; G.goldenCuts = 0; G.swipeGold = false;
+  G.feed = 0; G.speedMul = 1; G.frenzy = false;
+  G.beat = .5; G.beatN = 0; G.sq = 0; G.beatFlash = 0;
+  G.newBest = false; G.hint = 1; G.endT = 0; G.chainFlash = 0;
+  G.banner = null; G.freeze = 0;
+  orbs.length = 0; parts.length = 0; rings.length = 0; pops.length = 0;
+  flashes.length = 0; flyers.length = 0; trail.length = 0;
+
+  // five fat ones on a ring around the bowl, already drifting inward
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI * .5 + i / 5 * TAU;
+    const x = L.cx + Math.cos(a) * (L.aR - L.aL) * .30;
+    const y = L.cy + Math.sin(a) * (L.aB - L.aT) * .28;
+    spawnOrb(x, y, -Math.cos(a) * 40 - Math.sin(a) * 70, -Math.sin(a) * 40 + Math.cos(a) * 70, 0);
+  }
+}
+
+function shakeIt(a, d) { G.shake = Math.max(G.shake, a); G.shakeT = Math.max(G.shakeT, d || .3); }
+function flashIt(a, c) { G.flash = Math.max(G.flash, a); G.flashCol = c || '#fff'; }
+function banner(text, col, sub) { G.banner = { text, col, sub }; G.bannerT = 0; }
+
+function countTier(t) { let n = 0; for (let i = 0; i < orbs.length; i++) if (orbs[i].tier === t) n++; return n; }
+function boardArea() { let a = 0; for (let i = 0; i < orbs.length; i++) a += orbs[i].r * orbs[i].r * Math.PI; return a; }
+
+/* the clench: swarm at its tightest, and the moment worth swiping through */
+function onBeat() {
+  G.beatFlash = 1;
+  S.thump(G.frenzy);
+  ring(L.cx, L.cy, 30, Math.min((L.aR - L.aL), (L.aB - L.aT)) * .52, rgba(C.gold, .5), .5, 5);
+}
+
+/* --------------------------------------------------------------- input   */
+function toV(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * VW, y: (e.clientY - r.top) / r.height * VH };
+}
+function inRect(p, x, y, w, h) { return p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h; }
+
+let ptrId = null, lastP = null;
+
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); S.init();
+  const p = toV(e);
+  try { cv.setPointerCapture && cv.setPointerCapture(e.pointerId); } catch (err) {}
+
+  if (G.state === 'title') { startRun(); return; }
+  if (G.state === 'over') { if (G.endT > .7) { S.ui(); startRun(); } return; }
+  if (G.state === 'pause') {
+    if (inRect(p, VW * .5 - 120, VH * .5 - 10, 240, 68)) { S.ui(); G.state = 'play'; }
+    else if (inRect(p, VW * .5 - 120, VH * .5 + 74, 240, 56)) { S.on = !S.on; S.ui(); }
+    else if (inRect(p, VW * .5 - 120, VH * .5 + 146, 240, 56)) { S.ui(); G.state = 'title'; }
+    return;
+  }
+  if (G.state !== 'play') return;
+  if (inRect(p, 16, L.hudY, 62, L.hudH)) { S.ui(); G.state = 'pause'; return; }
+
+  if (ptrId === null) {
+    ptrId = e.pointerId; lastP = p; G.lastSegT = T;
+    G.bladeLeft = BLADE_LEN; G.bladeSpent = false; G.lastAng = null;   // a fresh edge per stroke
+    G.swipes++;
+    trail.length = 0; trail.push({ x: p.x, y: p.y, t: T });
+  }
+}, { passive: false });
+
+cv.addEventListener('pointermove', e => {
+  if (e.pointerId !== ptrId || !lastP) return;
+  e.preventDefault();
+  const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+  for (let i = 0; i < evs.length; i++) {
+    const p = toV(evs[i]);
+    bladeSegment(lastP.x, lastP.y, p.x, p.y);
+    trail.push({ x: p.x, y: p.y, t: T });
+    // age-pruning happens in update(); this is the guard for a drag that
+    // outruns the frame loop (or a backgrounded tab that isn't stepping)
+    if (trail.length > 48) trail.splice(0, trail.length - 48);
+    lastP = p;
+  }
+  if (G.hint > 0) G.hint = Math.max(0, G.hint - .34);
+}, { passive: false });
+
+function endPtr(e) {
+  if (e.pointerId !== ptrId) return;
+  ptrId = null; lastP = null;
+  if (G.state === 'play') endSwipe();
+  else { G.chain = 0; G.swipeId++; }
+}
+cv.addEventListener('pointerup', e => { e.preventDefault(); endPtr(e); }, { passive: false });
+cv.addEventListener('pointercancel', e => endPtr(e), { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  S.init();
+  if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault();
+    if (G.state === 'title') startRun();
+    else if (G.state === 'over' && G.endT > .7) startRun();
+  }
+  if (e.code === 'Escape' || e.code === 'KeyP') {
+    if (G.state === 'play') G.state = 'pause'; else if (G.state === 'pause') G.state = 'play';
+  }
+  if (e.code === 'KeyM') { S.on = !S.on; }
+});
+
+function startRun() { S.init(); resetRun(); G.state = 'count'; G.t = 0; S.go(); }
+
+/* ================================================================ UPDATE  */
+function update(dt) {
+  T += dt;
+  G.t += dt;
+  if (G.shakeT > 0) { G.shakeT -= dt; G.shake *= Math.pow(.0016, dt); if (G.shakeT <= 0) G.shake = 0; }
+  G.flash = Math.max(0, G.flash - dt * 4.2);
+  G.chainFlash = Math.max(0, G.chainFlash - dt * 1.8);
+  G.coinPulse = Math.max(0, G.coinPulse - dt * 3);
+  if (G.banner) G.bannerT += dt;
+
+  partsStep(dt); ringsStep(dt); popsStep(dt); flashesStep(dt); flyersStep(dt);
+
+  // trail decay happens on wall-clock so the blade doesn't smear while paused
+  for (let i = trail.length - 1; i >= 0; i--) if (T - trail[i].t > TRAIL_LIFE) trail.splice(i, 1);
+
+  // the breath — runs through the countdown too, so the beat is already
+  // established by the time the player is allowed to cut
+  if (G.state === 'count' || G.state === 'play') {
+    G.beatFlash = Math.max(0, G.beatFlash - dt * 2.2);
+    G.beat += dt / (PERIOD * (G.frenzy ? .64 : 1));
+    if (G.beat >= 1) { G.beat -= 1; G.beatN++; onBeat(); }
+    // raised cosine, not a spike: the clench holds long enough to swipe
+    // through, and never fully lets go so the swarm can't hug the walls
+    G.sq = Math.pow(Math.cos(G.beat * TAU) * .5 + .5, 1.8);
+  }
+
+  if (G.state === 'count') {
+    orbsStep(dt);
+    if (G.t >= 1.75) { G.state = 'play'; G.t = 0; }
+    return;
+  }
+  if (G.state !== 'play') return;
+
+  G.time -= dt;
+  if (G.cuts > 0) G.hint = Math.max(0, G.hint - dt * 1.6);   // it has taught what it can
+  const prog = 1 - clamp(G.time / ROUND, 0, 1);
+  G.speedMul = lerp(1, 1.28, prog);
+
+  if (!G.frenzy && G.time <= FRENZY_AT) {
+    G.frenzy = true;
+    S.frenzy(); vib([20, 40, 20]);
+    banner('FRENZY', C.goldLite, 'every cut pays double');
+    flashIt(.5, C.gold); shakeIt(14, .5);
+    for (let i = 0; i < 5; i++) feedOrb();
+  }
+
+  // feed: steady early, relentless late, and never while the box is jammed.
+  // A sparse board is the real enemy — you cannot chain through empty space.
+  G.feed -= dt;
+  if (G.feed <= 0) {
+    G.feed = G.frenzy ? .75 : lerp(2.0, .95, prog);
+    const area = boardArea();
+    const cap = AREA_CAP * (G.frenzy ? 1.5 : 1);
+    // a board with no big orbs left has nothing to cleave, so XLs get in even
+    // when the stage is otherwise full
+    const starved = countTier(0) < 2;
+    if ((area < cap && orbs.length < MAX_ORBS) || starved) {
+      feedOrb();
+      // swept clean: refill in pairs rather than leave the player swiping at air
+      if (area < cap * .45) feedOrb();
+    }
+  }
+
+  orbsStep(dt);
+
+  if (G.time <= 0) { G.time = 0; endRun(); }
+}
+
+function endRun() {
+  G.state = 'over'; G.endT = 0;
+  if (G.chain > 0) { G.bestChain = Math.max(G.bestChain, G.chain); G.chain = 0; }
+  // in-play callouts must not bleed through the results overlay
+  pops.length = 0; trail.length = 0; G.banner = null;
+  G.newBest = G.score > (PB.score || 0);
+  if (G.newBest) {
+    PB.score = G.score;
+    confetti(VW * .5, VH * .34, 70);
+  }
+  PB.chain = Math.max(PB.chain || 0, G.bestChain);
+  try { localStorage.setItem(KEY, JSON.stringify(PB)); } catch (e) {}
+  S.end();
+}
+
+/* ================================================================= DRAW   */
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, '#241408'); g.addColorStop(.5, '#301B0C'); g.addColorStop(1, '#170C05');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+
+  const pw = 78;
+  for (let i = 0; i < Math.ceil(VW / pw) + 1; i++) {
+    const x = i * pw;
+    const f = .88 + ((i * 37) % 7) / 7 * .26;
+    ctx.fillStyle = tone('#3B2313', f); ctx.fillRect(x, 0, pw - 3, VH);
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(x + pw - 3, 0, 3, VH);
+    ctx.fillStyle = 'rgba(255,190,120,.05)'; ctx.fillRect(x, 0, 2, VH);
+    ctx.strokeStyle = 'rgba(0,0,0,.13)'; ctx.lineWidth = 1.4;
+    const r2 = mulberry32(1000 + i);
+    for (let k = 0; k < 5; k++) {
+      const gx = x + 6 + r2() * (pw - 16);
+      ctx.beginPath();
+      for (let yy = 0; yy < VH; yy += 46) ctx.lineTo(gx + Math.sin(yy * .017 + k * 2 + i) * 5, yy);
+      ctx.stroke();
+    }
+  }
+}
+
+/* The arena: a carved box the orbs are trapped inside. Back panel is darker
+   than the wall so the play space reads as a stage, not a hole.           */
+function drawArenaBack() {
+  const x = L.aL, y = L.aT, w = L.aR - L.aL, h = L.aB - L.aT;
+  ctx.save();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, '#150B04'); g.addColorStop(.55, '#201207'); g.addColorStop(1, '#0F0803');
+  rr(x, y, w, h, 20); ctx.fillStyle = g; ctx.fill();
+
+  ctx.save(); rr(x, y, w, h, 20); ctx.clip();
+  // the breath, made visible: an iris that clenches with the bowl, so the
+  // beat can be read off the screen instead of memorised
+  /* The golden window. It is a SCORING state, not a force — so it is drawn as
+     the whole stage catching light, not as something pulling on the orbs. An
+     iris that contracts would teach a tell that the physics does not honour. */
+  if (G.state === 'play' || G.state === 'count') {
+    const gold = G.sq > GOLD_AT;
+    // a rim of light that swells around the edge of the stage on the beat
+    const rim = ctx.createLinearGradient(0, y, 0, y + h);
+    const a0 = G.sq * .16 + G.beatFlash * .10;
+    rim.addColorStop(0, rgba(C.gold, a0)); rim.addColorStop(.5, rgba(C.gold, a0 * .18));
+    rim.addColorStop(1, rgba(C.ember, a0 * .8));
+    ctx.fillStyle = rim; ctx.fillRect(x, y, w, h);
+    if (gold) {
+      const p = clamp(inv(GOLD_AT, 1, G.sq), 0, 1);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = .30 + p * .40;
+      ctx.strokeStyle = C.goldLite; ctx.lineWidth = 5 + p * 5;
+      rr(x + 4, y + 4, w - 8, h - 8, 17); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  // faint receding boards
+  ctx.globalAlpha = .5;
+  for (let i = 0; i < 6; i++) {
+    const yy = y + (i + .5) * h / 6;
+    ctx.fillStyle = 'rgba(0,0,0,.30)'; ctx.fillRect(x, yy, w, 2);
+    ctx.fillStyle = 'rgba(255,190,120,.035)'; ctx.fillRect(x, yy + 2, w, 1);
+  }
+  ctx.globalAlpha = 1;
+  // spotlight from above
+  const sg = ctx.createRadialGradient(VW * .5, y - h * .1, 10, VW * .5, y + h * .35, h * .95);
+  sg.addColorStop(0, 'rgba(255,205,140,.13)'); sg.addColorStop(1, 'rgba(255,205,140,0)');
+  ctx.fillStyle = sg; ctx.fillRect(x, y, w, h);
+  if (G.frenzy && G.state === 'play') {
+    const p = .5 + Math.sin(T * 7) * .5;
+    const fg = ctx.createLinearGradient(0, y, 0, y + h);
+    fg.addColorStop(0, rgba(C.gold, .10 + p * .06)); fg.addColorStop(1, rgba(C.ember, .04));
+    ctx.fillStyle = fg; ctx.fillRect(x, y, w, h);
+  }
+  ctx.restore();
+
+  // carved frame
+  ctx.lineWidth = 9; ctx.strokeStyle = C.woodDark; rr(x, y, w, h, 20); ctx.stroke();
+  ctx.lineWidth = 3; ctx.strokeStyle = C.ink; rr(x - 4.5, y - 4.5, w + 9, h + 9, 24); ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,200,140,.16)'; rr(x + 5, y + 5, w - 10, h - 10, 15); ctx.stroke();
+  ctx.restore();
+}
+
+function drawOrb(o) {
+  const F = FLAV[o.flav];
+  let a = 1, r = o.r;
+  if (o.tier === 3) {
+    const left = STALE_AT - o.age;
+    if (left < STALE_WARN) {
+      const k = clamp(left / STALE_WARN, 0, 1);
+      a = .35 + k * .65;
+      r = o.r * (.82 + k * .18);
+    }
+  }
+  const shell = (o.tier === 3 && a < 1) ? mix('#5A4B40', F.shell, a) : F.shell;
+
+  ctx.save();
+  ctx.globalAlpha = 1;
+  // squash along the impact normal
+  if (o.sq > .01) {
+    ctx.translate(o.x, o.y); ctx.rotate(o.sqA);
+    ctx.scale(1 - o.sq * .3, 1 + o.sq * .3);
+    ctx.rotate(-o.sqA); ctx.translate(-o.x, -o.y);
+  }
+  glow(o.x, o.y, r * (2.1 + o.cutT * 1.4), F.glow, .13 + o.cutT * .22);
+  sphere(o.x, o.y, r, shell, {
+    rimW: r * .11, bounce: F.glow, bounceA: .32,
+    lite: tone(shell, 1.30), dark: tone(shell, .44),
+  });
+
+  cutFace(o.x, o.y, r, o.cutA, o.cutSide, o.cutT, F.inner);
+  ctx.restore();
+
+  // a small on its way out gets a dimming ring so "hurry" is readable
+  if (o.tier === 3) {
+    const left = STALE_AT - o.age;
+    if (left < STALE_WARN) {
+      const k = clamp(left / STALE_WARN, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = (1 - k) * .8;
+      ctx.strokeStyle = mix('#FF7A4A', C.gold, k); ctx.lineWidth = 2.6;
+      ctx.beginPath(); ctx.arc(o.x, o.y, r + 6, -Math.PI * .5, -Math.PI * .5 + TAU * k); ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+function drawOrbs() {
+  // big first so the little ones (the valuable ones) always read on top
+  for (let t = 0; t <= 3; t++) for (let i = 0; i < orbs.length; i++) if (orbs[i].tier === t) drawOrb(orbs[i]);
+}
+
+/* Drawn after the orbs — painted with the background it just gets buried
+   under whatever happens to be floating at the top of the stage. */
+function drawGoldenLabel() {
+  if (G.sq <= GOLD_AT || (G.state !== 'play' && G.state !== 'count')) return;
+  const p = clamp(inv(GOLD_AT, 1, G.sq), 0, 1);
+  ctx.save();
+  ctx.globalAlpha = clamp(p * 2.2, 0, 1) * .95;
+  txt('DOUBLE', L.cx, L.aT + 34, 22, C.goldLite, C.ink, 7);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawBlade() {
+  if (trail.length < 2) return;
+  // the edge burning down is the blade's own colour, so the budget is read
+  // off the stroke you are already looking at — no gauge to glance at
+  const left = clamp(G.bladeLeft / BLADE_LEN, 0, 1);
+  const edge = G.bladeSpent ? '#7E7368' : mix('#FFC98A', C.blade, left);
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'lighter';
+  for (let pass = 0; pass < 2; pass++) {
+    const wide = pass === 0;
+    ctx.strokeStyle = wide ? rgba(C.gold, .16) : rgba(edge, .95);
+    for (let i = 1; i < trail.length; i++) {
+      const a = trail[i - 1], b = trail[i];
+      const f = i / (trail.length - 1);
+      const age = clamp(1 - (T - b.t) / TRAIL_LIFE, 0, 1);
+      const w = (wide ? 26 : 9) * f * age * (.58 + left * .42);
+      if (w < .4) continue;
+      ctx.globalAlpha = (wide ? age * .6 : age) * (G.bladeSpent ? .4 : 1);
+      ctx.lineWidth = w;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+  }
+  const tip = trail[trail.length - 1];
+  if (!G.bladeSpent) glow(tip.x, tip.y, 30 + left * 26, G.sq > GOLD_AT ? C.gold : C.goldLite, .2 + left * .2);
+  ctx.restore();
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+
+  // live chain counter rides the blade tip — the greed number, in your hand
+  if (G.chain >= 2) {
+    const sc = 1 + Math.min(G.chain, 12) * .07;
+    ctx.save();
+    ctx.translate(tip.x + 30, tip.y - 34); ctx.scale(sc, sc);
+    txt('×' + G.chain, 0, 0, 30, G.chain >= 6 ? C.goldLite : C.gold, C.ink, 7);
+    ctx.restore();
+  }
+}
+
+function drawFlashes() {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  for (let i = 0; i < flashes.length; i++) {
+    const f = flashes[i], p = f.t / f.dur;
+    const len = f.len * (1 + eOut(p) * .9);
+    ctx.globalAlpha = (1 - p) * (1 - p);
+    ctx.strokeStyle = C.blade; ctx.lineWidth = 6 * (1 - p);
+    ctx.beginPath();
+    ctx.moveTo(f.x - Math.cos(f.ang) * len * .5, f.y - Math.sin(f.ang) * len * .5);
+    ctx.lineTo(f.x + Math.cos(f.ang) * len * .5, f.y + Math.sin(f.ang) * len * .5);
+    ctx.stroke();
+  }
+  ctx.restore(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawParts() {
+  ctx.save();
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i], a = clamp(p.life, 0, 1);
+    ctx.globalCompositeOperation = p.add ? 'lighter' : 'source-over';
+    ctx.globalAlpha = p.add ? a : a * (p.soft || .9);
+    ctx.fillStyle = p.col;
+    if (p.flat) {
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillRect(-p.r, -p.r * .5, p.r * 2, p.r);
+      ctx.restore();
+    } else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (p.add ? a : 1), 0, TAU); ctx.fill(); }
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.restore();
+}
+function drawRings() {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < rings.length; i++) {
+    const r = rings[i], f = r.t / r.dur;
+    ctx.globalAlpha = (1 - f) * (1 - f) * .95;
+    ctx.beginPath(); ctx.arc(r.x, r.y, lerp(r.r0, r.r1, eOut(f)), 0, TAU);
+    ctx.lineWidth = r.w * (1 - f * .85); ctx.strokeStyle = r.col; ctx.stroke();
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+function drawPops() {
+  for (let i = 0; i < pops.length; i++) {
+    const p = pops[i], f = p.t / p.dur;
+    const y = p.y - eOut(clamp(f * 1.6, 0, 1)) * 54;
+    const sc = f < .18 ? eBack(f / .18) : 1;
+    ctx.save(); ctx.globalAlpha = clamp((1 - f) * 1.8, 0, 1);
+    ctx.translate(p.x + p.vx * f, y); ctx.scale(sc, sc);
+    if (p.sub) txt(p.sub, 0, -p.size * .82, p.size * .52, C.gold, C.ink, 5);
+    txt(p.s, 0, 0, p.size, p.col, C.ink, p.size * .22);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawFlyers() {
+  for (let i = 0; i < flyers.length; i++) {
+    const f = flyers[i]; if (f.t < 0) continue;
+    glow(f.x, f.y, f.r * 2.4, C.gold, .30);
+    coinIcon(f.x, f.y, f.r, f.rot);
+  }
+}
+function drawBanner() {
+  if (!G.banner) return;
+  const f = G.bannerT / .9; if (f >= 1) { G.banner = null; return; }
+  const y = L.aT + 74;                                  // above the swarm, never on it
+  const sc = f < .16 ? eBack(f / .16) : (f > .8 ? lerp(1, .9, (f - .8) / .2) : 1);
+  ctx.save();
+  ctx.globalAlpha = clamp((1 - f) * 2.4, 0, 1);
+  ctx.translate(VW * .5, y); ctx.scale(sc, sc); ctx.rotate(-.035);
+  txt(G.banner.text, 0, 0, 48, G.banner.col, C.ink, 10);
+  if (G.banner.sub) txt(G.banner.sub, 0, 32, 19, C.cream, C.ink, 5);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* --------------------------------------------------------------- chrome  */
+function drawHUD() {
+  pill(16, L.hudY, 62, L.hudH);
+  ctx.fillStyle = C.cream;
+  ctx.fillRect(36, L.hudY + 14, 7, 18); ctx.fillRect(50, L.hudY + 14, 7, 18);
+
+  const tw = 132, tx = VW * .5 - tw * .5;
+  const low = G.time <= FRENZY_AT;
+  pill(tx, L.hudY, tw, L.hudH, low ? { bg: mix(C.hud, '#7A3A02', .5 + Math.sin(T * 11) * .4), line: 'rgba(255,200,120,.8)' } : null);
+  const cxx = tx + 27, cyy = L.hudY + L.hudH * .5;
+  ctx.beginPath(); ctx.arc(cxx, cyy, 10, 0, TAU); ctx.lineWidth = 2.6; ctx.strokeStyle = low ? C.goldLite : C.cream; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cxx, cyy); ctx.lineTo(cxx, cyy - 6); ctx.moveTo(cxx, cyy); ctx.lineTo(cxx + 4.5, cyy + 2); ctx.lineWidth = 2.4; ctx.stroke();
+  const mm = Math.floor(G.time / 60), ss = Math.floor(G.time % 60);
+  const sc = low ? 1 + Math.max(0, Math.sin(T * 11)) * .07 : 1;
+  ctx.save(); ctx.translate(tx + tw * .5 + 12, cyy); ctx.scale(sc, sc);
+  txt('0' + mm + ':' + (ss < 10 ? '0' : '') + ss, 0, 1, 27, low ? C.goldLite : '#fff', null, 0);
+  ctx.restore();
+
+  const cw = 128, cx2 = VW - 16 - cw;
+  pill(cx2, L.hudY, cw, L.hudH);
+  const cp = 1 + G.coinPulse * .22;
+  ctx.save(); ctx.translate(cx2 + 24, L.hudY + L.hudH * .5); ctx.scale(cp, cp);
+  coinIcon(0, 0, 13, 0); ctx.restore();
+  const tot = Math.round(G.score);
+  txt(commas(tot), cx2 + cw - 14, L.hudY + L.hudH * .5 + 1, tot > 99999 ? 19 : 22, '#fff', null, 0, 'right');
+}
+
+/* Bottom plaque: the ghost rival. One bar, one number to beat. */
+function drawPlaque() {
+  const x = 16, y = L.plaqueY, w = VW - 32, h = L.plaqueH;
+  const best = PB.score || 0;
+  const beat = best > 0 && G.score > best;
+  plaque(x, y, w, h, 16, beat ? { f0: '#FFE9A8', f1: C.gold, border: '#6B3D06' } : {});
+
+  txt('BEST CHAIN', x + 26, y + 27, 13, 'rgba(60,32,10,.62)', null, 0, 'left', 800);
+  const bc = Math.max(G.bestChain, G.chain);
+  const bsc = 1 + G.chainFlash * .18;
+  ctx.save(); ctx.translate(x + 26, y + 51); ctx.scale(bsc, bsc);
+  txt('×' + Math.max(1, bc), 0, 0, 27, '#2A1400', null, 0, 'left');
+  ctx.restore();
+
+  if (best > 0) {
+    const bw = w - 190, bx = x + 160, by = y + h * .5 + 12;
+    txt(beat ? 'AHEAD OF YOUR BEST' : 'YOUR BEST  ' + commas(best), x + w - 26, y + 27, 13,
+        beat ? '#8E3A04' : 'rgba(60,32,10,.62)', null, 0, 'right', 800);
+    ctx.fillStyle = 'rgba(60,32,10,.28)'; rr(bx, by, bw, 8, 4); ctx.fill();
+    const f = clamp(G.score / best, 0, 1);
+    ctx.fillStyle = beat ? '#FF8C2A' : '#8E4A12'; rr(bx, by, bw * f, 8, 4); ctx.fill();
+    if (!beat) { ctx.fillStyle = 'rgba(60,32,10,.6)'; ctx.fillRect(bx + bw - 1.5, by - 3, 2.5, 14); }
+  } else {
+    txt('SET A SCORE', x + w - 26, y + 27, 13, 'rgba(60,32,10,.62)', null, 0, 'right', 800);
+    txt('one blade · sixty seconds', x + w - 26, y + 50, 15, 'rgba(60,32,10,.5)', null, 0, 'right', 800);
+  }
+  if (beat) glow(x + w * .5, y + h * .5, 200, C.gold, .10 + Math.sin(T * 6) * .04);
+}
+
+function drawVignette() {
+  const g = ctx.createRadialGradient(VW * .5, VH * .46, VH * .22, VW * .5, VH * .5, VH * .78);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.62)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  if (G.frenzy && G.state === 'play') {
+    const p = (Math.sin(T * 8) * .5 + .5);
+    const g2 = ctx.createRadialGradient(VW * .5, VH * .5, VH * .28, VW * .5, VH * .5, VH * .70);
+    g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, rgba(C.gold, .18 * p));
+    ctx.fillStyle = g2; ctx.fillRect(0, 0, VW, VH);
+  }
+}
+
+/* --------------------------------------------------------------- screens */
+function drawHint() {
+  if (G.hint <= .02 || G.state !== 'play') return;
+  const y = L.aB - 54;
+  ctx.save(); ctx.globalAlpha = clamp(G.hint, 0, 1) * (.65 + Math.sin(T * 3.4) * .18);
+  txt('SWIPE  THROUGH  THE  ORBS', VW * .5, y - 22, 20, C.cream, C.ink, 6);
+  txt('the blade only lasts one stroke — make it count', VW * .5, y + 2, 15, 'rgba(255,220,180,.9)', C.ink, 4, null, 700);
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+function drawCountdown() {
+  const n = 3 - Math.floor(G.t / .5);
+  const f = (G.t / .5) % 1;
+  ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, VW, VH); ctx.restore();
+  if (G.t < 1.5) {
+    const sc = 1 + (1 - eOut(f)) * .9;
+    ctx.save(); ctx.translate(VW * .5, VH * .44); ctx.scale(sc, sc); ctx.globalAlpha = clamp(1 - f * .5, 0, 1);
+    txt(String(Math.max(1, n)), 0, 0, 128, C.gold, C.ink, 16);
+    ctx.restore();
+  } else {
+    const ff = (G.t - 1.5) / .25;
+    ctx.save(); ctx.translate(VW * .5, VH * .44); ctx.scale(1 + eOut(ff) * .7, 1 + eOut(ff) * .7); ctx.globalAlpha = 1 - ff;
+    txt('CUT!', 0, 0, 92, '#FFF0AE', C.ink, 14);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTitle() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,4,2,.78)'; ctx.fillRect(0, 0, VW, VH);
+  const cy = VH * .25;
+  glow(VW * .5, cy, 240, C.gold, .22);
+
+  // the wordmark is itself cleaved: two halves of ONE word drifting apart
+  // along a diagonal, with the blade line still glowing between them
+  const sl = smooth((Math.sin(T * .8) * .5 + .5));
+  const sep = 2 + sl * 13, cut = .13;
+  ctx.save(); ctx.translate(VW * .5, cy); ctx.rotate(-.045);
+  for (let s = -1; s <= 1; s += 2) {
+    ctx.save();
+    ctx.rotate(cut);
+    ctx.beginPath();
+    if (s < 0) ctx.rect(-340, -330, 680, 330); else ctx.rect(-340, 0, 680, 330);
+    ctx.clip();
+    ctx.translate(0, s * sep);
+    ctx.rotate(-cut);
+    txt('SPLIT', 0, 0, 108, C.gold, C.ink, 17);
+    ctx.restore();
+  }
+  // the blade only glints as the halves part, then gets out of the way —
+  // a permanent line just reads as the word being crossed out
+  if (sl < .45) {
+    ctx.save();
+    ctx.rotate(cut); ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = (1 - sl / .45) * .7; ctx.strokeStyle = C.blade;
+    ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-165, 0); ctx.lineTo(165, 0); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+  txt('EVERMORE  ARCADE', VW * .5, cy + 76, 15, 'rgba(255,215,170,.7)', C.ink, 5, null, 800);
+
+  // demo orb, endlessly cleaving itself — the whole game in one loop
+  const dr = 50, dy = VH * .455;
+  const ph = (T * .5) % 1;
+  const open = ph < .40 ? eOut(ph / .40) : 1 - eOut(clamp((ph - .60) / .40, 0, 1));
+  const F = FLAV[Math.floor(T * .5) % FLAV.length];
+  for (let s = -1; s <= 1; s += 2) {
+    const ox = VW * .5 + s * open * 52, r = dr * (1 - open * .08);
+    glow(ox, dy, r * 2.3, F.glow, .16);
+    sphere(ox, dy, r, F.shell, { rimW: r * .11, bounce: F.glow, bounceA: .32 });
+    // vertical cut: blade angle PI/2 maps local +y to screen -x, so the half
+    // shoved to screen -x is side +1 in the cut frame
+    cutFace(ox, dy, r, Math.PI * .5, -s, open, F.inner);
+  }
+  if (open > .04 && open < .55) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = (1 - open / .55) * .75;
+    ctx.strokeStyle = C.blade; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(VW * .5, dy - dr * 1.8); ctx.lineTo(VW * .5, dy + dr * 1.8); ctx.stroke();
+    ctx.restore();
+  }
+
+  const ly = VH * .625;
+  const line = (t, y, s, c) => txt(t, VW * .5, y, s, c || C.cream, C.ink, s * .26, null, 800);
+  line('SWIPE to cleave an orb in two', ly, 20);
+  line('Four cuts and it bursts into gold', ly + 29, 20);
+  line('One swipe through many = a CHAIN', ly + 58, 18, C.gold);
+  line('Each stroke has a limited edge —', ly + 86, 16, 'rgba(255,215,170,.85)');
+  line('spend it on the golden beat, ×2', ly + 108, 16, 'rgba(255,215,170,.85)');
+  line('No lives. Sixty seconds. Just cut.', ly + 136, 16, 'rgba(255,190,150,.7)');
+
+  const bw = 252, bx = VW * .5 - bw * .5, by = VH * .795;
+  const pu = 1 + Math.sin(T * 3) * .015;
+  ctx.save(); ctx.translate(VW * .5, by + 33); ctx.scale(pu, pu); ctx.translate(-VW * .5, -(by + 33));
+  plaque(bx, by, bw, 66, 16, { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+  txt('TAP  TO  START', VW * .5, by + 34, 26, '#3A1E00', null, 0);
+  ctx.restore();
+
+  if (PB.score > 0) txt('YOUR BEST  ' + commas(PB.score) + (PB.chain > 1 ? '   ·   CHAIN ×' + PB.chain : ''), VW * .5, VH - 34, 15, C.gold, C.ink, 4, null, 900);
+  ctx.restore();
+}
+
+function drawPause() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,3,1,.78)'; ctx.fillRect(0, 0, VW, VH);
+  txt('PAUSED', VW * .5, VH * .5 - 78, 48, C.gold, C.ink, 11);
+  const btn = (y, h, label, col) => {
+    plaque(VW * .5 - 120, y, 240, h, 14, col || {});
+    txt(label, VW * .5, y + h * .5 + 1, 22, '#3A1E00', null, 0);
+  };
+  btn(VH * .5 - 10, 68, 'RESUME', { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+  btn(VH * .5 + 74, 56, S.on ? 'SOUND  ON' : 'SOUND  OFF');
+  btn(VH * .5 + 146, 56, 'QUIT');
+  ctx.restore();
+}
+
+function drawOver() {
+  const f = clamp(G.endT / .5, 0, 1);
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,3,1,' + (.90 * f) + ')'; ctx.fillRect(0, 0, VW, VH);
+
+  const topY = VH * .17;
+  ctx.save(); ctx.globalAlpha = f;
+  txt("TIME'S UP", VW * .5, topY, 40, '#FFD9A8', C.ink, 10);
+  ctx.restore();
+
+  const sf = clamp((G.endT - .28) / .42, 0, 1);
+  if (sf > 0) {
+    const w = 400, x = VW * .5 - w * .5, y = topY + 34;
+    const sc = 1 + (1 - eOut(sf)) * .55;
+    ctx.save(); ctx.translate(VW * .5, y + 60); ctx.scale(sc, sc); ctx.translate(-VW * .5, -(y + 60));
+    ctx.globalAlpha = clamp(sf * 2, 0, 1);
+    plaque(x, y, w, 132, 18, G.newBest ? { f0: '#FFE9A8', f1: C.gold, border: '#6B3D06' } : {});
+    txt('FINAL', VW * .5, y + 28, 15, 'rgba(60,32,10,.7)', null, 0);
+    const v = Math.round(G.scoreShown);
+    txt(commas(v), VW * .5, y + 72, v > 999999 ? 52 : v > 99999 ? 60 : 66, '#2A1400', null, 0);
+    const delta = G.score - (G.newBest ? 0 : PB.score);
+    txt(G.newBest ? '★  NEW  PERSONAL  BEST  ★' : (PB.score > 0 ? commas(Math.abs(delta)) + '  FROM  YOUR  BEST' : 'FIRST  RUN'),
+        VW * .5, y + 111, 14, G.newBest ? '#8E3A04' : 'rgba(60,32,10,.7)', null, 0);
+    ctx.restore();
+  }
+
+  const sf2 = clamp((G.endT - .70) / .4, 0, 1);
+  if (sf2 > 0) {
+    ctx.save(); ctx.globalAlpha = sf2;
+    const rows = [
+      ['CUTS', String(G.cuts), C.cream],
+      ['ORBS CASHED', String(G.bursts), C.cream],
+      ['BEST CHAIN', '×' + Math.max(1, G.bestChain), G.bestChain >= 5 ? C.gold : C.cream],
+      ['CUTS PER SWIPE', G.swipes ? (G.cuts / G.swipes).toFixed(1) : '0.0', C.cream],
+      ['GOLDEN CUTS', G.cuts ? Math.round(G.goldenCuts / G.cuts * 100) + '%' : '0%',
+        G.goldenCuts / Math.max(1, G.cuts) > .35 ? C.gold : C.cream],
+    ];
+    if (G.stale > 0) rows.push(['WENT DULL', '−' + G.stale, '#FF9A7A']);
+    const y0 = topY + 196;
+    for (let i = 0; i < rows.length; i++) {
+      const yy = y0 + i * 38 + (1 - eOut(clamp(sf2 * 1.6 - i * .12, 0, 1))) * 26;
+      txt(rows[i][0], 60, yy, 17, 'rgba(255,220,190,.66)', C.ink, 4, 'left', 800);
+      txt(rows[i][1], VW - 60, yy, 21, rows[i][2], C.ink, 5, 'right');
+      ctx.globalAlpha = sf2 * .22;
+      ctx.fillStyle = '#fff'; ctx.fillRect(60, yy + 17, VW - 120, 1);
+      ctx.globalAlpha = sf2;
+    }
+    if (G.stale > 0) txt('smalls are the payout — burst them before they dull', VW * .5, y0 + rows.length * 38 + 14, 14, 'rgba(255,170,140,.85)', C.ink, 4, null, 700);
+    ctx.restore();
+  }
+
+  const sf3 = clamp((G.endT - 1.0) / .35, 0, 1);
+  if (sf3 > 0) {
+    const bw = 260, bx = VW * .5 - bw * .5, by = VH * .80;
+    const pu = 1 + Math.sin(T * 3.4) * .018;
+    const gr = pu * (0.7 + eBack(sf3) * .3);
+    ctx.save(); ctx.globalAlpha = sf3;
+    ctx.translate(VW * .5, by + 36); ctx.scale(gr, gr); ctx.translate(-VW * .5, -(by + 36));
+    plaque(bx, by, bw, 72, 16, { f0: '#FFE29A', f1: C.gold, border: '#7A4708' });
+    txt('AGAIN', VW * .5, by + 37, 30, '#3A1E00', null, 0);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ draw */
+function draw() {
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  ctx.save();
+  if (G.shake > .05) {
+    const a = G.shake * clamp(G.shakeT / .3, 0, 1);
+    ctx.translate((Math.random() - .5) * a, (Math.random() - .5) * a);
+    ctx.rotate((Math.random() - .5) * a * .0016);
+  }
+
+  const ui = G.state !== 'title';
+  drawBG();
+  drawArenaBack();
+  // the arena clips its own contents so nothing bleeds over the frame
+  ctx.save();
+  rr(L.aL, L.aT, L.aR - L.aL, L.aB - L.aT, 20); ctx.clip();
+  if (ui) {                       // on the title the arena stays empty — a live
+    drawOrbs();                   // swarm drifting behind the veil just reads as clutter
+    drawFlashes();
+    drawRings();
+    drawParts();
+    if (G.state === 'play') drawBlade();
+    drawGoldenLabel();
+    drawHint();
+  }
+  ctx.restore();
+
+  drawFlyers();
+  drawPops();
+  drawBanner();
+  drawVignette();
+  if (ui) { drawHUD(); drawPlaque(); }
+
+  ctx.restore();
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+
+  if (G.flash > .004) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = rgba(G.flashCol, G.flash * .85); ctx.fillRect(0, 0, VW, VH);
+    ctx.restore();
+  }
+  if (G.state === 'count') drawCountdown();
+  if (G.state === 'title') drawTitle();
+  if (G.state === 'pause') drawPause();
+  if (G.state === 'over') drawOver();
+}
+
+/* ------------------------------------------------------------------ loop */
+let last = performance.now(), acc = 0;
+const STEP = 1 / 120;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > .25) dt = .25;
+  if (G.freeze > 0) { G.freeze -= dt; acc = 0; }
+  else { acc += dt; let guard = 0; while (acc >= STEP && guard++ < 12) { update(STEP); acc -= STEP; } }
+  if (G.state === 'over') {
+    G.endT += dt;
+    G.scoreShown += (G.score - G.scoreShown) * Math.min(1, dt * 5.5);
+    if (Math.abs(G.score - G.scoreShown) < 1) G.scoreShown = G.score;
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+resetRun();
+G.state = 'title';
+requestAnimationFrame(frame);
+
+/* tuning handle — only when asked for, so the shipped file stays clean */
+if (location.search.indexOf('debug') >= 0) window.__SPLIT = {
+  G, orbs, L, C, S, startRun, update, draw, endRun, bladeSegment, endSwipe, trail,
+  TIER_R, TIER_SPD, CUT_VAL, BURST_VAL,
+  get T() { return T; },
+  sim(sec, step) { step = step || 1 / 120; for (let i = 0; i < Math.round(sec / step); i++) update(step); },
+};
+</script>
+</body>
+</html>
