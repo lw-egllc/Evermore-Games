@@ -48,7 +48,8 @@
   #core .v{font-size:15px}
 
   /* ---- panels ---- */
-  #ui{position:fixed;inset:0;display:grid;place-items:center;padding:28px;text-align:center;}
+  #ui{position:fixed;inset:0;display:grid;place-items:center;padding:28px;text-align:center;
+      pointer-events:none;}
   #ui.hide{display:none}
   .panel{max-width:min(420px,88vw)}
   h1{
@@ -381,7 +382,7 @@ function spokeDist(h, s, px, py){
 }
 
 // ───────────────────────────── input ─────────────────────────────
-let dragging=false, lastX=0, lastY=0;
+let dragId=null, lastX=0, lastY=0;
 const keys={};
 
 function moveTargetTo(x,y){
@@ -392,23 +393,28 @@ function moveTargetTo(x,y){
 
 cv.addEventListener('pointerdown', e=>{
   cv.setPointerCapture(e.pointerId);
-  if(state!=='play'){ start(); return; }
-  dragging=true; lastX=e.clientX; lastY=e.clientY;
+  start();                                              // no-op if already playing
+  if(dragId!==null) return;                             // ignore extra fingers
+  dragId=e.pointerId; lastX=e.clientX; lastY=e.clientY;
 });
 cv.addEventListener('pointermove', e=>{
   if(state!=='play') return;
-  if(e.pointerType==='mouse' && !dragging){
+  if(e.pointerType==='mouse' && dragId===null){
     moveTargetTo((e.clientX-CX)/S, (e.clientY-CY)/S);   // desktop: hover to steer
     return;
   }
-  if(!dragging) return;
+  if(e.pointerId!==dragId) return;                      // only the steering finger
   const k = 1.55/S;                                     // touch: relative drag
   moveTargetTo(target.x + (e.clientX-lastX)*k, target.y + (e.clientY-lastY)*k);
   lastX=e.clientX; lastY=e.clientY;
 });
-const endDrag = ()=>{dragging=false;};
+const endDrag = e=>{ if(!e || e.pointerId===dragId) dragId=null; };
 cv.addEventListener('pointerup', endDrag);
 cv.addEventListener('pointercancel', endDrag);
+
+// last-resort fallback: nothing layered over the canvas should ever be able to
+// lock a touch-only player out of starting
+addEventListener('pointerdown', ()=>{ start(); }, {passive:true});
 
 addEventListener('keydown', e=>{
   keys[e.key.toLowerCase()]=true;
@@ -416,7 +422,7 @@ addEventListener('keydown', e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
 });
 addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
-addEventListener('blur', ()=>{ for(const k in keys) keys[k]=false; dragging=false; });
+addEventListener('blur', ()=>{ for(const k in keys) keys[k]=false; dragId=null; });
 
 // ───────────────────────────── screens ─────────────────────────────
 function showMenu(){
@@ -426,7 +432,7 @@ function showMenu(){
     '<h1>PLUMMET</h1><div class="rule"></div>' +
     '<div class="sub">You are falling down a live laser shaft.<br>' +
     'Steer the pod through the gaps.<br>Every 200 m the shaft surges.<br>You do not slow down.</div>' +
-    '<div class="go">TAP OR PRESS SPACE TO DROP</div>';
+    '<div class="go">TAP TO DROP</div>';
 }
 function showDead(){
   ui.classList.remove('hide');
@@ -439,7 +445,7 @@ function showDead(){
       ' &nbsp;·&nbsp; CORE ×'+(depthScore/Math.max(1,travel*10)).toFixed(2)+'</div>' +
     '<div class="go">TAP TO DROP AGAIN</div>';
 }
-function start(){ reset(); state='play'; ui.classList.add('hide'); }
+function start(){ if(state==='play') return; reset(); state='play'; ui.classList.add('hide'); }
 
 // ───────────────────────────── update ─────────────────────────────
 function update(dt, real){
