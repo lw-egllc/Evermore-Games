@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07060E">
+<title>CHORUS — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#05040A;
+    touch-action:none;overscroll-behavior:none;position:fixed;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 34%,#171029 0%,#05040A 76%)}
+  canvas{display:block;touch-action:none;
+    box-shadow:0 0 90px rgba(0,0,0,.92), 0 0 0 1px rgba(190,170,255,.09)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+
+/* =========================================================================
+   CHORUS  ·  gameId: chorus  ·  simVersion: 0.1.0
+   Built against Brain_Skills/EVERMORE_ARCADE_GAME_BIBLE.md v2.0.
+
+   ## One sentence
+   Drag to ring the chimes — every 8 seconds your path returns as an echo
+   that strikes on the beat, lighting any chime it catches and costing you
+   if it catches you.
+
+   ## Why it works
+   The echo is the whole design. You are not just playing the board, you are
+   AUTHORING the board you will play in eight seconds, with your own hand,
+   and you can see the line you are drawing.
+
+   THE STRIKE IS THE ONLY EVENT. On every downbeat all nine voices strike at
+   once. A chime inside a blast lights: worth 6 × its tier, taking the full
+   multiplier, and the only thing in the game that builds one. A player
+   inside a head loses half their ladder, 0.35 s of control and 0.5 s of
+   clock. One rule, both halves, and the reward is deliberately standing
+   next to the danger that produced it — the blast (55 dp) is far wider than
+   the head that hurts you (9 dp), so there is a ring around every voice
+   where the prize is and the danger is not.
+
+   Consequences, all load-bearing:
+     · no idle income exists anywhere. A passive player scores exactly zero,
+       so anti-stall (§5.4) is structural rather than tuned.
+     · echoes never RING chimes, only light them, so your past selves can
+       never steal your points — which is what would have made this feel bad.
+     · cold chimes pay a flat +1 the multiplier never touches, so volume
+       tops out near 200 points and cannot carry a run.
+     · a loop drawn through the busy centre lights it for you forever AND
+       turns it into a minefield of your own making. That is the greed
+       decision (§9.3); it lands on every beat, 1.25 times a second.
+
+   Emergent, and my favourite property: echoes replay at your recorded
+   speed. Play frantically and you manufacture fast hazards; play smooth and
+   they are smooth. The player tunes their own difficulty by hand without
+   ever being told that is what they are doing.
+
+   ## What the numbers say, including what they do not
+   CHORUS.report() runs the §11.5 fleet. Every degenerate policy — idle,
+   still, masher, scribbler, circler — lands at or under 3.5% of honest
+   careless play, and idle scores a literal zero. That gate passes hard and
+   it passed in every configuration tried.
+   The skill gradient ABOVE honest play is narrow: deliberate lit-harvesting
+   measures within ~20% of simply hoovering the nearest chime, because
+   travel is taxed by the beat and hoovering barely travels. It is the open
+   question on this build and it wants human hands, not more bots.
+
+   ## Archetype
+   Novel — passes §3. Board-based, so the randomness floor is the visible
+   chime set, not the 600 ms approach rule.
+   Time-driven world: chime spawn is f(seed, tick) and never reads player
+   state, so ghosts are supported (§10.4). Echoes are the player's own
+   trace, which a ghost replay reproduces exactly.
+
+   ## Session  (C3 / C13 / C14)
+   80 s fixed countdown. Nothing ends the run but the clock. A collision
+   with an echo head costs the multiplier, 0.35 s of control, and 0.5 s of
+   clock (capped at 20 s/run, §4.1).
+   65 s — closing phase: values ×1.5, board goes hot, final audio layer.
+   72 s — the last echo releases. Nothing recorded after this ever plays,
+          so the final 8 s are consequence-free greed. The recording ring
+          goes hollow to say so, and no text explains it.
+
+   ## Deviations from the bible, with reasons
+   · Multiplier is CHAIN (§9.2A), not banked. Banking needs a second verb
+     and C5 forbids one. §9.2A is explicitly "best for high-frequency
+     action games", which this is at ~1.2 rings/s.
+   · No approach-visibility rule: nothing approaches. Echo heads are
+     deterministic, loop on an 8 s grid, and draw their full path faintly
+     before they ever reach you — strictly more legible than 600 ms.
+
+   ## Verifying it
+   CHORUS.report() runs the §11.5 bot fleet headless and prints the table.
+   Everything procedural — art, audio, physics. No assets, no libraries.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+const eOut3 = t => 1 - Math.pow(1 - t, 3);
+const eOut4 = t => 1 - Math.pow(1 - t, 4);
+const eIn2  = t => t * t;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Perlin-ish smooth noise for the trauma shake (§7.2 — never random()). */
+function makeNoise(seed) {
+  const r = mulberry32(seed), g = new Float32Array(512);
+  for (let i = 0; i < 512; i++) g[i] = r() * 2 - 1;
+  return t => {
+    const i = Math.floor(t), f = t - i, a = g[i & 511], b = g[(i + 1) & 511];
+    return lerp(a, b, smooth(f));
+  };
+}
+
+/* ----------------------------------------------------------------- tuning */
+const VW = 540;                      // design width, dp
+const TICK_HZ = 60, DT = 1 / TICK_HZ;
+
+const SESSION_S    = 80;
+const SESSION_TICKS = SESSION_S * TICK_HZ;          // 4800
+const LOOP_S       = 8;
+const LOOP_TICKS   = LOOP_S * TICK_HZ;              // 480 → 9 echoes
+const CLOSE_TICK   = 65 * TICK_HZ;                  // C14 closing phase
+const FREE_TICK    = SESSION_TICKS - LOOP_TICKS;    // 72 s: last release
+
+const ONRAMP_TICKS = 240;                           // §5.1
+const K_DIFF = 2.0, T_RAMP = 45, BREATHE_A = 0.10, BREATHE_P = 12;
+const BREATHE_PHASE = -0.524;   // puts the siren on a breathe PEAK (§5.1)
+
+const PLAYER_R     = 15;        // visual
+const PLAYER_HIT   = 9;         // §7.8 — hitbox well under the sprite
+const ECHO_R       = 13;
+const ECHO_HIT     = 9;
+const LOOKAHEAD    = 26;        // ticks of forward path drawn on every head
+/* An echo is a VOICE, and a voice sounds on the beat. Heads light chimes
+   the whole time, but they only STRIKE on the downbeat — 15 ticks in 48.
+   Three problems solved by one rule: nine heads crossing the ground you
+   need was an unavoidable-collision machine (measured 19 hits/run, which
+   pinned the multiplier at 1.7 and left skill separating by only 33%);
+   the game had no groove; and routing was purely spatial. Now you thread
+   the gaps in time as well as space, the hall pulses together, and the
+   danger telegraphs itself by swelling before it lands. */
+const BEAT_TICKS   = 48;        // 0.8 s — 10 beats to a loop
+const STRIKE_TICKS = 15;        // 31% duty cycle
+const TOUCH_LIFT   = 74;        // §8.3 — avatar rides above the thumb
+const FOLLOW_K     = 22;        // direct-manipulation feel
+/* The speed cap is load-bearing, not a detail. Without it the avatar snaps
+   to the finger, you teleport straight through echo heads, and routing —
+   the actual skill in this game — stops existing. With it, every chime you
+   want costs travel, and every echo between you and it is a real decision. */
+const MAX_SPEED    = 470;       // dp/s
+const MAX_STEP     = MAX_SPEED * DT;
+
+const CHIME_R      = 21;
+const CHIME_GRAB   = 26;
+/* Blast radius. Sized against a measurement, not a guess: the mean distance
+   from a chime to its nearest echo head is ~206 dp, so a 22 dp blast fired
+   0.33 times a beat and the entire echo economy was inert. It has to be a
+   real fraction of that spacing to exist at all. */
+const CHIME_LIGHT  = 55;
+/* 0.5 s. A chime is lit only in the moment after the strike that lit it.
+   This is the single most important number in the design and it took the
+   longest to find: at 1.6 s and again at 2.8 s, lighting was a SPATIAL
+   decision, and every measurement said the spatial decision was a trap —
+   plain hoovering collected the MOST lit chimes (67 against a deliberate
+   hunter's 51) because a long window lets volume catch it by luck, and
+   crossing the room for one cost more rings and more strikes than it ever
+   paid. Short window, and it becomes a TIMING decision instead: you cannot
+   luck into it, you have to already be there when the beat lands.
+
+   The geometry is the game. The blast that lights a chime (55 dp) is far
+   wider than the head that hurts you (9 dp), so there is a generous ring
+   around every voice where the prize is and the danger is not. Stand in
+   the ring. The forward arc on each head tells you where that ring will
+   be, 0.43 s early — which is exactly enough time to get there and no
+   time at all to think about it. 1.2 s clears the ≥0.45 s floor for a
+   window a player is asked to hit deliberately, and is short enough that
+   volume cannot luck into it the way a 2.8 s window let it. */
+const LIT_TICKS    = 72;
+/* THE TRICKLE DOES NOT SCALE. A cold chime is a flat +1 that the multiplier
+   never touches; a lit chime is 6 × its tier (6 at the rim, 24 dead centre)
+   AND takes the full multiplier AND is the only thing that builds it.
+   So volume tops out at about 200 points a run — real enough that ringing
+   always feels like something, small enough that it can never carry a
+   score — and everything above that has to be harvested from your own
+   voices. Every earlier arrangement let volume compete, and volume always
+   won: hoovering the nearest chime beat deliberate play in every single
+   measurement until the trickle was cut out of the multiplier entirely. */
+const CHIME_COLD   = 1;
+const CHIME_LIT    = 6;         // §9.4: puts the median run at ~4,300
+/* A lit chime is worth EIGHT cold ones. Cold chimes are a trickle; lit
+   chimes are the score. This number was measured, not chosen: at ×2, ×3
+   and ×4 the controlled bot experiment said value-chasing *lost* 42% to
+   simply grabbing whatever was nearest — crossing the board cost more
+   rings and more strikes than the prize paid back, so the greed decision
+   ran backwards and "don't think, just hoover" was optimal (§3.4). At ×8
+   a lit chime is worth about a full second of travel, which is what makes
+   "my third voice is about to light the far corner" a thought worth
+   having. Cold value stays small so the trickle never carries a run. */
+const CLOSE_MUL    = 1.5;
+const SPAWN_COOL   = 16;        // ≤1 new chime per 0.27 s — no hoovering
+
+const STUN_TICKS   = 21;        // 0.35 s of no control
+const IMMUNE_TICKS = 84;        // 1.4 s — stops stun-lock draining the clock
+const CLOCK_HIT    = 30;        // 0.5 s
+const CLOCK_CAP    = 20 * TICK_HZ;  // §4.1 — ≤25% of the session
+
+const MULT_CAP     = 8;
+/* THE LADDER CLIMBS ON LIT CHIMES ONLY (§9.3, "the multiplier only climbs
+   if you do the hard version"). This is the most important number in the
+   file. When any ring advanced it, the multiplier was a function of ring
+   COUNT, so volume was king and every strategy that traded rings for value
+   lost: the bot that deliberately harvested lit chimes collected 57 of
+   them against a hoover's 44, earned more base value — and still scored
+   28% LESS, because the hoover's longer chain out-multiplied it. The
+   multiplier was fighting the design. Now cold chimes are the trickle that
+   keeps the score ticking, and lit chimes are the only thing that builds.
+   A consequence I like: you cannot build a multiplier before your first
+   voice exists, so the run genuinely begins when the first echo lands. */
+const STREAK_PER   = 1;
+
+/* ---------------------------------------------------------------- palette */
+/* A dark hall with nine voices in it. Generation is carried by HUE, so the
+   player can read "how old is this echo" at a glance without a legend
+   (§11.6 — two channels: hue AND the age of the trail it draws). */
+const P = {
+  void:     '#07060E',
+  field:    '#0E0A1B',
+  fieldHot: '#1A0C18',
+  rim:      'rgba(196,170,255,.14)',
+  rimHot:   'rgba(255,170,140,.20)',
+  /* The player is the only WHITE thing on the board. Lit chimes were
+     near-white too and at a glance you could not tell yourself from a
+     prize — everything else is pushed into gold or a generation hue. */
+  player:   '#FFFFFF',
+  playerGlow:'#FFF2D0',
+  chime:    '#C79A55',
+  chimeLit: '#FFC542',
+  hud:      '#221C18',
+  hudStroke:'rgba(255,238,205,.20)',
+  ink:      '#FFF3D8',
+  dim:      'rgba(255,243,216,.45)',
+  woodDark: '#3E2210',
+  woodA:    '#E2A85E',
+  woodB:    '#B8762F',
+  bad:      '#FF5A57',
+};
+/* Nine generations, warm → cool. Reads as a spectrum filling the hall. */
+const GEN_HUE = ['#FFB03A','#FF8352','#FF5F8E','#D46BFF','#8A7BFF',
+                 '#4FA8FF','#35DBD0','#5FE87F','#C6E84A'];
+
+/* ================================================================== AUDIO */
+/* The signature. Every echo is a voice in a canon: same 8-second bar, its
+   own line. One voice at 0:08, nine by 0:72 — the mix IS the scoreboard,
+   and a good run sounds like a good run from across the room. */
+const AU = {
+  ctx: null, master: null, pad: null, padGain: null, ready: false, muted: false,
+};
+const PENT = [0, 2, 4, 7, 9];
+
+function audioInit() {
+  if (AU.ready || AU.muted) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { AU.muted = true; return; }
+  const ctx = new AC();
+  const master = ctx.createGain();
+  master.gain.value = 0.42;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -18; comp.ratio.value = 8; comp.attack.value = 0.004;
+  master.connect(comp); comp.connect(ctx.destination);
+
+  /* the hall: a slow low pad that thickens as voices join */
+  const padGain = ctx.createGain(); padGain.gain.value = 0;
+  const padFilt = ctx.createBiquadFilter();
+  padFilt.type = 'lowpass'; padFilt.frequency.value = 620; padFilt.Q.value = 0.7;
+  padGain.connect(padFilt); padFilt.connect(master);
+  [55, 82.5, 110].forEach((f, i) => {
+    const o = ctx.createOscillator(); o.type = i === 2 ? 'triangle' : 'sawtooth';
+    o.frequency.value = f; o.detune.value = (i - 1) * 7;
+    const g = ctx.createGain(); g.gain.value = i === 2 ? 0.10 : 0.16;
+    o.connect(g); g.connect(padGain); o.start();
+  });
+
+  AU.ctx = ctx; AU.master = master; AU.padGain = padGain; AU.ready = true;
+}
+function audioResume() { if (AU.ready && AU.ctx.state === 'suspended') AU.ctx.resume(); }
+
+/* degree n of the pentatonic, octave-folded — never a linear Hz ramp (§7.7) */
+function pentFreq(n, base = 261.6) {
+  const oct = Math.floor(n / 5), deg = ((n % 5) + 5) % 5;
+  return base * Math.pow(2, PENT[deg] / 12) * Math.pow(2, oct);
+}
+function tone(freq, dur, opt = {}) {
+  if (!AU.ready) return;
+  const ctx = AU.ctx, t = ctx.currentTime;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = opt.type || 'triangle';
+  o.frequency.setValueAtTime(freq, t);
+  if (opt.glide) o.frequency.exponentialRampToValueAtTime(Math.max(30, opt.glide), t + dur);
+  o.detune.value = (Math.random() * 2 - 1) * 8;   // ±8 cents, cosmetic only
+  const peak = opt.gain == null ? 0.22 : opt.gain;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + (opt.attack || 0.010));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  let node = g;
+  if (opt.filter) {
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = opt.filter; f.Q.value = 0.6;
+    g.connect(f); node = f;
+  }
+  o.connect(g); node.connect(AU.master);
+  o.start(t); o.stop(t + dur + 0.05);
+}
+function noiseBurst(dur, gain, cut) {
+  if (!AU.ready) return;
+  const ctx = AU.ctx, t = ctx.currentTime;
+  const n = Math.floor(ctx.sampleRate * dur);
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cut || 1400;
+  const g = ctx.createGain(); g.gain.value = gain;
+  src.connect(f); f.connect(g); g.connect(AU.master); src.start(t);
+}
+
+const SFX = {
+  ring(pitchIdx, streakTier) {
+    tone(pentFreq(pitchIdx + streakTier * 2), 0.15, { type: 'triangle', gain: 0.26 });
+    tone(pentFreq(pitchIdx + streakTier * 2 + 5), 0.055, { type: 'sine', gain: 0.05 + streakTier * 0.012 });
+  },
+  litBy(gen, pitchIdx) {
+    /* each generation gets its own register — that is the canon */
+    tone(pentFreq(pitchIdx - 5 + (gen % 3)), 0.24,
+         { type: 'sine', gain: 0.085, filter: 900 + gen * 120, attack: 0.03 });
+  },
+  release(gen) {
+    const b = 0;
+    [b, b + 2, b + 4].forEach((d, i) =>
+      tone(pentFreq(d + 5), 0.7, { type: 'triangle', gain: 0.10 - i * 0.02, attack: 0.05, filter: 1800 }));
+    noiseBurst(0.30, 0.10, 2600);
+    tone(pentFreq(gen + 5), 0.5, { type: 'sine', gain: 0.13, attack: 0.02 });
+  },
+  mistake() {
+    tone(240, 0.42, { type: 'sawtooth', gain: 0.20, glide: 62, filter: 900 });
+    noiseBurst(0.22, 0.13, 700);
+  },
+  tier() { tone(pentFreq(12), 0.20, { type: 'triangle', gain: 0.14 }); },
+  close() {
+    [0, 4, 7].forEach((d, i) => tone(pentFreq(d) * 0.5, 1.3, { type: 'sawtooth', gain: 0.07 - i * .015, attack: .18, filter: 700 }));
+  },
+  siren() {
+    tone(196, 1.1, { type: 'triangle', gain: 0.24, glide: 98, attack: 0.02 });
+    noiseBurst(0.7, 0.14, 900);
+  },
+  best() { [0, 2, 4, 7, 9].forEach((d, i) => setTimeout(() => tone(pentFreq(d + 10), 0.28, { gain: 0.16 }), i * 62)); },
+};
+
+/* ============================================================ CANVAS SETUP */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha: false });
+let VH = 960, DPR = 1, CSSW = 0, CSSH = 0;
+const L = {};   // layout rects, recomputed on resize
+
+function layout() {
+  const w = window.innerWidth, h = window.innerHeight;
+  VH = clamp(Math.round(VW * (h / w)), 860, 1320);
+  const scale = Math.min(w / VW, h / VH);
+  CSSW = Math.round(VW * scale); CSSH = Math.round(VH * scale);
+  DPR = Math.min(window.devicePixelRatio || 1, 2.75);
+  cv.style.width = CSSW + 'px'; cv.style.height = CSSH + 'px';
+  cv.width = Math.round(CSSW * DPR); cv.height = Math.round(CSSH * DPR);
+
+  const safeTop = 16, hudH = 62;
+  L.hudY = safeTop; L.hudH = hudH;
+  L.fieldT = safeTop + hudH + 16;
+  L.thumbH = 122;
+  L.fieldB = VH - L.thumbH;
+  L.fieldL = 18; L.fieldR = VW - 18;
+  L.fieldW = L.fieldR - L.fieldL;
+  L.fieldH = L.fieldB - L.fieldT;
+  L.cx = (L.fieldL + L.fieldR) / 2;
+  L.cy = (L.fieldT + L.fieldB) / 2;
+  L.maxR = Math.hypot(L.fieldW, L.fieldH) / 2;
+  buildPathCanvas();
+}
+window.addEventListener('resize', layout);
+
+function toDesign(clientX, clientY) {
+  const r = cv.getBoundingClientRect();
+  return { x: (clientX - r.left) / r.width * VW, y: (clientY - r.top) / r.height * VH };
+}
+
+/* ================================================================ ART BITS */
+/* Radial glow sprites, baked once per colour. Blitting a cached disc with
+   'lighter' is what keeps nine glowing voices inside the §11.4 frame budget. */
+const glowCache = new Map();
+function glowSprite(hex, size) {
+  const key = hex + '|' + size;
+  let c = glowCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const r = size / 2;
+  const grd = g.createRadialGradient(r, r, 0, r, r, r);
+  grd.addColorStop(0.00, hexA(hex, 1));
+  grd.addColorStop(0.22, hexA(hex, 0.55));
+  grd.addColorStop(0.52, hexA(hex, 0.15));
+  grd.addColorStop(1.00, hexA(hex, 0));
+  g.fillStyle = grd; g.fillRect(0, 0, size, size);
+  glowCache.set(key, c);
+  return c;
+}
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+function drawGlow(hex, x, y, radius, alpha) {
+  const s = glowSprite(hex, 128);
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(s, x - radius, y - radius, radius * 2, radius * 2);
+  ctx.globalAlpha = 1;
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+/* Evermore HUD pill: near-black, thin light stroke, top gloss. */
+function pill(x, y, w, h) {
+  roundRect(x, y, w, h, h / 2);
+  ctx.fillStyle = P.hud; ctx.fill();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, 'rgba(255,255,255,.16)');
+  g.addColorStop(0.45, 'rgba(255,255,255,.03)');
+  g.addColorStop(1, 'rgba(0,0,0,.10)');
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 1.2; ctx.strokeStyle = P.hudStroke; ctx.stroke();
+}
+/* Carved-wood plaque — the collection's chrome. */
+function plaque(x, y, w, h, r = 22) {
+  roundRect(x - 7, y - 7, w + 14, h + 14, r + 6);
+  ctx.fillStyle = P.woodDark; ctx.fill();
+  roundRect(x, y, w, h, r);
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, P.woodA); g.addColorStop(1, P.woodB);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = 'rgba(255,240,210,.30)'; ctx.fillRect(x, y, w, 3);
+  ctx.fillStyle = 'rgba(60,26,8,.30)'; ctx.fillRect(x, y + h - 5, w, 5);
+  ctx.restore();
+}
+function text(str, x, y, size, col, align = 'center', weight = 800) {
+  ctx.font = `${weight} ${size}px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`;
+  ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.fillStyle = col; ctx.fillText(str, x, y);
+}
+
+/* ================================================================== STATE */
+const S = {
+  tick: 0, clockTicks: SESSION_TICKS, clockDamage: 0, spawnCool: 0,
+  running: false, over: false, started: false,
+  score: 0, shownScore: 0, streak: 0, mult: 1,
+  rings: 0, mistakes: 0, litRings: 0,
+  px: 0, py: 0, tx: 0, ty: 0, stun: 0, immune: 0,
+  pointer: null, contact: null,
+  rec: null, recIdx: 0,
+  echoes: [], chimes: [],
+  rng: null, seed: 1,
+  trauma: 0, flash: 0, closeFired: false, freeFired: false,
+  particles: [], waves: [], pops: [], trail: [],
+  headless: false, pb: 0, newBest: false,
+  hitFreeze: 0, resultT: 0,
+};
+const noiseX = makeNoise(11), noiseY = makeNoise(29), noiseR = makeNoise(53);
+
+function dEff(t) {
+  const tau = Math.max(0, t - ONRAMP_TICKS) / TICK_HZ;
+  if (t < ONRAMP_TICKS) return 1;
+  const trend = 1 + K_DIFF * Math.pow(tau / T_RAMP, 0.8);
+  const br = 1 + BREATHE_A * Math.sin(TAU * tau / BREATHE_P + BREATHE_PHASE);
+  return trend * br;
+}
+/* A THIN board is what forces travel, and travel is what the beat taxes.
+   At 13 chimes up there was always one within ~95 dp, so the winning line
+   was to squat in one corner and hoover: it out-scored deliberate play by
+   36% while taking HALF the strikes, because it never crossed the room.
+   At 6–9 every chime costs a journey, and a journey is where reading the
+   beat starts to matter. */
+function chimeTarget(t) { return Math.round(6 + 1.0 * (dEff(t) - 1)); }
+
+/* --------------------------------------------------------------- chimes */
+/* Value is spatial and permanent: the centre pays triple. That is the same
+   real estate your echoes accumulate in, so the money and your own history
+   compete for the same ground for the whole run. */
+function chimeTier(x, y) {
+  const d = Math.hypot((x - L.cx) / (L.fieldW / 2), (y - L.cy) / (L.fieldH / 2));
+  return clamp(4 - 3 * clamp(d, 0, 1), 1, 4);
+}
+function spawnChime() {
+  let best = null, bestScore = -1;
+  for (let i = 0; i < 12; i++) {
+    /* centre-weighted: sqrt keeps the middle populated without clumping */
+    const a = S.rng() * TAU, rr = Math.sqrt(S.rng());
+    const x = L.cx + Math.cos(a) * rr * (L.fieldW / 2 - 34);
+    const y = L.cy + Math.sin(a) * rr * (L.fieldH / 2 - 34);
+    let d = Math.hypot(x - S.px, y - S.py);
+    for (const c of S.chimes) d = Math.min(d, Math.hypot(x - c.x, y - c.y));
+    if (d > bestScore) { bestScore = d; best = { x, y }; }
+  }
+  S.chimes.push({
+    x: best.x, y: best.y, tier: Math.round(chimeTier(best.x, best.y)),
+    lit: 0, litBy: 0, born: S.tick, pop: 0,
+  });
+}
+function chimeValue(c) {
+  let v = c.lit > 0 ? CHIME_LIT * c.tier : CHIME_COLD;
+  if (S.tick >= CLOSE_TICK) v *= CLOSE_MUL;
+  return v;
+}
+
+/* ---------------------------------------------------------------- effects */
+function burst(x, y, hex, n, power) {
+  if (S.headless) return;
+  for (let i = 0; i < n; i++) {
+    const a = S.rng() * TAU, sp = (0.6 + S.rng() * 1.1) * power;
+    S.particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.5,
+                       life: 0.55 + S.rng() * 0.45, t: 0, hex, r: 2.5 + S.rng() * 2.6 });
+  }
+}
+function wave(x, y, hex, r0, r1, dur, w) {
+  if (S.headless) return;
+  S.waves.push({ x, y, hex, r0, r1, dur, t: 0, w: w || 3 });
+}
+function pop(x, y, str, hex, big) {
+  if (S.headless) return;
+  S.pops.push({ x, y, str, hex, t: 0, big: !!big });
+}
+function addTrauma(v) { S.trauma = clamp(S.trauma + v, 0, 1); }
+
+/* ================================================================== RESET */
+function reset(seed) {
+  S.seed = seed == null ? (Date.now() & 0x7fffffff) : seed;
+  S.rng = mulberry32(S.seed >>> 0);
+  S.tick = 0; S.clockTicks = SESSION_TICKS; S.clockDamage = 0;
+  S.score = 0; S.shownScore = 0; S.streak = 0; S.mult = 1;
+  S.rings = 0; S.mistakes = 0; S.litRings = 0;
+  S.px = L.cx; S.py = L.cy; S.tx = L.cx; S.ty = L.cy;
+  S.stun = 0; S.immune = 0; S.pointer = null; S.contact = null;
+  S.rec = new Float32Array(LOOP_TICKS * 2); S.recIdx = 0;
+  S.echoes = []; S.chimes = [];
+  S.trauma = 0; S.flash = 0; S.closeFired = false; S.freeFired = false;
+  S.particles.length = 0; S.waves.length = 0; S.pops.length = 0; S.trail.length = 0;
+  S.over = false; S.running = true; S.newBest = false;
+  S.hitFreeze = 0; S.resultT = 0; S.spawnCool = 0;
+  for (let i = 0; i < chimeTarget(0); i++) spawnChime();
+  if (!S.headless) { buildPathCanvas(); padSet(0); }
+}
+
+/* ============================================================== SIM STEP */
+function stepSim() {
+  const t = S.tick;
+
+  /* --- the countdown. Nothing else ends the run (C3/C13). --------------- */
+  S.clockTicks--;
+  if (S.clockTicks <= 0) { endRun(); return; }
+
+  /* --- authored beats -------------------------------------------------- */
+  if (!S.closeFired && t >= CLOSE_TICK) {
+    S.closeFired = true;
+    if (!S.headless) { SFX.close(); S.flash = Math.max(S.flash, 0.5); addTrauma(0.5); }
+  }
+  if (!S.freeFired && t >= FREE_TICK) S.freeFired = true;
+
+  /* --- player: drag to move, avatar rides above the thumb (§8.3) -------- */
+  if (S.stun > 0) S.stun--;
+  if (S.immune > 0) S.immune--;
+  if (S.pointer && S.stun === 0) {
+    S.tx = clamp(S.pointer.x, L.fieldL + PLAYER_R, L.fieldR - PLAYER_R);
+    S.ty = clamp(S.pointer.y - TOUCH_LIFT, L.fieldT + PLAYER_R, L.fieldB - PLAYER_R);
+  }
+  if (S.stun === 0) {
+    const k = 1 - Math.exp(-FOLLOW_K * DT);
+    let dx = (S.tx - S.px) * k, dy = (S.ty - S.py) * k;
+    const step = Math.hypot(dx, dy);
+    if (step > MAX_STEP) { const s = MAX_STEP / step; dx *= s; dy *= s; }
+    S.px += dx; S.py += dy;
+  }
+
+  /* --- record. The stun is recorded too, so a mistake leaves a stall in
+         your own loop for the rest of the run. ------------------------- */
+  S.rec[S.recIdx * 2] = S.px; S.rec[S.recIdx * 2 + 1] = S.py;
+  S.recIdx++;
+
+  /* --- release an echo every 8 s, but never one that cannot play ------- */
+  if (S.recIdx >= LOOP_TICKS) {
+    S.recIdx = 0;
+    if (t + 1 < SESSION_TICKS && S.echoes.length < 9) {
+      const gen = S.echoes.length;
+      S.echoes.push({ buf: S.rec.slice(0), gen, hex: GEN_HUE[gen], born: t, sound: 0, hx: 0, hy: 0 });
+      S.rec = new Float32Array(LOOP_TICKS * 2);
+      if (!S.headless) {
+        SFX.release(gen); padSet(S.echoes.length);
+        addTrauma(0.55); S.flash = Math.max(S.flash, 0.62);
+        buildPathCanvas();
+        const e = S.echoes[gen];
+        wave(e.buf[0], e.buf[1], e.hex, 10, 190, 0.7, 4);
+      }
+    }
+  }
+
+  /* --- echoes: phase-locked to the same 8 s bar, so the whole hall
+         breathes together and their positions stay predictable. -------- */
+  const idx = t % LOOP_TICKS;
+  for (const e of S.echoes) {
+    e.hx = e.buf[idx * 2]; e.hy = e.buf[idx * 2 + 1];
+    if (e.sound > 0) e.sound--;
+  }
+
+  /* --- The strike is the ONLY event in this game. On the downbeat every
+         echo strikes: any chime inside the blast lights (and is worth 4×
+         for two beats), and if it catches YOU it costs the multiplier and
+         half a second. One rule, both halves, and it is rhythmic — so
+         "which lit chime can I still reach before the next beat" is the
+         question the whole run is made of. Continuous lighting was the
+         alternative and it blanketed the board: at 9 voices everything was
+         lit all the time, which deleted the decision entirely. -------- */
+  for (const c of S.chimes) if (c.lit > 0) c.lit--;
+  if (t % BEAT_TICKS === 0) {
+    for (const c of S.chimes) {
+      for (const e of S.echoes) {
+        const dx = c.x - e.hx, dy = c.y - e.hy;
+        if (dx * dx + dy * dy < (CHIME_LIGHT + CHIME_R) * (CHIME_LIGHT + CHIME_R)) {
+          if (!S.headless) {
+            wave(c.x, c.y, e.hex, CHIME_R, CHIME_R + 30, 0.45, 2.5);
+            if (e.sound === 0) { SFX.litBy(e.gen, pitchOf(c)); e.sound = 20; }
+          }
+          c.lit = LIT_TICKS; c.litBy = e.gen;
+          break;
+        }
+      }
+    }
+  }
+
+  /* --- ring on entry. Only the player scores — there is no idle income
+         anywhere in this game, which is what makes §5.4 structural. ----- */
+  for (let i = S.chimes.length - 1; i >= 0; i--) {
+    const c = S.chimes[i];
+    const dx = c.x - S.px, dy = c.y - S.py;
+    if (dx * dx + dy * dy < (CHIME_GRAB + PLAYER_HIT) * (CHIME_GRAB + PLAYER_HIT)) {
+      const wasLit = c.lit > 0;
+      const gain = wasLit ? Math.round(chimeValue(c) * S.mult)
+                          : Math.round(chimeValue(c));   // trickle, unmultiplied
+      S.score += gain; S.rings++; if (wasLit) S.litRings++;
+      if (wasLit) S.streak++;          // only a lit chime builds the ladder
+      const nm = Math.min(MULT_CAP, 1 + Math.floor(S.streak / STREAK_PER));
+      const tierNow = streakTier(S.streak);
+      if (!S.headless) {
+        burst(c.x, c.y, wasLit ? P.chimeLit : P.chime, wasLit ? 10 + tierNow * 6 : 6, wasLit ? 1.5 + tierNow * 0.35 : 0.9);
+        wave(c.x, c.y, wasLit ? P.chimeLit : P.chime, CHIME_R, CHIME_R + (wasLit ? 40 + tierNow * 10 : 16), 0.42, wasLit ? 3 : 1.6);
+        /* only the lit ones get a number. A "+1" on every cold chime is
+           two-thirds of the events on screen saying nothing. */
+        if (wasLit) pop(c.x, c.y - 20, '+' + gain, P.chimeLit, true);
+        SFX.ring(pitchOf(c), tierNow);
+        if (nm > S.mult) { SFX.tier(); addTrauma(0.50); }
+      }
+      S.mult = nm;
+      S.chimes.splice(i, 1);
+    }
+  }
+
+  /* --- keep the board stocked; density is the escalation vector.
+         Rate-limited, so sweeping a dense cluster cannot become a hoover. */
+  const want = chimeTarget(t);
+  if (S.spawnCool > 0) S.spawnCool--;
+  if (S.chimes.length < want && S.spawnCool === 0) { spawnChime(); S.spawnCool = SPAWN_COOL; }
+
+  /* --- the beat, and the one mistake: your own past, striking on a spot
+         you chose. Between strikes you may pass straight through. ------ */
+  if (t % BEAT_TICKS === 0 && S.echoes.length && !S.headless) {
+    tone(65.4, 0.11, { type: 'sine', gain: 0.05 + Math.min(0.07, S.echoes.length * 0.010), attack: 0.004 });
+  }
+  if (S.immune === 0 && S.stun === 0 && isStriking(t)) {
+    for (const e of S.echoes) {
+      const dx = e.hx - S.px, dy = e.hy - S.py;
+      if (dx * dx + dy * dy < (ECHO_HIT + PLAYER_HIT) * (ECHO_HIT + PLAYER_HIT)) {
+        mistake(e); break;
+      }
+    }
+  }
+
+  /* --- decay ----------------------------------------------------------- */
+  S.trauma = clamp(S.trauma - 1.2 * DT, 0, 1);
+  S.flash = Math.max(0, S.flash - 3.2 * DT);
+  S.tick++;
+}
+
+/* The beat. Strike lands on the downbeat; the swell before it is the
+   telegraph, so a hit is always something the player could see coming. */
+function isStriking(t) { return (t % BEAT_TICKS) < STRIKE_TICKS; }
+function strikeVis(t) {
+  const i = t % BEAT_TICKS;
+  if (i < STRIKE_TICKS) return 1 - 0.42 * (i / STRIKE_TICKS);
+  const toNext = BEAT_TICKS - i;
+  return toNext <= 14 ? 0.22 + 0.50 * (1 - toNext / 14) : 0.22;
+}
+
+function pitchOf(c) {
+  /* higher on the board = higher note. Musical and informative at once. */
+  const n = 1 - (c.y - L.fieldT) / L.fieldH;
+  return Math.floor(n * 9) + (c.lit > 0 ? 5 : 0);
+}
+/* Tiers ride the lit-chain, which is what the ladder is now made of. */
+function streakTier(s) { return s >= 7 ? 4 : s >= 5 ? 3 : s >= 3 ? 2 : s >= 1 ? 1 : 0; }
+
+function mistake(e) {
+  /* A strike knocks you DOWN the ladder, it does not demolish it. A total
+     reset made aggression strictly irrational: harvesting your own voices
+     means standing where they strike, so the aggressive line took twice the
+     hits for 25% more lit chimes and a full wipe erased the difference —
+     hoovering the far corners beat it every time. Halving keeps the loss
+     loud and visible (you watch rungs go out) without making the only
+     rational play "stay away from the thing the game is about". */
+  S.streak = Math.floor(S.streak / 2); S.mistakes++;
+  S.mult = Math.min(MULT_CAP, 1 + Math.floor(S.streak / STREAK_PER));
+  S.stun = STUN_TICKS; S.immune = IMMUNE_TICKS;
+  const room = Math.max(0, CLOCK_CAP - S.clockDamage);
+  const dmg = Math.min(CLOCK_HIT, room, Math.max(0, S.clockTicks - 1));
+  S.clockDamage += dmg; S.clockTicks -= dmg;
+  if (S.headless) return;
+  addTrauma(1.0);
+  S.hitFreeze = 10;                       // §7.9b — presentation only
+  burst(S.px, S.py, P.bad, 22, 2.2);
+  wave(S.px, S.py, P.bad, 6, 120, 0.5, 4);
+  if (dmg > 0) pop(VW / 2, L.hudY + L.hudH + 26, '−' + (dmg / TICK_HZ).toFixed(1) + 's', P.bad, true);
+  SFX.mistake();
+}
+
+function endRun() {
+  S.running = false; S.over = true; S.clockTicks = 0;
+  S.resultT = 0;
+  /* Unbanked value is lost at the siren (§7.9) — here that is every chime
+     an echo has lit and you did not reach. They go out, visibly. */
+  if (!S.headless) {
+    for (const c of S.chimes) if (c.lit > 0) { wave(c.x, c.y, P.chime, CHIME_R + 20, CHIME_R, 0.5, 2); c.lit = 0; }
+    addTrauma(0.60); SFX.siren(); padSet(0);
+    S.pb = +(localStorage.getItem('chorus.pb') || 0);
+    if (S.score > S.pb) { S.newBest = true; localStorage.setItem('chorus.pb', String(S.score)); setTimeout(() => SFX.best(), 620); }
+  }
+}
+function padSet(voices) {
+  if (!AU.ready) return;
+  const g = voices === 0 ? 0 : clamp(0.05 + voices * 0.030, 0, 0.30);
+  AU.padGain.gain.setTargetAtTime(g, AU.ctx.currentTime, 0.5);
+}
+
+/* ============================================================ PATH CANVAS */
+/* Every echo's full loop is baked once, when it is born. Nine 480-point
+   paths redrawn every frame would be the whole frame budget; baked, they
+   are one blit. Redrawn 9 times per run, not 60 times per second. */
+let pathCv = null, pathCtx = null;
+function buildPathCanvas() {
+  if (S.headless || !L.fieldW) return;
+  if (!pathCv) { pathCv = document.createElement('canvas'); pathCtx = pathCv.getContext('2d'); }
+  const w = Math.round(VW * DPR), h = Math.round(VH * DPR);
+  if (pathCv.width !== w || pathCv.height !== h) { pathCv.width = w; pathCv.height = h; }
+  const g = pathCtx;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, VW, VH);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for (const e of S.echoes || []) {
+    g.beginPath();
+    g.moveTo(e.buf[0], e.buf[1]);
+    for (let i = 1; i < LOOP_TICKS; i++) g.lineTo(e.buf[i * 2], e.buf[i * 2 + 1]);
+    g.closePath();
+    /* Deliberately faint. The path is a memory aid, not the threat — the
+       threat is the head. Nine bright loops would be unreadable clutter. */
+    g.strokeStyle = hexA(e.hex, 0.070); g.lineWidth = 1.6; g.stroke();
+  }
+}
+
+/* ================================================================ RENDER */
+function render(alpha) {
+  const W = VW, H = VH;
+  ctx.setTransform(DPR * (CSSW / VW), 0, 0, DPR * (CSSH / VH), 0, 0);
+  ctx.save();
+
+  /* shake — presentation only, never the sim (§7.2) */
+  if (S.trauma > 0.001) {
+    const sh = Math.pow(S.trauma, 3), tt = performance.now() / 1000 * 25;
+    ctx.translate(14 * sh * noiseX(tt), 14 * sh * noiseY(tt + 40));
+    ctx.rotate((2.0 * Math.PI / 180) * sh * noiseR(tt + 90));
+  }
+
+  const hot = S.closeFired ? clamp((S.tick - CLOSE_TICK) / 60, 0, 1) : 0;
+
+  /* --- backdrop -------------------------------------------------------- */
+  ctx.fillStyle = P.void; ctx.fillRect(-30, -30, W + 60, H + 60);
+
+  /* --- the hall -------------------------------------------------------- */
+  const fg = ctx.createRadialGradient(L.cx, L.cy, 10, L.cx, L.cy, L.maxR * 1.15);
+  fg.addColorStop(0, hot > 0 ? P.fieldHot : P.field);
+  fg.addColorStop(1, P.void);
+  roundRect(L.fieldL, L.fieldT, L.fieldW, L.fieldH, 26);
+  ctx.fillStyle = fg; ctx.fill();
+  ctx.lineWidth = 1.4; ctx.strokeStyle = hot > 0 ? P.rimHot : P.rim; ctx.stroke();
+
+  ctx.save();
+  roundRect(L.fieldL, L.fieldT, L.fieldW, L.fieldH, 26); ctx.clip();
+
+  /* --- baked echo loops ------------------------------------------------ */
+  if (pathCv) {
+    ctx.save(); ctx.setTransform(DPR * (CSSW / VW), 0, 0, DPR * (CSSH / VH), 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(pathCv, 0, 0, VW, VH);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  ctx.globalCompositeOperation = 'lighter';
+
+  /* --- chimes ---------------------------------------------------------- */
+  for (const c of S.chimes) {
+    const age = clamp((S.tick - c.born) / 16, 0, 1);
+    const litN = c.lit > 0 ? clamp(c.lit / LIT_TICKS, 0, 1) : 0;
+    const pulse = 1 + 0.06 * Math.sin(S.tick * 0.09 + c.x * 0.03);
+    const r = CHIME_R * eOut3(age) * pulse;
+    const col = litN > 0 ? P.chimeLit : P.chime;
+    const glowHex = litN > 0 ? GEN_HUE[c.litBy] : P.chime;
+    drawGlow(glowHex, c.x, c.y, r * (2.4 + litN * 1.9), (0.30 + litN * 0.45) * age);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, TAU);
+    ctx.lineWidth = 2.6 + litN * 2.2; ctx.strokeStyle = hexA(col, 0.55 + litN * 0.45); ctx.stroke();
+    ctx.beginPath(); ctx.arc(c.x, c.y, r * (0.34 + litN * 0.12), 0, TAU);
+    ctx.fillStyle = hexA(col, 0.55 + litN * 0.45); ctx.fill();
+    if (litN > 0) {   // the lit ring counts its own value down
+      ctx.beginPath(); ctx.arc(c.x, c.y, r + 7, -Math.PI / 2, -Math.PI / 2 + TAU * litN);
+      ctx.lineWidth = 2; ctx.strokeStyle = hexA(GEN_HUE[c.litBy], 0.75); ctx.stroke();
+    }
+  }
+
+  /* --- waves ----------------------------------------------------------- */
+  for (const w of S.waves) {
+    const n = w.t / w.dur, r = lerp(w.r0, w.r1, eOut3(n));
+    ctx.beginPath(); ctx.arc(w.x, w.y, r, 0, TAU);
+    ctx.lineWidth = w.w * (1 - n); ctx.strokeStyle = hexA(w.hex, 0.55 * (1 - n)); ctx.stroke();
+  }
+
+  /* --- echo heads. The LEADING arc is the fairness feature: an echo is
+         deterministic, so showing the next 0.43 s of its path turns every
+         collision into something the player chose. Without it the loops are
+         learnable but only after they have already hit you. ------------- */
+  const idx = S.tick % LOOP_TICKS;
+  for (const e of S.echoes) {
+    ctx.beginPath();
+    for (let i = 0; i <= LOOKAHEAD; i++) {
+      const j = (idx + i) % LOOP_TICKS;
+      const x = e.buf[j * 2], y = e.buf[j * 2 + 1];
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.lineWidth = 2.4; ctx.strokeStyle = hexA(e.hex, 0.50); ctx.lineCap = 'round'; ctx.stroke();
+    /* the tip of the leading arc — "it will be here in 0.43 s" */
+    const lj = (idx + LOOKAHEAD) % LOOP_TICKS;
+    ctx.beginPath(); ctx.arc(e.buf[lj * 2], e.buf[lj * 2 + 1], 3.4, 0, TAU);
+    ctx.fillStyle = hexA(e.hex, 0.55); ctx.fill();
+    /* the segment it came from, fainter — direction reads at a glance */
+    ctx.beginPath();
+    for (let i = 0; i < 22; i++) {
+      const j = (idx - i + LOOP_TICKS) % LOOP_TICKS;
+      const x = e.buf[j * 2], y = e.buf[j * 2 + 1];
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.lineWidth = 3; ctx.strokeStyle = hexA(e.hex, 0.20); ctx.stroke();
+
+    /* the head swells into its strike and shrinks between — the danger
+       state is carried by SIZE and BRIGHTNESS, never by colour alone */
+    const sv = strikeVis(S.tick), striking = isStriking(S.tick);
+    const hr = ECHO_R * (0.52 + 0.72 * sv);
+    drawGlow(e.hex, e.hx, e.hy, ECHO_R * (1.9 + 2.2 * sv), 0.30 + 0.46 * sv);
+    ctx.beginPath(); ctx.arc(e.hx, e.hy, hr, 0, TAU);
+    ctx.fillStyle = hexA(e.hex, 0.18 + 0.30 * sv); ctx.fill();
+    ctx.lineWidth = 1.6 + 1.6 * sv; ctx.strokeStyle = hexA(e.hex, 0.45 + 0.55 * sv); ctx.stroke();
+    if (striking) {
+      /* the blast ring expands to the ACTUAL lighting radius — the player
+         is never guessing how far a strike reaches */
+      const n = (S.tick % BEAT_TICKS) / STRIKE_TICKS;
+      ctx.beginPath(); ctx.arc(e.hx, e.hy, hr + (CHIME_LIGHT - hr) * eOut3(n), 0, TAU);
+      ctx.lineWidth = 2.4 * (1 - n); ctx.strokeStyle = hexA(e.hex, 0.58 * (1 - n)); ctx.stroke();
+      ctx.beginPath(); ctx.arc(e.hx - hr * 0.28, e.hy - hr * 0.30, hr * 0.26, 0, TAU);
+      ctx.fillStyle = `rgba(255,255,255,${0.62 * (1 - n * 0.6)})`; ctx.fill();
+    }
+  }
+
+  /* --- particles ------------------------------------------------------- */
+  for (const p of S.particles) {
+    const n = p.t / p.life;
+    ctx.globalAlpha = (1 - n) * 0.9;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1 - n * 0.5), 0, TAU);
+    ctx.fillStyle = p.hex; ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  /* --- the player ------------------------------------------------------ */
+  if (!S.over || S.resultT < 0.2) {
+    const inv = S.immune > 0 && Math.floor(S.tick / 4) % 2 === 0 ? 0.42 : 1;
+    /* comet trail */
+    ctx.beginPath();
+    for (let i = 0; i < S.trail.length; i++) {
+      const p = S.trail[i];
+      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+    }
+    ctx.lineWidth = 5; ctx.strokeStyle = hexA(P.playerGlow, 0.16 * inv); ctx.lineCap = 'round'; ctx.stroke();
+
+    drawGlow(P.playerGlow, S.px, S.py, PLAYER_R * 5.2, 0.62 * inv);
+    drawGlow('#FFFFFF', S.px, S.py, PLAYER_R * 2.1, 0.85 * inv);
+    ctx.beginPath(); ctx.arc(S.px, S.py, PLAYER_R * 0.82, 0, TAU);
+    ctx.fillStyle = hexA(P.player, inv); ctx.fill();
+
+    /* the recording ring — you wear your own loop */
+    const rn = S.recIdx / LOOP_TICKS;
+    const rr = PLAYER_R + 9;
+    ctx.beginPath(); ctx.arc(S.px, S.py, rr, 0, TAU);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.stroke();
+    if (S.freeFired) {
+      /* nothing recorded from here on will ever play. No text says so. */
+      ctx.setLineDash([3, 6]);
+      ctx.beginPath(); ctx.arc(S.px, S.py, rr, 0, TAU);
+      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.26)'; ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      const nx = GEN_HUE[Math.min(8, S.echoes.length)];
+      ctx.beginPath(); ctx.arc(S.px, S.py, rr, -Math.PI / 2, -Math.PI / 2 + TAU * rn);
+      ctx.lineWidth = 3; ctx.strokeStyle = hexA(nx, 0.92); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  /* --- floating numbers ------------------------------------------------ */
+  for (const p of S.pops) {
+    const n = clamp(p.t / 0.6, 0, 1);
+    ctx.globalAlpha = 1 - eIn2(n);
+    text(p.str, p.x, p.y - 40 * eOut3(n), p.big ? 27 : 21, p.hex, 'center', 900);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();   // unclip field
+
+  /* --- contact indicator: where the game thinks your finger is (§8.3) -- */
+  if (S.contact && !S.over) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath(); ctx.moveTo(S.contact.x, S.contact.y); ctx.lineTo(S.px, S.py);
+    ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,220,150,.16)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(S.contact.x, S.contact.y, 17, 0, TAU);
+    ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(255,220,150,.22)'; ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  drawHUD(hot);
+
+  /* --- flash ----------------------------------------------------------- */
+  if (S.flash > 0.001) {
+    ctx.fillStyle = `rgba(255,246,220,${S.flash * 0.34})`;
+    ctx.fillRect(-30, -30, W + 60, H + 60);
+  }
+
+  if (!S.started) drawAttract();
+  if (S.over) drawResult();
+  ctx.restore();
+}
+
+/* -------------------------------------------------------------- the HUD */
+function drawHUD(hot) {
+  const y = L.hudY, h = L.hudH, cy = y + h / 2;
+
+  /* score, left */
+  pill(16, y, 176, h);
+  text('SCORE', 16 + 18, cy - 12, 12, P.dim, 'left', 800);
+  text(String(Math.round(S.shownScore)), 16 + 18, cy + 11, 30, P.ink, 'left', 900);
+
+  /* countdown, centre — mandatory, and it takes visible damage */
+  const secs = Math.max(0, S.clockTicks / TICK_HZ);
+  const mm = Math.floor(secs / 60), ss = Math.floor(secs % 60);
+  const urgent = secs <= 10;
+  const cw = 128, cx0 = VW / 2 - cw / 2;
+  pill(cx0, y, cw, h);
+  const pulse = urgent ? 1 + 0.09 * Math.sin(S.tick * 0.42) : 1;
+  const cCol = urgent ? '#FF8A5C' : (hot > 0 ? '#FFD09A' : P.ink);
+  ctx.save();
+  ctx.translate(VW / 2, cy); ctx.scale(pulse, pulse);
+  text(`${mm}:${String(ss).padStart(2, '0')}`, 0, 1, 31, cCol, 'center', 900);
+  ctx.restore();
+
+  /* multiplier + streak pips, right */
+  const mw = 118, mx = VW - 16 - mw;
+  pill(mx, y, mw, h);
+  const mcol = S.mult >= 6 ? '#FFD34F' : S.mult >= 3 ? '#FFB86B' : P.ink;
+  text('×' + S.mult, mx + mw - 18, cy - 8, 28, mcol, 'right', 900);
+  /* the lit-chain, made visible — the twin of the audio ladder (§7.7) */
+  const tier = streakTier(S.streak), rungs = MULT_CAP - 1;
+  for (let i = 0; i < rungs; i++) {
+    const px = mx + mw - 17 - (rungs - 1 - i) * 10.5;
+    const on = i < Math.min(rungs, S.streak);
+    ctx.beginPath(); ctx.arc(px, cy + 17, on ? 3.3 : 2.4, 0, TAU);
+    ctx.fillStyle = on ? hexA(GEN_HUE[Math.min(8, tier + 2)], 0.95) : 'rgba(255,243,216,.16)';
+    ctx.fill();
+  }
+
+  /* voices: one lamp per echo. The visual twin of the audio canon (§7.7). */
+  const vy = y + h + 13, n = 9;
+  const totalW = n * 17 - 6, sx = VW / 2 - totalW / 2;
+  for (let i = 0; i < n; i++) {
+    const on = i < S.echoes.length;
+    const x = sx + i * 17 + 5;
+    if (on) {
+      ctx.globalCompositeOperation = 'lighter';
+      drawGlow(GEN_HUE[i], x, vy, 13, 0.65);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.beginPath(); ctx.arc(x, vy, 4.0, 0, TAU);
+    ctx.fillStyle = on ? GEN_HUE[i] : 'rgba(255,243,216,.13)';
+    ctx.fill();
+  }
+}
+
+/* -------------------------------------------------------------- attract */
+function drawAttract() {
+  ctx.fillStyle = 'rgba(6,5,12,.72)';
+  ctx.fillRect(-30, -30, VW + 60, VH + 60);
+  const cy = L.cy;
+  ctx.globalCompositeOperation = 'lighter';
+  drawGlow(P.playerGlow, VW / 2, cy - 96, 120, 0.5);
+  ctx.globalCompositeOperation = 'source-over';
+  text('CHORUS', VW / 2, cy - 96, 58, P.ink, 'center', 900);
+  text('drag to ring the chimes', VW / 2, cy - 30, 20, P.dim);
+  text('every 8 seconds your path comes back', VW / 2, cy + 4, 20, P.dim);
+
+  /* an animated finger doing the exact gesture — §12, no text tutorial */
+  const t = performance.now() / 1000;
+  const a = t * 1.1, rx = 96, ry = 52;
+  const hx = VW / 2 + Math.cos(a) * rx, hy = cy + 108 + Math.sin(a) * ry;
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.beginPath();
+  for (let i = 0; i <= 60; i++) {
+    const aa = a - i * 0.035;
+    const x = VW / 2 + Math.cos(aa) * rx, y = cy + 108 + Math.sin(aa) * ry;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.lineWidth = 3; ctx.strokeStyle = hexA(P.chimeLit, 0.55); ctx.stroke();
+  drawGlow(P.chimeLit, hx, hy, 52, 0.8);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.beginPath(); ctx.arc(hx, hy, 13, 0, TAU);
+  ctx.fillStyle = P.player; ctx.fill();
+
+  const bp = 1 + 0.03 * Math.sin(t * 3);
+  ctx.save(); ctx.translate(VW / 2, VH - 108); ctx.scale(bp, bp);
+  plaque(-110, -32, 220, 64, 20);
+  text('TAP TO PLAY', 0, 1, 25, '#3E2210', 'center', 900);
+  ctx.restore();
+}
+
+/* --------------------------------------------------------------- result */
+function drawResult() {
+  const n = clamp(S.resultT / 0.42, 0, 1);
+  ctx.fillStyle = `rgba(6,5,12,${0.62 * n})`;
+  ctx.fillRect(-30, -30, VW + 60, VH + 60);
+  if (S.resultT < 0.5) return;
+
+  const slide = eOut4(clamp((S.resultT - 0.5) / 0.42, 0, 1));
+  const py = lerp(VH + 40, VH - 352, slide);
+  ctx.save(); ctx.translate(0, py);
+
+  plaque(VW / 2 - 190, 0, 380, 176, 24);
+  text('CHORUS', VW / 2, 28, 15, 'rgba(62,34,16,.62)', 'center', 900);
+  text(String(Math.round(S.shownScore)), VW / 2, 74, 62, '#3E2210', 'center', 900);
+
+  /* the gap — the smallest true thing you did not do (§10.5) */
+  let gap = '', gcol = 'rgba(62,34,16,.78)';
+  if (S.newBest) { gap = 'NEW BEST  +' + (S.score - S.pb); gcol = '#7A3B00'; }
+  else if (S.pb > 0) {
+    const d = S.pb - S.score;
+    gap = d <= 0 ? 'matched your best' : '−' + d + ' from your best';
+  }
+  if (gap) text(gap, VW / 2, 126, 21, gcol, 'center', 800);
+
+  const rings = `${S.rings} rung · ${S.litRings} lit · ${S.mistakes} hit`;
+  text(rings, VW / 2, 155, 15, 'rgba(62,34,16,.58)', 'center', 700);
+  ctx.restore();
+
+  if (S.resultT >= 0.75) {
+    const bp = 1 + 0.03 * Math.sin(performance.now() / 1000 * 3.4);
+    ctx.save(); ctx.translate(VW / 2, VH - 116); ctx.scale(bp, bp);
+    plaque(-104, -31, 208, 62, 20);
+    text('AGAIN', 0, 1, 26, '#3E2210', 'center', 900);
+    ctx.restore();
+  }
+}
+
+/* ================================================================== LOOP */
+/* Everything below the sim is presentation. Kept in its own function so the
+   render path can be driven deterministically for verification without
+   touching a single line the sim depends on. */
+function stepPresentation(dt) {
+  const pdt = Math.min(dt, 1 / 30);
+  S.shownScore += (S.score - S.shownScore) * (1 - Math.exp(-9 * pdt));
+  if (Math.abs(S.score - S.shownScore) < 0.6) S.shownScore = S.score;
+  for (let i = S.particles.length - 1; i >= 0; i--) {
+    const p = S.particles[i];
+    p.t += pdt; p.x += p.vx; p.y += p.vy; p.vy += 0.055; p.vx *= 0.985; p.vy *= 0.985;
+    if (p.t >= p.life) S.particles.splice(i, 1);
+  }
+  for (let i = S.waves.length - 1; i >= 0; i--) { S.waves[i].t += pdt; if (S.waves[i].t >= S.waves[i].dur) S.waves.splice(i, 1); }
+  for (let i = S.pops.length - 1; i >= 0; i--) { S.pops[i].t += pdt; if (S.pops[i].t >= 0.6) S.pops.splice(i, 1); }
+  if (S.running && S.started) {
+    S.trail.push({ x: S.px, y: S.py });
+    if (S.trail.length > 26) S.trail.shift();
+  }
+  if (S.particles.length > 400) S.particles.splice(0, S.particles.length - 400);
+}
+
+let last = 0, acc = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!last) last = now;
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.25) dt = 0.25;
+
+  if (S.over) S.resultT += dt;
+
+  /* The sim runs first and unconditionally. Whatever the juice is doing,
+     the countdown advances — a hitstop that paused it would let a player
+     buy run time by playing badly (§7.9b), so the freeze below is applied
+     ONLY to the presentation integrators and provably cannot reach here. */
+  if (S.running && S.started) {
+    acc += dt;
+    let guard = 0;
+    while (acc >= DT && guard++ < 8) { acc -= DT; if (S.running) stepSim(); }
+  } else acc = 0;
+
+  if (S.hitFreeze > 0) S.hitFreeze--;      // particles and trail hold still
+  else stepPresentation(dt);
+  render(1);
+}
+
+/* ================================================================= INPUT */
+function press(x, y) {
+  audioInit(); audioResume();
+  if (!S.started) { S.started = true; reset(); return true; }
+  if (S.over) { if (S.resultT >= 0.75) { reset(); } return true; }
+  return false;
+}
+cv.addEventListener('pointerdown', ev => {
+  ev.preventDefault();
+  const p = toDesign(ev.clientX, ev.clientY);
+  if (press(p.x, p.y)) return;
+  cv.setPointerCapture(ev.pointerId);
+  S.pointer = p; S.contact = p;
+}, { passive: false });
+cv.addEventListener('pointermove', ev => {
+  if (!S.running || !S.contact) return;
+  ev.preventDefault();
+  const p = toDesign(ev.clientX, ev.clientY);
+  S.pointer = p; S.contact = p;
+}, { passive: false });
+function release() { S.contact = null; }
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('blur', release);
+
+/* =========================================================== BOT FLEET */
+/* §11.5. A fixed clock with no fail state has NO automatic punishment for
+   lazy play — the only thing between a degenerate strategy and the top of
+   the board is whether the maths disfavours it, and that has to be proven.
+   Every degenerate policy must land at or below `careless`. */
+const POLICIES = {
+  idle:      () => () => null,
+  still:     () => () => ({ x: L.cx, y: L.cy + TOUCH_LIFT }),
+  masher:    (r) => (t) => (t % 6 === 0 ? { x: L.fieldL + r() * L.fieldW, y: L.fieldT + r() * L.fieldH } : null),
+  scribbler: (r) => {
+    let x = L.cx, y = L.cy, a = 0;
+    return () => {
+      a += (r() - 0.5) * 1.4;
+      x = clamp(x + Math.cos(a) * 13, L.fieldL, L.fieldR);
+      y = clamp(y + Math.sin(a) * 13, L.fieldT, L.fieldB);
+      return { x, y: y + TOUCH_LIFT };
+    };
+  },
+  circler: () => (t) => ({
+    x: L.cx + Math.cos(t * 0.045) * (L.fieldW * 0.33),
+    y: L.cy + Math.sin(t * 0.045) * (L.fieldH * 0.30) + TOUCH_LIFT,
+  }),
+  /* careless = honest but unskilled: chases whatever is nearest, never
+     reads value, never reads the beat. This is the benchmark every
+     degenerate policy has to lose to, so it must not be secretly good. */
+  /* litRange is the finding, not a knob. A lit chime is BY DEFINITION a
+     place an echo head struck moments ago — the reward is standing next to
+     the danger that made it. Chasing one across the room measured as a
+     straight loss every single time (more strikes taken, fewer rings, a
+     shorter ladder). Taking one that is already near you is the play. */
+  careless:  () => makeSeeker({ litRange: 0,   dodge: 0.0, sloppy: 0.5, crude: true }),
+  hoover:    () => makeSeeker({ litRange: 0,   dodge: 0.0, sloppy: 0.0, crude: true }),
+  competent: () => makeSeeker({ litRange: 300, dodge: 1.0, sloppy: 0.06 }),
+  expert:    () => makeSeeker({ litRange: 500, dodge: 1.0, sloppy: 0.0 }),
+};
+/* Two findings are baked into this shape, both measured:
+   1. COMMIT to a chime. Re-ranking every tick made the bots thrash between
+      targets, zigzag, and take twice the hits of the bot that never dodged
+      at all — the swerve was never the problem, the indecision was.
+   2. TREAT LIT AS A POOL, not as a term in a weighted sum. A blended
+      value/distance score kept picking cold chimes that happened to be
+      near, and collected no more lit chimes than a bot ignoring them
+      entirely. Choosing the nearest chime *from the lit ones* collected
+      57 against 42 and is what a player actually does. */
+function makeSeeker(opt) {
+  let target = null, held = 0;
+  return () => {
+    if (target && S.chimes.indexOf(target) === -1) target = null;
+    /* abandon a target the moment something lit appears in reach */
+    const litUp = opt.litRange && S.chimes.some(c =>
+      c.lit > 40 && Math.hypot(c.x - S.px, c.y - S.py) < opt.litRange);
+    if (!target || held <= 0 || (litUp && target.lit <= 0)) {
+      const pick = choose(opt);
+      if (pick && pick !== target) { target = pick; held = 20; } else held = 8;
+    }
+    held--;
+    if (!target) return { x: S.px, y: S.py + TOUCH_LIFT };
+    let tx = target.x, ty = target.y;
+    if (opt.sloppy) {
+      tx += (S.rng() - 0.5) * 190 * opt.sloppy;
+      ty += (S.rng() - 0.5) * 190 * opt.sloppy;
+    }
+    return { x: clamp(tx, L.fieldL, L.fieldR), y: clamp(ty, L.fieldT, L.fieldB) + TOUCH_LIFT };
+  };
+}
+function choose(opt) {
+  const toBeat = (BEAT_TICKS - (S.tick % BEAT_TICKS)) % BEAT_TICKS;
+  let pool = S.chimes;
+  if (opt.litRange) {
+    /* lit, in reach, and still lit by the time we could get there.
+       (Also requiring arrival before the next downbeat was tried — the
+       theory being that a lit chime sits beside the head that lit it — and
+       measured worse: it cut lit collection 12% and cut hits by none, so
+       the strikes are a tax on travel in general, not on arrival.) */
+    const lit = S.chimes.filter(c => {
+      const d = Math.hypot(c.x - S.px, c.y - S.py);
+      return d < opt.litRange && c.lit > d / MAX_STEP;
+    });
+    if (lit.length) pool = lit;
+  }
+  let best = null, bestV = -1e9, fallback = null, fbV = -1e9;
+  for (const c of pool) {
+    const d = Math.hypot(c.x - S.px, c.y - S.py);
+    const eta = d / MAX_STEP;
+    let v = (opt.crude || pool !== S.chimes ? 1 : c.tier) / (eta + 9);
+    if (v > fbV) { fbV = v; fallback = c; }
+    if (opt.dodge && crossesStrike(c, eta, toBeat, opt.dodge)) continue;
+    if (v > bestV) { bestV = v; best = c; }
+  }
+  return best || fallback;
+}
+/* Does the straight-line approach put us on a striking head at a downbeat? */
+function crossesStrike(c, eta, toBeat, dodge) {
+  for (let b = toBeat; b <= Math.min(eta, LOOP_TICKS); b += BEAT_TICKS) {
+    const f = eta > 0 ? Math.min(1, b / eta) : 1;
+    const mx = S.px + (c.x - S.px) * f, my = S.py + (c.y - S.py) * f;
+    for (const e of S.echoes) {
+      const p = echoAt(e, b);
+      if (Math.hypot(mx - p.x, my - p.y) < (ECHO_HIT + PLAYER_HIT) * (1.2 + 0.4 * dodge)) return true;
+    }
+  }
+  return false;
+}
+/* The bot dodges using the same forward path the player is shown, and no
+   more. A bot that can see further than the render would flatter the design
+   into a false pass. */
+function echoAt(e, ahead) {
+  const j = ((S.tick + ahead) % LOOP_TICKS);
+  return { x: e.buf[j * 2], y: e.buf[j * 2 + 1] };
+}
+/* Rank every chime by value-per-second-of-travel, discount the ones whose
+   approach crosses a strike, go straight at the winner. Modelling the skill
+   as "pick a different chime" rather than "swerve" matters: swerving cost
+   rings and prevented nothing (dodge 1.0 measured MORE hits than dodge 0.0),
+   because the avatar chases its target and a repelled target just wobbles.
+   A human does not swerve either — they give up on the covered one. */
+function runBot(name, seed, lagTicks) {
+  const wasHeadless = S.headless, wasStarted = S.started;
+  S.headless = true;
+  reset(seed);
+  S.started = true;
+  const drive = POLICIES[name](mulberry32(seed * 7919 + 13));
+  const q = [];
+  for (let t = 0; t < SESSION_TICKS && S.running; t++) {
+    const p = drive(t);
+    if (lagTicks) { q.push(p); S.pointer = q.length > lagTicks ? q.shift() : null; }
+    else if (p) S.pointer = p;
+    stepSim();
+  }
+  const out = { score: S.score, rings: S.rings, mistakes: S.mistakes, lit: S.litRings };
+  S.headless = wasHeadless; S.started = wasStarted;
+  return out;
+}
+function fleet(name, n, lag) {
+  const xs = [];
+  for (let i = 0; i < n; i++) xs.push(runBot(name, 1000 + i * 37, lag).score);
+  xs.sort((a, b) => a - b);
+  const q = f => xs[Math.min(xs.length - 1, Math.floor(f * xs.length))];
+  return { mean: Math.round(xs.reduce((a, b) => a + b, 0) / xs.length), p10: q(0.10), p50: q(0.50), p90: q(0.90), p99: q(0.99), max: xs[xs.length - 1] };
+}
+window.CHORUS = {
+  S, reset, runBot, fleet, render, stepSim, layout, POLICIES, makeSeeker,
+  /* Drive the game deterministically and paint one frame. Used to verify the
+     render path in an environment where rAF is throttled (a background tab),
+     and to grab a frame at an exact second of the run. */
+  dev(seconds, policy = 'competent', seed = 7) {
+    reset(seed); S.started = true;
+    const drive = POLICIES[policy](mulberry32(seed * 7919 + 13));
+    const n = Math.min(SESSION_TICKS, Math.round(seconds * TICK_HZ));
+    for (let t = 0; t < n && S.running; t++) {
+      const p = drive(t); if (p) S.pointer = p;
+      stepSim();
+      stepPresentation(DT);
+    }
+    if (S.over) S.resultT = 1.2;
+    render(1);
+    return { t: (S.tick / TICK_HZ).toFixed(1), score: S.score, mult: S.mult,
+             echoes: S.echoes.length, chimes: S.chimes.length, mistakes: S.mistakes,
+             clockLeft: +(S.clockTicks / TICK_HZ).toFixed(1), over: S.over };
+  },
+  report(n = 40) {
+    const names = ['idle', 'still', 'masher', 'scribbler', 'circler', 'careless', 'hoover', 'competent', 'expert'];
+    const rows = {};
+    for (const nm of names) rows[nm] = fleet(nm, n);
+    rows['laggy(180ms)'] = fleet('competent', n, 11);
+    const careless = rows.careless.mean, comp = rows.competent.mean;
+    const out = [];
+    for (const k in rows) {
+      const r = rows[k];
+      out.push({ bot: k, mean: r.mean, p10: r.p10, p50: r.p50, p90: r.p90, max: r.max,
+                 'vs careless': careless ? (r.mean / careless).toFixed(2) + '×' : '—',
+                 'vs competent': comp ? (r.mean / comp).toFixed(2) + '×' : '—' });
+    }
+    const spread = rows.competent.p90 / Math.max(1, rows.careless.p10);
+    console.table(out);
+    console.log('score spread p90(competent)/p10(careless) =', spread.toFixed(2), '(gate ≥3.0)');
+    reset(); S.started = false;
+    return out;
+  },
+};
+
+/* ================================================================= BOOT */
+layout();
+reset();
+S.started = false;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
