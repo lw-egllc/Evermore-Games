@@ -274,7 +274,7 @@ const K={
   R:3.2,                  // tube radius
   BALL_R:0.34,
   DS:0.6,                 // ring spacing along the centreline
-  RADIAL:26,              // ring subdivisions
+  RADIAL:34,              // ring subdivisions (also sets how smooth a cut rim reads)
   CHUNK_RINGS:32, CHUNKS:7,
   RCAP:640,               // ring ring-buffer
 
@@ -289,7 +289,8 @@ const K={
      camera rolls with the ball the whole world keeps turning under you —
      which reads as disorienting drift rather than as weight. Push soft,
      stop crisp. */
-  OM_STOP:38,
+  OM_STOP:38,             // full brake, thumb released or reversed
+  OM_MID:20,              // gentler brake for easing OFF a turn
 
   COIN_ARC:0.23,          // collection half-width, radians
   GRAZE_ARC:0.24,         // "shaved the edge" band, inside a gap
@@ -318,6 +319,10 @@ const K={
   CLOCK_DMG:1.5, CLOCK_CAP:14,
   HITSTOP:0.14,
 
+  /* OPEN SECTIONS — the roof comes off and you can see sky. OPEN_W is the
+     half-angle of ceiling removed; the ball is then bounded to the remaining
+     band, so there is no rolling round the top to take the short way. */
+  OPEN_W:1.45, RIM_MARGIN:0.22, OPEN_EVERY:15, RIM_DECEL:36,
   OBJ_RAD:3.2-0.44,       // where collectibles float (just off the wall)
   BALL_RAD:3.2-0.36,
   START_S:8,
@@ -436,19 +441,23 @@ const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,powerP
 renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
 renderer.outputEncoding=THREE.sRGBEncoding;
 const scene=new THREE.Scene();
-const FOG_COL=new THREE.Color('#D8F0FF');
+const FOG_COL=new THREE.Color('#FFC9A8');
 scene.background=FOG_COL.clone();
 /* fog starts late: the candy stays vivid all the way down the barrel and only
    the far mouth whitens out into a sky-hole */
 scene.fog=new THREE.Fog(FOG_COL.clone(),48,132);
-const camera=new THREE.PerspectiveCamera(70,0.46,0.1,300);
+/* far plane must clear the sky dome (radius 300) or the sky is silently
+   clipped away and you are looking at the canvas clear colour */
+const camera=new THREE.PerspectiveCamera(70,0.46,0.30,520);
 scene.add(camera);
 
 /* keep total incident light near 1.0: saturated candy colours clip to white
    above that and the whole tube goes pastel, which reads as a washed-out
    screen rather than a bright one */
-scene.add(new THREE.HemisphereLight(0xFFFFF4,0xA8B8E4,1.02));
-const keyLight=new THREE.DirectionalLight(0xFFFFFF,0.40); keyLight.position.set(0.4,1,0.6); scene.add(keyLight);
+/* dusk key from a low angle, violet bounce from below — enough to sit the
+   candy in the sunset without shifting its hue far enough to hurt reading */
+scene.add(new THREE.HemisphereLight(0xFFEBD2,0x9C8FD4,1.00));
+const keyLight=new THREE.DirectionalLight(0xFFCE96,0.46); keyLight.position.set(0.35,0.55,0.9); scene.add(keyLight);
 const ballLight=new THREE.PointLight(0xFFE8B0,1.5,13,2); scene.add(ballLight);
 
 /* ------- procedural studded-plastic surface: diffuse + normal map ------- */
@@ -557,6 +566,79 @@ function makeGlowTex(){
 }
 const GLOW=makeGlowTex();
 
+/* ------------------------------------------------------------------ SKY --- */
+/* Only ever seen through an open section, but it has to be a real sky or the
+   roof coming off reads as a hole in the world. */
+function makeCloudTex(){
+  const W=256,H=128,c=document.createElement('canvas'); c.width=W; c.height=H;
+  const g=c.getContext('2d');
+  const blob=(x,y,r)=>{ const gr=g.createRadialGradient(x,y-r*0.15,0,x,y,r);
+    gr.addColorStop(0,'rgba(255,255,255,0.98)'); gr.addColorStop(0.55,'rgba(255,255,255,0.80)');
+    gr.addColorStop(1,'rgba(255,255,255,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,r,0,TAU); g.fill(); };
+  blob(96,82,42); blob(142,66,52); blob(188,84,38); blob(62,90,30); blob(216,92,26);
+  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+}
+/* SUNSET. Six stops rather than a two-colour ramp — a sunset is gold into
+   coral into rose into violet, and a straight lerp between two of those reads
+   as a muddy wash. */
+const SKY_STOPS=[
+  [0.00,'#FFF0C4'],[0.13,'#FFC178'],[0.30,'#FF8D6E'],
+  [0.48,'#EA5F9B'],[0.68,'#8B4FB8'],[1.00,'#2A2570'],
+];
+const _sk1=new THREE.Color(), _sk2=new THREE.Color();
+function skyColAt(k,out){
+  for(let i=0;i<SKY_STOPS.length-1;i++){
+    const a=SKY_STOPS[i], b=SKY_STOPS[i+1];
+    if(k<=b[0]||i===SKY_STOPS.length-2){
+      const u=clamp((k-a[0])/Math.max(1e-6,b[0]-a[0]),0,1);
+      return out.copy(_sk1.set(a[1])).lerp(_sk2.set(b[1]),u);
+    }
+  }
+  return out.set(SKY_STOPS[SKY_STOPS.length-1][1]);
+}
+const skyGeo=new THREE.SphereGeometry(300,30,20);
+(function(){
+  const pa=skyGeo.attributes.position, n=pa.count, col=new Float32Array(n*3);
+  const c=new THREE.Color();
+  for(let i=0;i<n;i++){
+    skyColAt(clamp((pa.getY(i)/300+0.05)/0.78,0,1),c);
+    col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+  }
+  skyGeo.setAttribute('color',new THREE.BufferAttribute(col,3));
+})();
+const sky=new THREE.Mesh(skyGeo,new THREE.MeshBasicMaterial({
+  vertexColors:true,side:THREE.BackSide,fog:false,depthWrite:false}));
+sky.frustumCulled=false; sky.renderOrder=-10; scene.add(sky);
+(function(){
+  const CT=makeCloudTex();
+  /* clouds are lit by the sun, so they take the colour of the band they sit
+     in — white clouds against a sunset look pasted on */
+  const cc=new THREE.Color();
+  for(let i=0;i<28;i++){
+    const f=(x)=>((i*x)%1);
+    const el=0.05+0.82*f(0.29);
+    skyColAt(clamp(el*0.78+0.10,0,1),cc);
+    cc.lerp(_sk1.set('#FFFFFF'),0.42-0.26*el);
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:CT,color:cc.getHex(),transparent:true,
+      depthWrite:false,fog:false,opacity:0.55+0.40*f(0.37)}));
+    const a=(i/28)*TAU+f(0.61)*0.9, r=258;
+    const cy=Math.sin(el*PI*0.5), rr=r*Math.sqrt(Math.max(0,1-cy*cy));
+    sp.position.set(Math.cos(a)*rr, cy*r, Math.sin(a)*rr);
+    const sc=76+70*f(0.53); sp.scale.set(sc,sc*0.42,1);
+    sp.renderOrder=-9; sky.add(sp);
+  }
+  /* the sun sits LOW — that is what makes it a sunset rather than a daytime
+     sky with warm colours. Core plus a wide halo. */
+  const sunY=Math.sin(0.20)*300, sunR=Math.cos(0.20)*300;
+  const halo=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW,color:0xFF9E5C,transparent:true,
+    blending:THREE.AdditiveBlending,depthWrite:false,fog:false,opacity:0.50}));
+  halo.scale.set(340,240,1); halo.position.set(0,sunY,-sunR); halo.renderOrder=-9; sky.add(halo);
+  const sun=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW,color:0xFFF0C0,transparent:true,
+    blending:THREE.AdditiveBlending,depthWrite:false,fog:false,opacity:0.95}));
+  sun.scale.set(105,105,1); sun.position.set(0,sunY,-sunR); sun.renderOrder=-8; sky.add(sun);
+})();
+
 /* ============================================================= TRACK ==== */
 /* The centreline is a rotation-minimising frame walk. Curvature comes from a
    seeded sum of sines so the whole track is a pure function of (seed, s). */
@@ -567,8 +649,12 @@ function trackReset(seed){
   const r=mulberry32(seed^0x9E3779B9);
   TR.cx.length=0; TR.cy.length=0;
   for(let i=0;i<3;i++){
-    TR.cx.push({a:0.010+0.013*r(), f:0.010+0.030*r(), p:r()*TAU});
-    TR.cy.push({a:0.008+0.011*r(), f:0.010+0.030*r(), p:r()*TAU});
+    /* LOW frequencies. At 0.010-0.040 cycles/unit these ran at 0.2-0.9 Hz
+       once the ball was up to speed — three of them summed on each axis — and
+       the result was a tube that visibly wobbled. That is a motion-sickness
+       generator, not scenery. One long sweeping bend every 6-20 s instead. */
+    TR.cx.push({a:0.0045+0.0060*r(), f:0.0022+0.0050*r(), p:r()*TAU});
+    TR.cy.push({a:0.0035+0.0050*r(), f:0.0022+0.0050*r(), p:r()*TAU});
   }
   TR.top=-1;
   // ring 0
@@ -602,19 +688,54 @@ function ensureRings(upTo){ while(TR.top<upTo) genRing(++TR.top); }
 /* frame at arclength s (linear blend between rings — curvature is gentle) */
 const FR={pos:new THREE.Vector3(),T:new THREE.Vector3(),N:new THREE.Vector3(),B:new THREE.Vector3()};
 const _p2=new THREE.Vector3(),_t2=new THREE.Vector3(),_n2=new THREE.Vector3(),_b2=new THREE.Vector3();
+const _q0=new THREE.Vector3(),_q1=new THREE.Vector3(),_q2=new THREE.Vector3(),_q3=new THREE.Vector3();
+/* Catmull-Rom on the ring positions. Linear interpolation makes the derived
+   camera path a POLYLINE with a corner at every ring — 37 corners a second at
+   speed — which the eye reads as a persistent high-frequency judder. */
+function crAxis(a,b,c,d,u){
+  const u2=u*u, u3=u2*u;
+  return 0.5*((2*b)+(-a+c)*u+(2*a-5*b+4*c-d)*u2+(-a+3*b-3*c+d)*u3);
+}
 function frameAt(s,out){
   out=out||FR;
   if(s<0) s=0;
   const fi=s/K.DS, i=Math.floor(fi), u=fi-i;
-  ensureRings(i+1);
-  get3(TR.pos,i,out.pos); get3(TR.T,i,out.T); get3(TR.N,i,out.N); get3(TR.B,i,out.B);
+  ensureRings(i+2);
+  get3(TR.T,i,out.T); get3(TR.N,i,out.N); get3(TR.B,i,out.B);
+  get3(TR.pos,Math.max(0,i-1),_q0); get3(TR.pos,i,_q1);
+  get3(TR.pos,i+1,_q2); get3(TR.pos,i+2,_q3);
+  out.pos.set(crAxis(_q0.x,_q1.x,_q2.x,_q3.x,u),
+              crAxis(_q0.y,_q1.y,_q2.y,_q3.y,u),
+              crAxis(_q0.z,_q1.z,_q2.z,_q3.z,u));
   if(u>1e-5){
-    get3(TR.pos,i+1,_p2); get3(TR.T,i+1,_t2); get3(TR.N,i+1,_n2); get3(TR.B,i+1,_b2);
-    out.pos.lerp(_p2,u); out.T.lerp(_t2,u).normalize();
+    get3(TR.T,i+1,_t2); get3(TR.N,i+1,_n2); get3(TR.B,i+1,_b2);
+    out.T.lerp(_t2,u).normalize();
     out.N.lerp(_n2,u).normalize(); out.B.lerp(_b2,u).normalize();
   }
   return out;
 }
+
+/* ---------------------------------------------------- OPEN SKY SECTIONS --- */
+/* A scheduled stretch where the ceiling is cut away. `openAt` returns the
+   half-angle of roof removed at an arclength, smoothstepped in and out so the
+   opening reads as a widening slot rather than a jump cut. */
+/* a LONG ramp: `rollF` changes across it, so the camera roll sweeps on its own
+   while the roof opens. Over 16 units that is a lurch; over 28 it is a reveal. */
+const OPENS=[], OPEN_RAMP=28;
+function openAt(s){
+  for(let i=0;i<OPENS.length;i++){
+    const o=OPENS[i];
+    if(s<o.s0-OPEN_RAMP||s>o.s1+OPEN_RAMP) continue;
+    let k=1;
+    if(s<o.s0) k=(s-(o.s0-OPEN_RAMP))/OPEN_RAMP;
+    else if(s>o.s1) k=1-(s-o.s1)/OPEN_RAMP;
+    k=clamp(k,0,1);
+    return o.w*k*k*(3-2*k);
+  }
+  return 0;
+}
+/* how far from the floor the wall still reaches (PI = fully closed tube) */
+function bandAt(s){ return PI-openAt(s); }
 /* world point at (s, theta, radius) */
 function pointAt(s,th,rad,v,fr){
   fr=fr||frameAt(s);
@@ -647,7 +768,8 @@ function buildTubeIndex(){
   tubeIdx=new THREE.BufferAttribute(idx,1);
 }
 buildTubeIndex();
-const _col=new THREE.Color(), _col2=new THREE.Color();
+const _col=new THREE.Color(), _col2=new THREE.Color(), _colR=new THREE.Color();
+const RIM_COL=new THREE.Color('#FFF6E4');
 function bandColorInto(ring,out){
   const pal=PALETTES[RUN.pal%PALETTES.length];
   const bi=Math.floor(ring/BAND);
@@ -664,11 +786,13 @@ function makeChunk(){
   geo.setAttribute('normal',new THREE.BufferAttribute(new Float32Array(n*3),3));
   geo.setAttribute('uv',new THREE.BufferAttribute(new Float32Array(n*2),2));
   geo.setAttribute('color',new THREE.BufferAttribute(new Float32Array(n*3),3));
-  geo.setIndex(tubeIdx);
+  /* each chunk owns its index buffer: an open section removes quads, so the
+     index list differs per chunk and cannot be shared */
+  geo.setIndex(new THREE.BufferAttribute(new Uint16Array(C*R*6),1));
   const m=new THREE.Mesh(geo,tubeMat);
   m.frustumCulled=false; m.matrixAutoUpdate=false;
   scene.add(m);
-  return {mesh:m,geo,start:-1};
+  return {mesh:m,geo,start:-1,keep:new Uint8Array(n)};
 }
 function fillChunk(ch,start){
   ch.start=start;
@@ -676,21 +800,44 @@ function fillChunk(ch,start){
   const P=ch.geo.attributes.position.array, NA=ch.geo.attributes.normal.array;
   const UV=ch.geo.attributes.uv.array, CO=ch.geo.attributes.color.array;
   ensureRings(start+C+1);
+  const KEEP=ch.keep, LIP=0.30;
   let k=0, k2=0;
   for(let r=0;r<=C;r++){
     const ri=start+r, s=ri*K.DS;
     get3(TR.pos,ri,_a); get3(TR.N,ri,_c); get3(TR.B,ri,_d);
     bandColorInto(ri,_col);
+    const cut=openAt(s);
     for(let j=0;j<=R;j++){
       const th=j/R*TAU, ct=Math.cos(th), st=Math.sin(th);
       const nx=_c.x*ct+_d.x*st, ny=_c.y*ct+_d.y*st, nz=_c.z*ct+_d.z*st;
-      P[k]=_a.x+nx*K.R; P[k+1]=_a.y+ny*K.R; P[k+2]=_a.z+nz*K.R;
+      /* distance from the ceiling: everything inside `cut` is sky */
+      const dCeil=Math.abs(angWrap(th-PI));
+      KEEP[r*(R+1)+j]=dCeil>=cut?1:0;
+      let rad=K.R, lip=0;
+      if(cut>0.02){
+        const over=dCeil-cut;
+        /* flare the last columns outward so the cut edge reads as a thick
+           rim rather than as zero-thickness broken geometry */
+        if(over>=0&&over<LIP){ lip=1-over/LIP; rad=K.R+0.34*lip*lip; }
+      }
+      P[k]=_a.x+nx*rad; P[k+1]=_a.y+ny*rad; P[k+2]=_a.z+nz*rad;
       NA[k]=nx; NA[k+1]=ny; NA[k+2]=nz;
-      CO[k]=_col.r; CO[k+1]=_col.g; CO[k+2]=_col.b;
+      if(lip>0.02){ _colR.copy(_col).lerp(RIM_COL,0.62*lip);
+        CO[k]=_colR.r; CO[k+1]=_colR.g; CO[k+2]=_colR.b; }
+      else { CO[k]=_col.r; CO[k+1]=_col.g; CO[k+2]=_col.b; }
       UV[k2]=j/R*UREP; UV[k2+1]=s*VREP;
       k+=3; k2+=2;
     }
   }
+  const IDX=ch.geo.index.array; let n=0;
+  for(let r=0;r<C;r++) for(let j=0;j<R;j++){
+    const a=r*(R+1)+j, b=a+1, c2=a+(R+1), d2=c2+1;
+    if(!(KEEP[a]&&KEEP[b]&&KEEP[c2]&&KEEP[d2])) continue;
+    IDX[n++]=a; IDX[n++]=c2; IDX[n++]=b;
+    IDX[n++]=b; IDX[n++]=c2; IDX[n++]=d2;
+  }
+  ch.geo.index.needsUpdate=true;
+  ch.geo.setDrawRange(0,n);
   ch.geo.attributes.position.needsUpdate=true;
   ch.geo.attributes.normal.needsUpdate=true;
   ch.geo.attributes.uv.needsUpdate=true;
@@ -812,15 +959,24 @@ function reach(from,want,dt){
 function away(from,rng,lo,hi){ return from+(rng()<0.5?-1:1)*lerp(lo,hi,rng()); }
 
 let genCtx=null;
+/* how far from the floor a placement may sit, at this arclength */
+function genLimit(s){ const c=openAt(s); return c>0.001? PI-c-K.RIM_MARGIN-0.14 : PI; }
 function emit(kind,t,th,extra){
   const o=extra||{};
-  o.kind=kind; o.s=genCtx.s0+t*genCtx.v; o.th=angWrap(th); o.dead=false; o.mesh=null;
+  const s=genCtx.s0+t*genCtx.v;
+  th=angWrap(th);
+  /* nothing is ever placed in the sky. Folding it onto the rim instead would
+     stack pickups on top of each other wherever a pattern wraps. */
+  const lim=genLimit(s);
+  if(lim<PI-0.001&&Math.abs(th)>lim) return null;
+  o.kind=kind; o.s=s; o.th=th; o.dead=false; o.mesh=null;
   o.spin=RNG()*TAU;
   OBJ.push(o);
   return o;
 }
 function emitCoin(t,th,grp){
   const o=emit('coin',t,th,{grp:grp});
+  if(!o) return null;
   if(grp!==undefined&&groups[grp]){
     const G=groups[grp]; G.n++;
     /* record the UNWRAPPED angular span of the ribbon — the sweep bonus pays
@@ -829,7 +985,28 @@ function emitCoin(t,th,grp){
   }
   return o;
 }
-function emitGate(t,gaps){ return emit('gate',t,0,{gaps:gaps,passed:false}); }
+function emitGate(t,gaps){
+  const s=genCtx.s0+t*genCtx.v, cut=openAt(s);
+  if(cut>0.001){
+    /* Two different limits here, and conflating them leaves a strip of barrier
+       standing in the rim margin that the player cannot see a way past:
+         wall  — how far the GEOMETRY reaches, so how far a door may extend
+         reach — how far the BALL may go, so where a door centre must sit    */
+    const wall=PI-cut, reach=wall-K.RIM_MARGIN;
+    const kept=[];
+    for(let i=0;i<gaps.length;i++){
+      const c=angWrap(gaps[i][0]);
+      if(Math.abs(c)>reach) continue;
+      const h=Math.min(gaps[i][1],wall-Math.abs(c));
+      if(h>0.18) kept.push([c,h]);
+    }
+    if(!kept.length) kept.push([0,Math.min(gaps[0][1],reach*0.6)]);
+    gaps=kept;
+  }
+  const o={kind:'gate',s:s,th:0,dead:false,mesh:null,spin:0,gaps:gaps,passed:false};
+  OBJ.push(o);
+  return o;
+}
 
 /* --- the chunk library (12 patterns) ------------------------------------ */
 const CHUNKS_LIB=[
@@ -964,6 +1141,39 @@ const CHUNKS_LIB=[
   for(let t=2.05;t<2.50;t+=g.cs(0.17)) emitCoin(t,hot,g2);
   g.th=hot;
 }},
+{name:'skyRun', dur:g=>4.15, greed:1, open:1.45, land:true, fn:(g)=>{
+  /* The roof comes off. There is no 360 wrap here, so a door on the far rim is
+     a genuine full traverse rather than a short way round.
+     Two things this pattern got wrong first time round:
+       - doors were CENTRED near the rim, and the band clip then squeezed them
+         to about a tenth of a radian, so even a good line ate them. Doors are
+         now flush AGAINST the rim, which keeps them full width;
+       - coins ran the diagonal straight through the middle of the channel,
+         which is exactly where a ball that never moves is sitting. They hug
+         the rims now, so the traverse is the whole point and standing still
+         pays nothing. */
+  const W=PI-K.OPEN_W;                       // where the wall actually ends
+  const L=W-K.RIM_MARGIN;                    // where the ball can actually go
+  /* the door runs right off the edge of the wall, so hugging the rim through it
+     is safe — a door that stops short leaves a lip you cannot see coming */
+  const h=Math.min(gapHalf(g.D)*0.95,L*0.62);
+  const c0=W-h;
+  let side=(g.th>=0?1:-1);
+  for(let i=0;i<3;i++){
+    const t=0.85+i*1.16, c=side*c0;
+    emitGate(t,[[c,h]]);
+    const grp=newGroup(), nc=Math.max(3,g.n(4));
+    for(let k=0;k<nc;k++){
+      const u=nc>1?k/(nc-1):0.5;
+      emitCoin(t-0.62+1.02*u, c*(0.62+0.38*Math.sin(u*PI)), grp);
+    }
+    side=-side;
+  }
+  /* the gem rides the far rim of the last traverse — a reason to commit all
+     the way into the corner rather than settling for the door */
+  emit('gem',3.85,-side*c0*0.88,{});
+  g.th=-side*c0;
+}},
 {name:'bait', dur:g=>2.9, greed:2, w:3, fn:(g)=>{
   /* A fat ribbon running dead straight into a WALL, with the only door well
      off to one side. There is not enough time to take the last coins and still
@@ -1000,7 +1210,8 @@ function nextChunk(rng,needGreed){
   return bag.pop();
 }
 
-let lastBreather=0, lastVault=0, lastPick=-1, driftDir=1, driftLeft=0;
+let lastBreather=0, lastVault=0, lastPick=-1, driftDir=1, driftLeft=0, lastOpen=0;
+const SKY_IDX=CHUNKS_LIB.findIndex(c=>c.name==='skyRun');
 function generate(){
   const ahead=RUN.state==='play'? 150 : 120;
   let guard=0;
@@ -1014,6 +1225,11 @@ function generate(){
     if(tAt<K.ONRAMP){
       pick=CHUNKS_LIB.findIndex(c=>c.name===(genS<ball.s+40?'breather':'zig'));
       lastBreather=tAt;
+    }
+    /* the roof comes off every OPEN_EVERY seconds — a visual and tactical
+       change-up, and the only place the 360 wrap is taken away */
+    else if(tAt>9 && tAt-lastOpen>K.OPEN_EVERY && tAt<K.RUN_TIME-4 && SKY_IDX>=0){
+      pick=SKY_IDX; lastOpen=tAt;
     }
     /* guaranteed landmarks (§6): a breather every ~16 s, a vault every ~20 s */
     else if(tAt-lastBreather>16){ pick=CHUNKS_LIB.findIndex(c=>c.name==='breather'); lastBreather=tAt; }
@@ -1033,6 +1249,41 @@ function generate(){
              cs:(base)=>base/dense, n:(base)=>Math.round(base*dense)};
     g.dur=C.dur(g);
     genCtx={s0:genS,v:v};
+    /* register the opening BEFORE emitting, so every placement in this chunk
+       already sees the band it has to live inside */
+    if(C.open){
+      OPENS.push({s0:genS-10,s1:genS+g.dur*v+10,w:C.open});
+      while(OPENS.length&&OPENS[0].s1+OPEN_RAMP+40<ball.s) OPENS.shift();
+      if(OPENS.length>5) OPENS.shift();
+      /* fold the line into the band it now has to live in — but leave it where
+         it is if it already fits, rather than funnelling every run to the floor */
+      const w0=PI-C.open-K.RIM_MARGIN-0.20;
+      genTh=clamp(angWrap(genTh),-w0,w0);
+      g.th=genTh;
+      /* the ramp-in reaches back over ground the PREVIOUS chunk already
+         populated, so re-check its objects against the band they now sit in —
+         otherwise a handful of coins are left floating in the open sky */
+      for(let i=OBJ.length-1;i>=0&&OBJ[i].s>genS-110;i--){
+        const o=OBJ[i], cut=openAt(o.s);
+        if(cut<=0.001) continue;
+        const wall=PI-cut, reach=wall-K.RIM_MARGIN;
+        if(o.kind==='gate'){
+          const kept=[];
+          for(let j=0;j<o.gaps.length;j++){
+            const c=angWrap(o.gaps[j][0]);
+            if(Math.abs(c)>reach) continue;
+            const h=Math.min(o.gaps[j][1],wall-Math.abs(c));
+            if(h>0.18) kept.push([c,h]);
+          }
+          if(!kept.length) kept.push([0,Math.min(o.gaps[0][1],reach*0.6)]);
+          o.gaps=kept;
+        } else if(Math.abs(o.th)>reach-0.14){
+          o.dead=true;
+          /* and shrink its ribbon, so the sweep bonus stays winnable */
+          if(o.grp!==undefined&&groups[o.grp]&&groups[o.grp].n>0) groups[o.grp].n--;
+        }
+      }
+    }
     C.fn(g);
     /* the line has to MOVE between chunks. Without this, consecutive chunks
        can sit on the same angle and a do-nothing run quietly collects a
@@ -1162,7 +1413,8 @@ function hudSync(){
 }
 
 /* ============================================================ CAMERA ==== */
-let camTh=0, camRoll=0, fovBase=70;
+let camTh=0, camRoll=0, fovBase=70, camFov=70, camInit=false;
+const _cpS=new THREE.Vector3(), _clS=new THREE.Vector3();
 const _cp=new THREE.Vector3(), _cl=new THREE.Vector3(), _cu=new THREE.Vector3();
 const _camFr={pos:new THREE.Vector3(),T:new THREE.Vector3(),N:new THREE.Vector3(),B:new THREE.Vector3()};
 /* CAM_RAD keeps the camera near the axis so the rings read as concentric
@@ -1173,9 +1425,15 @@ function camUpdate(dt){
   /* the camera rolls with the ball so the ball stays at the bottom of frame
      and the TUBE appears to spin — with a damped, clamped lag so a fast flick
      still reads as the ball moving, not just the world. */
-  camTh=dmp(camTh,camTh+angWrap(ball.th-camTh),17,dt);
-  const lag=angWrap(ball.th-camTh);
-  if(Math.abs(lag)>0.26) camTh=ball.th-Math.sign(lag)*0.26;
+  /* In an open section the camera keeps its head up. Rolling fully with the
+     ball would swing the sky through 80 degrees, which is the single most
+     nauseating thing a first-person tube can do. */
+  const openNow=openAt(ball.s);
+  const rollF=1-0.50*clamp(openNow/K.OPEN_W,0,1);
+  const camTarget=angWrap(ball.th)*rollF;
+  camTh=dmp(camTh,camTh+angWrap(camTarget-camTh),17,dt);
+  const lag=angWrap(camTarget-camTh);
+  if(Math.abs(lag)>0.26) camTh=camTarget-Math.sign(lag)*0.26;
 
   const sc=Math.max(0.01,ball.s-CAM_BACK);
   const fr=frameAt(sc,FR);
@@ -1185,9 +1443,17 @@ function camUpdate(dt){
   const fr2=frameAt(ball.s+CAM_LOOK,_camFr);
   _cl.copy(fr2.pos).addScaledVector(fr2.N,Math.cos(camTh)*K.R*CAM_AIM).addScaledVector(fr2.B,Math.sin(camTh)*K.R*CAM_AIM);
 
-  camera.position.copy(_cp);
+  /* low-pass the camera path and its aim point. Even on a smooth curve the
+     derived position carries small high-frequency wobble; the lag this adds is
+     along the direction of travel, where it is invisible. */
+  if(!camInit){ _cpS.copy(_cp); _clS.copy(_cl); camInit=true; }
+  const kk=1-Math.exp(-24*dt);
+  _cpS.lerp(_cp,kk); _clS.lerp(_cl,kk);
+
+  camera.position.copy(_cpS);
   camera.up.copy(_cu);
-  camera.lookAt(_cl);
+  camera.lookAt(_clS);
+  sky.position.copy(_cpS);
 
   // trauma shake — presentation only, translation + rotation (§7.2)
   const sh=trauma*trauma*trauma;
@@ -1195,12 +1461,14 @@ function camUpdate(dt){
     const t=RUN.t*25;
     camShake.x=Math.sin(t*1.7)*Math.sin(t*0.9)*sh*0.16;
     camShake.y=Math.sin(t*2.3+1.7)*Math.sin(t*1.1)*sh*0.16;
-    camShake.r=Math.sin(t*1.9+0.4)*sh*0.05;
+    camShake.r=Math.sin(t*1.9+0.4)*sh*0.026;   // rotation is the nauseating axis
     camera.translateX(camShake.x); camera.translateY(camShake.y);
     camera.rotateZ(camShake.r);
   }
   const speedFov=clamp((ball.v-K.V0)/(K.V0*1.6),0,1);
-  camera.fov=fovBase+speedFov*7+(RUN.surge>0?4:0);
+  const wantFov=fovBase+speedFov*4+(RUN.surge>0?3:0)+openNow*2.0;
+  camFov=dmp(camFov,wantFov,3.5,dt);        // never snap the field of view
+  camera.fov=camFov;
   camera.updateProjectionMatrix();
 }
 
@@ -1262,6 +1530,17 @@ function startSurge(){
   $('surgeTint').style.opacity=0.85;
 }
 const _ov=new THREE.Vector3();
+let rimT=0;
+/* leaning on the rim is a limit, not a mistake: it costs nothing, but it has to
+   be felt or the ball just stops for no visible reason */
+function rimScrape(){
+  if(RUN.elapsed-rimT<0.16) return;
+  rimT=RUN.elapsed;
+  pointAt(ball.s,ball.th,K.BALL_RAD,_ov);
+  burst(_ov,3,'#FFF6E4',2.2);
+  addTrauma(0.12);
+  tone(2100,0.045,0.05,'sawtooth',0,1500);
+}
 function bonk(o,thAt){
   RUN.hits++; RUN.chain=0; RUN.cleanGates=0; RUN.grazeRun=0; RUN.cSince=0;
   /* a hit breaks the ribbon you were halfway through — otherwise a run that
@@ -1306,7 +1585,7 @@ function collectCoin(o,thAt){
       const rv=K.RIBBON_PER*G.n*(0.35+0.65*spread)*RUN.mult*valueMul();
       scoreAdd(rv,_ov,'RIBBON +'+Math.round(rv),'#7CF2A8','ribbon');
       bumpMult(K.MULT_RIBBON,K.MULT_CAP_RIB); addCharge(K.CHG_RIBBON);
-      burst(_ov,20,'#7CF2A8',5); addTrauma(0.50); sfxRibbon();
+      burst(_ov,20,'#7CF2A8',5); if(G.n>=8) addTrauma(0.34); sfxRibbon();
       callout('RIBBON','+'+Math.round(rv),'#7CF2A8');
     }
   }
@@ -1367,7 +1646,7 @@ function resolveObjects(s0,s1,th0,th1){
           pointAt(o.s,th,K.BALL_RAD,_ov);
           scoreAdd(v,_ov,(cm>1?'SHAVE ×'+cm+'  ':'')+'+'+Math.round(v),'#45E0E8','graze');
           burst(_ov,8+4*cm,'#8CF7FF',4.4); bumpMult(K.MULT_GRAZE); addCharge(K.CHG_GRAZE*cm);
-          sfxGraze(); addTrauma(0.45+0.05*cm);
+          sfxGraze(); if(cm>=3) addTrauma(0.34);   // routine events add zero
           if(RUN.grazeRun===2||RUN.grazeRun===4||RUN.grazeRun===7)
             callout('SHAVE ×'+cm,'EDGE CHAIN','#45E0E8');
         } else RUN.grazeRun=0;
@@ -1390,15 +1669,46 @@ function simStep(dt){
      the thumb right must DECREASE theta. Get this backwards and the ball goes
      the opposite way to the thumb, which is instantly wrong to anyone. */
   const omDes=-stickU*K.OMEGA_MAX;
+  const cutIn=openAt(ball.s);
+  /* Full brake belongs to letting go or reversing. Applying it to every small
+     reduction makes easing off a turn feel notchy — soft in, hard out, on every
+     correction. Scale it by how near neutral the thumb actually is. */
   const braking=Math.abs(omDes)<Math.abs(ball.om)||omDes*ball.om<0;
-  ball.om=dmp(ball.om,omDes,braking?K.OM_STOP:K.OM_K,dt);
+  const brakeK=lerp(K.OM_STOP,K.OM_MID,Math.min(1,Math.abs(stickU)/0.35));
+  ball.om=dmp(ball.om,omDes,braking?brakeK:K.OM_K,dt);
+  /* RIM APPROACH: cap the rate at "as fast as you could still stop from".
+     sqrt(2*a*d) gives full speed until the corner is genuinely close and then a
+     smooth arc down to zero, so a channel run reads as carving into the corner
+     and back out. Scaling the COMMAND instead does not work — omega lags the
+     command, runs out of runway and still arrives with 3 rad/s to shed, which
+     is the slam this is here to remove. */
+  if(cutIn>0.001){
+    const rim=PI-cutIn-K.RIM_MARGIN;
+    /* stop a hair short of the wall, so the curve reaches zero on its own and
+       the hard clamp below never has to fire */
+    if(ball.om>0){ const cap=Math.sqrt(2*K.RIM_DECEL*Math.max(0,rim-ball.th-0.02));
+      if(ball.om>cap) ball.om=cap; }
+    else if(ball.om<0){ const cap=Math.sqrt(2*K.RIM_DECEL*Math.max(0,rim+ball.th-0.02));
+      if(ball.om<-cap) ball.om=-cap; }
+  }
   const th0=ball.th;
   ball.th=angWrap(ball.th+ball.om*dt);
+  /* an open section has rims. You cannot roll over the top and come round the
+     other side, so a door on the far rim costs a full traverse. */
+  const cutNow=openAt(ball.s);
+  if(cutNow>0.001){
+    const rim=PI-cutNow-K.RIM_MARGIN;
+    if(ball.th>rim){ ball.th=rim; if(ball.om>0){ ball.om=0; rimScrape(); } }
+    else if(ball.th<-rim){ ball.th=-rim; if(ball.om<0){ ball.om=0; rimScrape(); } }
+  }
 
   // ---- escalation & speed ----
   RUN.dEff=dEffAt(RUN.elapsed);
   RUN.heat=clamp(RUN.heat+dt*0.24,0,1);
-  ball.v=speedAt(RUN.dEff,RUN.heat,RUN.surge);
+  /* ease into the target speed. SURGE is a 16% step and a bonk drops `heat`
+     instantly — applied raw, both are a lurch you feel in the stomach rather
+     than a change of pace. */
+  ball.v=dmp(ball.v,speedAt(RUN.dEff,RUN.heat,RUN.surge),5,dt);
   const s0=ball.s;
   ball.s+=ball.v*dt;
 
@@ -1447,7 +1757,7 @@ function syncVisuals(dt){
     } else if(o.kind==='gate'){
       if(!o.mesh){
         o.mesh=[];
-        for(const arc of blockedArcs(o.gaps)){
+        for(const arc of blockedArcs(o.gaps,bandAt(o.s))){
           const q=clamp(Math.round(arc[1]/BAR_STEP),1,62);
           const m=barAcquire(q);
           o.arcQ=o.arcQ||[]; o.mesh.push(m); m.userData.c=arc[0]+arc[1]*0.5;
@@ -1495,14 +1805,26 @@ function syncVisuals(dt){
   barMat.emissiveIntensity=0.7+0.45*Math.sin(RUN.t*6.2);
   coinMat.emissiveIntensity=0.5+0.3*Math.sin(RUN.t*4.0);
 }
-function blockedArcs(gaps){
+function blockedArcs(gaps,wall){
   const gs=gaps.map(g=>[angWrap(g[0]),g[1]]).sort((a,b)=>a[0]-b[0]);
   const out=[];
-  for(let i=0;i<gs.length;i++){
-    const a=gs[i], b=gs[(i+1)%gs.length];
-    let start=a[0]+a[1], end=b[0]-b[1];
-    let span=end-start; while(span<0) span+=TAU; while(span>TAU) span-=TAU;
-    if(span>0.06) out.push([start,span]);
+  if(wall===undefined||wall>=PI-0.001){
+    for(let i=0;i<gs.length;i++){
+      const a=gs[i], b=gs[(i+1)%gs.length];
+      let start=a[0]+a[1], end=b[0]-b[1];
+      let span=end-start; while(span<0) span+=TAU; while(span>TAU) span-=TAU;
+      if(span>0.06) out.push([start,span]);
+    }
+  } else {
+    /* open section: the barrier only spans the wall that is actually there,
+       so no plate is left hanging in the sky */
+    let cursor=-wall;
+    for(let i=0;i<gs.length;i++){
+      const a=gs[i][0]-gs[i][1], b=gs[i][0]+gs[i][1];
+      if(a>cursor+0.06) out.push([cursor,a-cursor]);
+      if(b>cursor) cursor=b;
+    }
+    if(wall>cursor+0.06) out.push([cursor,wall-cursor]);
   }
   return out;
 }
@@ -1539,7 +1861,8 @@ function resetRun(seed){
   /* start a little way in so the camera (which sits CAM_BACK behind) is
      already inside the tube on frame one */
   ball.s=K.START_S; ball.th=0; ball.om=0; ball.v=K.V0; ball.q.identity();
-  camTh=0; stickU=0; stickHeld=false; steerOverride=null; ptrId=null;
+  camTh=0; camInit=false; camFov=fovBase; stickU=0; stickHeld=false; steerOverride=null; ptrId=null;
+  OPENS.length=0; lastOpen=0; rimT=0;
   ensureRings(320);
   genS=ball.s+13; generate();
   tubeReset();
@@ -1719,7 +2042,8 @@ RUN.state='title';
 /* Nearly every real bug in games like this is invisible to hands-on play and
    obvious to a bot. Drive the same input pipeline the thumb drives. */
 window.__CB={
-  RUN,K,ball,OBJ,groups,camera,scene,THREE,STAGE,TR,
+  RUN,K,ball,OBJ,groups,camera,scene,THREE,STAGE,TR,OPENS,
+  openAt:(s)=>openAt(s), bandAt:(s)=>bandAt(s),
   start:(seed)=>{
     auInit(); resetRun(seed===undefined?1:(seed>>>0));
     showScreen(''); setHud(true); RUN.state='play'; everTouched=true;
