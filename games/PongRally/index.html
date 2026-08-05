@@ -132,13 +132,50 @@ canvas#c{position:absolute;inset:0;width:100%;height:100%;display:block;}
   overflow:hidden;box-shadow:inset 0 .06rem .12rem rgba(0,0,0,.5);}
 #powBar{height:100%;width:0%;border-radius:.3rem;background:#9FB0D4;transition:width .05s linear;}
 
-/* ---------- hint ---------- */
-#hint{position:absolute;left:50%;bottom:calc(8.4rem + env(safe-area-inset-bottom));transform:translateX(-50%);
-  text-align:center;width:88%;
-  font-size:.74rem;letter-spacing:.06em;color:rgba(255,246,228,.8);text-shadow:0 .12rem .3rem rgba(0,0,0,.85);
-  opacity:0;transition:opacity .4s;line-height:1.45;}
-#hint.on{opacity:1;}
-#hint b{color:#FFC943;}
+/* ---------- tutorial ---------- */
+#tut{position:absolute;inset:0;pointer-events:none;opacity:0;visibility:hidden;transition:opacity .3s;}
+#tut.on{opacity:1;visibility:visible;}
+/* The copy sits on a solid plaque — cyan-on-crowd was unreadable, and an
+   outline alone did not carry it. Same chrome language as the HUD pills. */
+#tutMsg{position:absolute;left:50%;top:24%;transform:translateX(-50%);text-align:center;
+  width:auto;max-width:92%;padding:.6rem 1.2rem .68rem;border-radius:1rem;
+  background:linear-gradient(180deg,rgba(32,38,58,.96),rgba(11,15,27,.97));
+  box-shadow:0 .35rem 0 rgba(6,8,16,.6),inset 0 .09rem 0 rgba(255,255,255,.13),
+             0 0 0 .14rem rgba(8,11,20,.95);}
+#tutTitle{display:block;font-size:1.28rem;letter-spacing:.09em;color:#FFF6E4;line-height:1.15;
+  text-shadow:0 .12rem .3rem rgba(0,0,0,.85);}
+#tutSub{display:block;margin-top:.3rem;font-size:.84rem;letter-spacing:.1em;color:#8FE9F0;
+  text-shadow:0 .1rem .25rem rgba(0,0,0,.9);}
+/* looping finger-drag demo, hidden the moment a real finger lands.
+   The element's origin IS the fingertip, so the whole hand traces the path. */
+#tutHand{position:absolute;left:50%;bottom:23%;width:0;height:0;
+  animation:tutDrag 3.2s cubic-bezier(.4,0,.3,1) infinite;}
+#tutHand .hand{position:absolute;left:-1.72rem;top:-.18rem;width:4.3rem;height:6.7rem;
+  filter:drop-shadow(0 .3rem .5rem rgba(0,0,0,.5));}
+#tutHand .ring{position:absolute;left:-1.45rem;top:-1.45rem;width:2.9rem;height:2.9rem;
+  border-radius:50%;background:rgba(255,246,228,.16);
+  box-shadow:inset 0 0 0 .15rem rgba(255,246,228,.9),0 0 1.4rem rgba(150,220,255,.5);
+  animation:tutTap 3.2s cubic-bezier(.4,0,.3,1) infinite;}
+@keyframes tutDrag{
+  0%   {transform:translate(0,1.1rem);opacity:0}
+  10%  {transform:translate(0,0);     opacity:1}
+  22%  {transform:translate(0,0);     opacity:1}
+  55%  {transform:translate(-3.2rem,-5.0rem);opacity:1}
+  82%  {transform:translate(3.0rem,-6.4rem); opacity:1}
+  93%  {transform:translate(3.0rem,-7.4rem); opacity:0}
+  100% {transform:translate(0,1.1rem);opacity:0}}
+@keyframes tutTap{
+  0%,9%{transform:scale(.5);opacity:0}
+  14%  {transform:scale(1.25);opacity:1}
+  22%  {transform:scale(1);opacity:.95}
+  82%  {transform:scale(1);opacity:.95}
+  93%  {transform:scale(1.5);opacity:0}
+  100% {transform:scale(.5);opacity:0}}
+#tut.held #tutHand{display:none;}
+#tutSkip{position:absolute;right:1rem;top:calc(8.4rem + env(safe-area-inset-top));
+  pointer-events:auto;cursor:pointer;font-size:.66rem;letter-spacing:.16em;color:#8C9BBC;
+  padding:.4rem .8rem .48rem;border-radius:.6rem;background:rgba(20,25,42,.75);
+  box-shadow:inset 0 0 0 .08rem rgba(255,255,255,.10);}
 
 /* ---------- SCREENS ---------- */
 .screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -248,7 +285,22 @@ canvas#c{position:absolute;inset:0;width:100%;height:100%;display:block;}
       <div id="rallyTag"><b id="rallyN">0</b> SHOT RALLY</div>
       <div id="call"><div id="callMain">PERFECT</div><div id="callSub">+1200</div></div>
       <div id="odBar"><span class="bg"><b>OVERDRIVE</b></span></div>
-      <div id="hint" class="on"></div>
+      <div id="tut">
+        <div id="tutHand">
+          <span class="ring"></span>
+          <svg class="hand" viewBox="0 0 64 100" aria-hidden="true">
+            <g fill="#FFF1DE" stroke="#12162A" stroke-width="4.5" stroke-linejoin="round">
+              <rect x="18" y="5" width="17" height="52" rx="8.5"/>
+              <path d="M14 48h30a15 15 0 0 1 15 15v18a15 15 0 0 1-15 15H26A15 15 0 0 1 11 81V60a12 12 0 0 1 3-12z"/>
+              <path d="M11 62c-5 2-8 7-6 12l4 9"/>
+            </g>
+            <rect x="23" y="12" width="6" height="30" rx="3" fill="#fff" opacity=".55"/>
+          </svg>
+        </div>
+        <div id="tutMsg"><b id="tutTitle">PLACE YOUR FINGER</b>
+          <span id="tutSub">and drag to aim</span></div>
+        <div id="tutSkip">SKIP</div>
+      </div>
       <div id="powWrap"><div id="powLabel">SOLID</div><div id="powTrack"><div id="powBar"></div></div></div>
     </div>
 
@@ -376,7 +428,6 @@ const K = {
 
   PADDLE_Z      : 1.62,
   PADDLE_R      : 0.126,     // gameplay radius (matches the visible blade)
-  PADDLE_GRACE  : 0.022,
   BOX_X         : 0.60,      // reachable half-width at the paddle plane (set by resize)
   BOX_Y0        : -0.02,     // reachable low
   BOX_Y1        : 0.88,      // reachable high
@@ -405,13 +456,9 @@ const K = {
      flick lands deep-but-in, and only a deliberately huge swipe goes over. */
   AIM_REF_X     : 0.42,      // fraction of stage width for a full lateral sweep
   AIM_REF_Y     : 0.31,      // fraction of stage height for a full vertical sweep
-  LATE_MUL      : 0.65,      // quality if the ball arrives while you are still dragging
 
   MULT_MAX      : 5.0,
-  MULT_MISS     : -0.6,
-  MULT_NET      : -0.4,
   OD_MUL        : 1.6,
-  RETURN_POINTS : 20,
 
   // opponent
   CPU_HOME_Z    : -1.52,     // where it idles behind its baseline
@@ -431,12 +478,14 @@ const K = {
   MULT_RALLY    : 0.10,      // per shot you return during a rally
   MULT_WIN      : 0.60,      // extra for taking the point
   POINT_GAP     : 1.15,
+  OVERTIME_MAX  : 9.0,       // hard cap on playing a rally past the final whistle
   /* Your reach is bounded exactly like the opponent's. Without it the CPU had
      no way to WIN a point — only to wait for you to fault — so any bot that
      never faulted beat it, mashing included (4-0). Now it can wrong-foot you. */
   CPU_LEVEL     : 0.60,      // 1 = the original opponent, 0 = gentle
   PLAYER_SPEED  : 1.30,
   PLAYER_REACH  : 0.32,
+  TUT_TOSS      : 0.45,      // tutorial: speed of the serve toss on its way up
   MAX_APEX      : 1.10,      // no shot from either side arcs above this
   CPU_ARC       : 0.78,      // its returns lift at least this high, so they
                              // bounce up to a hittable height on your side
@@ -1591,11 +1640,14 @@ function traceShot(p0,v0,out){
 }
 
 /* ================================================================== STATE */
+/* The tutorial is a real rally, just with the clock stopped and time nearly
+   frozen — it shares every code path so it cannot drift from the real game. */
+const inPlay=()=>RUN.state==='play'||RUN.state==='tutorial';
 const RUN={
   state:'boot', t:0, elapsed:0, left:K.RUN_TIME, score:0, shown:0, mult:1,
   you:0, cpu:0, rally:0, rallies:0, shots:0, smashes:0, bestPoint:0, longest:0,
   streak:0, overdrive:false, serveMine:true, log:[],
-  ending:false, finalRally:false, endHold:0,
+  ending:false, finalRally:false, endHold:0, overtime:0,
 };
 const B={p:new THREE.Vector3(0,-9,0), v:new THREE.Vector3(), prev:new THREE.Vector3(),
   phase:'idle', t:0, live:false, dead:true, spin:new THREE.Vector3(), outT:0,
@@ -1817,8 +1869,16 @@ function newRally(){
   matBallBody.uniforms.uColor.value.setHex(P.ball);
   if(serverIsPlayer()){
     // tossed up in front of you; the strike zone opens as it drops
-    B.p.set(clamp(pad.x,-0.25,0.25), 0.30, K.PADDLE_Z-0.16);
-    B.v.set(0, 3.45, 0.24);
+    if(TUT.on){
+      /* Tutorial toss: a short, gentle one so the ball freezes in front of YOU
+         at a comfortable hitting height. The normal lofted serve peaks around
+         1.0 m, which parks the frozen ball right on the robot's face. */
+      B.p.set(clamp(pad.x,-0.20,0.20)+0.05, 0.52, K.PADDLE_Z-0.13);
+      B.v.set(0, 1.15, 0.34);
+    } else {
+      B.p.set(clamp(pad.x,-0.25,0.25), 0.30, K.PADDLE_Z-0.16);
+      B.v.set(0, 3.45, 0.24);
+    }
     B.side='cpu'; B.phase='in'; B.hitter='player';
     B.striker='player'; B.tossing=true;
     RUN.serveMine=true;
@@ -2024,6 +2084,10 @@ function ballTick(dt){
     if(B.striker==='player' && pz<K.PADDLE_Z && B.p.z>=K.PADDLE_Z){
       const t=(K.PADDLE_Z-pz)/(B.p.z-pz);
       const cx=B.prev.x+(B.p.x-B.prev.x)*t, cy=B.prev.y+(B.p.y-B.prev.y)*t;
+      if(TUT.on && !B.locked && !(sw.down&&sw.armed)){
+        B.live=false; B.dead=true; ballGrp.visible=false; ballShadow.visible=false;
+        serveTimer=0.5; break;                                 // no penalty, just re-toss
+      }
       if(B.reachable===false){ pointTo('cpu','PAST YOU'); break; }
       if(!B.locked && sw.down && sw.armed) commitShot(true);   // still dragging: late
       if(B.locked) doSmack(cx,cy); else doMiss();
@@ -2087,7 +2151,7 @@ function trailTick(dt){
 /* ============================================================ AIM PREVIEW */
 const _prevV=new THREE.Vector3();
 function aimTick(dt){
-  const showing = RUN.state==='play' && B.live && B.striker==='player';
+  const showing = inPlay() && B.live && B.striker==='player';
   arcMesh.visible=false; mark.visible=false;
   if(!showing){ arrival=null; cover.material.opacity=dmp(cover.material.opacity,0,8,dt); return; }
   arrival=predictArrival(B.p,B.v);
@@ -2133,7 +2197,7 @@ function aimTick(dt){
 function paddleTick(dtReal){
   const dt=dtReal;
   pad.px=pad.x; pad.py=pad.y;
-  if(RUN.state==='play' && B.live && B.striker==='player' && arrival){
+  if(inPlay() && B.live && B.striker==='player' && arrival){
     // rest slightly below/right of the ball so the ball itself stays readable;
     // the smack animation whips the face through the contact point
     pad.tx=clamp(arrival.x*0.72+0.055,-0.40,0.40);
@@ -2264,7 +2328,7 @@ function cameraTick(dt){
 /* ==================================================================== HUD */
 const $=(id)=>document.getElementById(id);
 const elScore=$('score'), elTime=$('time'), elMult=$('mult'), elTbar=$('tbar'),
-      elRally=$('rallyRow'), elHint=$('hint'), elFlash=$('flash'), elOdTint=$('odTint'),
+      elRally=$('rallyRow'), elFlash=$('flash'), elOdTint=$('odTint'),
       elSlow=$('slowFx'), elPow=$('powLabel'), elPowBar=$('powBar'), elPowWrap=$('powWrap'),
       elBoard=$('board'), elYou=$('you'), elCpu=$('cpu'), elRallyTag=$('rallyTag'), elRallyN=$('rallyN');
 const rdots=[];
@@ -2288,10 +2352,10 @@ function hudTick(dt){
   if(flashT>0){ flashT-=dt; elFlash.style.opacity=clamp(flashT*3.0,0,0.34); }
   else if(elFlash.style.opacity!=='0') elFlash.style.opacity='0';
   AU.intensity=dmp(AU.intensity,RUN.overdrive?1:clamp(RUN.mult/5*0.6,0,0.6),0.6,dt);
-  if(AU.musicGain) AU.musicGain.gain.value = (RUN.state==='play')?(AU.on&&AU.musicOn?0.30:0):(AU.on&&AU.musicOn?0.11:0);
+  if(AU.musicGain) AU.musicGain.gain.value = inPlay()?(AU.on&&AU.musicOn?0.30:0):(AU.on&&AU.musicOn?0.11:0);
   // bullet-time overlay + swipe power readout
   elSlow.style.opacity=(slowT*0.9).toFixed(3);
-  const aiming = RUN.state==='play' && sw.down && sw.armed && B.live && B.phase==='in';
+  const aiming = inPlay() && sw.down && sw.armed && B.live && B.phase==='in';
   if(aiming){
     const S=K.SMACK[powerTier()];
     elPow.style.opacity='1';
@@ -2302,19 +2366,9 @@ function hudTick(dt){
     elPowWrap.style.opacity='1';
   } else { elPow.style.opacity='0'; elPowWrap.style.opacity='0'; }
   // rally length badge
-  const showRally=RUN.state==='play'&&B.live&&RUN.rally>=2;
+  const showRally=inPlay()&&B.live&&RUN.rally>=2;
   elRallyTag.className=showRally?'on':'';
   if(showRally) elRallyN.textContent=RUN.rally;
-  // hint copy
-  if(RUN.state==='play'){
-    let txt='';
-    if(RUN.shots===0) txt='Time slows as the ball reaches you &nbsp;·&nbsp; <b>swipe</b> to hit it back';
-    else if(RUN.shots<3) txt='Swipe <b>sideways</b> to place it &nbsp;·&nbsp; <b>further</b> = deeper';
-    else if(RUN.you===0&&RUN.shots<10) txt='Hit where the robot <b>isn\u2019t</b> &nbsp;·&nbsp; the red patch is its reach';
-    else if(RUN.smashes===0&&RUN.shots<14) txt='Flick <b>fast</b> to SMASH &mdash; less time for it to get there';
-    elHint.innerHTML=txt;
-    elHint.className=txt?'on':'';
-  }
 }
 
 /* ================================================================ SCREENS */
@@ -2341,12 +2395,64 @@ function resetRun(seed){
   for(let i=0;i<PART_N;i++) PT.life[i]=0;
   updateScoreboard();
 }
+/* ------------------------------------------------------------- tutorial
+   A real rally with the match clock stopped: you serve, the ball hangs almost
+   frozen in the air, and you are walked through hold -> drag -> release. The
+   moment you strike it, the clock starts and the rally plays out for real. */
+const TUT={on:false, step:-1, t:0, done:false};
+const elTut=$('tut'), elTutTitle=$('tutTitle'), elTutSub=$('tutSub');
+function tutSay(title,sub){ elTutTitle.textContent=title; elTutSub.textContent=sub; }
+function tutStep(n){
+  if(TUT.step===n) return;
+  TUT.step=n;
+  if(n===0) tutSay('PLACE YOUR FINGER','and drag to aim');
+  if(n===1){ tutSay('NOW DRAG TO AIM','the marker shows where it lands'); sfxBeep(760,0.10,0.16,'triangle'); }
+  if(n===2){ tutSay('PICK YOUR SPOT','let go to serve'); sfxBeep(980,0.10,0.16,'triangle'); }
+}
+function beginTutorial(){
+  RUN.state='tutorial';
+  TUT.on=true; TUT.step=-1; TUT.t=0; TUT.done=false;
+  elTut.classList.add('on'); elTut.classList.remove('held');
+  tutStep(0);
+  serveTimer=0.35;
+}
+function tutTick(dtR){
+  TUT.t+=dtR;
+  elTut.classList.toggle('held', sw.down);
+  if(TUT.done){                       // struck it — hand over to the real match
+    if(B.striker!=='player' || !B.live) endTutorial();
+    return;
+  }
+  if(!B.live) return;
+  if(!sw.down) tutStep(0);
+  else tutStep(sw.armed?2:1);
+}
+function endTutorial(){
+  TUT.on=false;
+  elTut.classList.remove('on');
+  RUN.state='play';
+  RUN.elapsed=0; RUN.left=K.RUN_TIME;   // the clock starts on your first shot
+  showCd('GO!'); sfxBeep(1040,0.28,0.30,'triangle'); sfxCheer(0.6);
+}
+function skipTutorial(){
+  if(!TUT.on) return;
+  TUT.on=false; TUT.done=false;
+  elTut.classList.remove('on');
+  B.live=false; B.dead=true; ballGrp.visible=false; ballShadow.visible=false;
+  swipeReset(); timeScale=1;
+  RUN.rallies=0; RUN.rally=0; RUN.shots=0; RUN.mult=1;
+  RUN.state='count'; cdT=0; cdN=3; showCd('3'); sfxBeep(660,0.14,0.24);
+}
+$('tutSkip').addEventListener('pointerdown',(e)=>{ e.stopPropagation(); skipTutorial(); });
+
 let cdT=0, cdN=3;
+/* Every run opens with the guided serve: you place, drag and aim your own
+   first ball in frozen time. SKIP drops straight to the countdown. */
 function startRun(){
   auInit();
   resetRun();
   showScreen(''); setHud(true);
-  cdT=0; cdN=3; showCd('3'); sfxBeep(660,0.14,0.24);
+  beginTutorial();
 }
 function showCd(s){
   const e=$('cd'); e.textContent=s;
@@ -2460,7 +2566,7 @@ function swipeMove(e){
    on exactly that. The zone and the slow-mo cue are deliberately identical, so
    "act while everything is slow" is the whole rule. */
 function inStrikeZone(){
-  return RUN.state==='play' && B.live && B.striker==='player' &&
+  return inPlay() && B.live && B.striker==='player' &&
          arrival && arrival.t<=K.SLOW_AT+0.05;
 }
 function swipeEnd(){
@@ -2473,6 +2579,7 @@ function swipeEnd(){
    a metre above the paddle and simply leapt away untouched. */
 const _cmT=new THREE.Vector3(), _cmV=new THREE.Vector3();
 function commitShot(late){
+  if(TUT.on) TUT.done=true;            // your first shot starts the match
   const from=arrival?_v3.set(arrival.x,arrival.y,K.PADDLE_Z-0.008):B.p;
   const tier=powerTier();
   legalShot(from,K.SMACK[tier].spd,_cmT,_cmV,0);
@@ -2500,8 +2607,8 @@ addEventListener('keydown',(e)=>{
 addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('visibilitychange',()=>{ if(document.hidden&&RUN.state==='play') pauseGame(); });
 
-$('btnPlay').addEventListener('click',startRun);
-$('btnAgain').addEventListener('click',startRun);
+$('btnPlay').addEventListener('click',()=>startRun());
+$('btnAgain').addEventListener('click',()=>startRun());
 $('btnMenu').addEventListener('click',toMenu);
 $('btnResume').addEventListener('click',resumeGame);
 $('btnQuit').addEventListener('click',()=>{ RUN.left=0; RUN.state='play'; endRun(); });
@@ -2559,8 +2666,15 @@ function frame(dtR){
 
   // bullet time on approach
   let want=1;
-  if(RUN.state==='play' && B.live && B.striker==='player' && B.reachable!==false && !B.locked && arrival && arrival.t<K.SLOW_AT) want=K.SLOW_SCALE;
+  /* Tutorial: the toss rises, then the ball STOPS DEAD in the air and waits.
+     A near-freeze still crept toward the paddle while a first-timer worked out
+     what to do. Committing the shot releases it, as in a real rally. */
+  if(RUN.state==='tutorial'){
+    want = (B.live && !B.locked) ? (arrival && arrival.t<K.SLOW_AT ? 0 : K.TUT_TOSS) : 1;
+  }
+  else if(RUN.state==='play' && B.live && B.striker==='player' && B.reachable!==false && !B.locked && arrival && arrival.t<K.SLOW_AT) want=K.SLOW_SCALE;
   timeScale=dmp(timeScale,want,K.SLOW_RAMP,dtR);
+  if(want===0 && timeScale<0.02) timeScale=0;      // actually stop, don't creep
   slowT=dmp(slowT, want<1?1:0, 10, dtR);
   const dt=dtR*timeScale;
 
@@ -2569,6 +2683,14 @@ function frame(dtR){
     if(cdT>0.85&&cdN===3){ cdN=2; showCd('2'); sfxBeep(660,0.14,0.24); }
     else if(cdT>1.70&&cdN===2){ cdN=1; showCd('1'); sfxBeep(660,0.14,0.24); }
     else if(cdT>2.55&&cdN===1){ cdN=0; showCd('GO!'); sfxBeep(1040,0.28,0.30,'triangle'); sfxCheer(0.6); beginPlay(); }
+  } else if(RUN.state==='tutorial'){
+    if(!B.live && !TUT.done){
+      serveTimer-=dtR;
+      if(serveTimer<=0) newRally();          // you always serve the first one
+    }
+    if(hitstop>0) hitstop-=dtR; else ballTick(dt);
+    aimTick(dtR);
+    tutTick(dtR);
   } else if(RUN.state==='play'){
     RUN.elapsed+=dtR;
     RUN.left=Math.max(0,K.RUN_TIME-RUN.elapsed);
@@ -2589,8 +2711,14 @@ function frame(dtR){
         sfxSiren();
         if(RUN.finalRally) callOut('TIME','PLAY THE POINT OUT','#FFC943');
       }
-      if(B.live && !B.dead) RUN.endHold=0;              // still live: let it run
-      else {
+      if(B.live && !B.dead){
+        RUN.endHold=0;
+        /* Let it run — but bound it. Bullet time stretches every shot, so a
+           long rally in progress can take 20+ real seconds to finish; past
+           OVERTIME_MAX the point is voided as a let rather than awarded. */
+        RUN.overtime+=dtR;
+        if(RUN.overtime>K.OVERTIME_MAX) letBall();
+      } else {
         RUN.endHold+=dtR;
         if(RUN.endHold > (RUN.finalRally?1.20:0.30)) endRun();
       }
@@ -2600,7 +2728,7 @@ function frame(dtR){
   }
 
   // the crowd leans in as a rally goes long
-  {const e=clamp(RUN.rally/10,0,1)*(RUN.state==='play'?1:0.25);
+  {const e=clamp(RUN.rally/10,0,1)*(inPlay()?1:0.25);
    crowd.material.uniforms.uBob.value=dmp(crowd.material.uniforms.uBob.value,0.055+e*0.075,3,dtR);}
   paddleTick(dtR);
   cpuTick(dtR);
