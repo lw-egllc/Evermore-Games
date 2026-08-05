@@ -336,8 +336,15 @@ const Audio_ = {
   resetTick(){ this.tickNext = 0.001; },
 
   enterFog(){
-    this.tone(880, 0.09, { type:"square", vol:0.13, atk:0.002, slide:0.6 });
-    this.noise(0.08, { vol:0.10, f0:2400, f1:600 });
+    // crossing into the paying stretch: a bright little "you're in the money"
+    this.tone(784, 0.10, { type:"square",   vol:0.11, atk:0.002 });
+    this.tone(1175,0.16, { type:"triangle", vol:0.13, atk:0.003, delay:0.05 });
+    this.noise(0.08, { vol:0.08, f0:2400, f1:900 });
+  },
+  /** an unripe pluck: flat, muted, over before it started */
+  dud(){
+    this.tone(147, 0.13, { type:"sine", vol:0.16, atk:0.004, slide:0.72 });
+    this.noise(0.06, { vol:0.07, f0:700, f1:220 });
   },
   pluck(chain, clutch){
     // pentatonic ladder — the chain literally sounds like it is climbing
@@ -545,8 +552,9 @@ function spawnSparks(x,y,n,color,power){
     });
   }
 }
-function popText(x,y,text,color,{size=54, sub=null, life=1.25, rise=115}={}){
-  pops.push({ x,y,text,color,size,sub,life,age:0,rise });
+function popText(x,y,text,color,{size=54, sub=null, life=1.25, rise=115,
+                                 subColor="rgba(255,243,220,0.72)", subScale=0.36}={}){
+  pops.push({ x,y,text,color,size,sub,life,age:0,rise,subColor,subScale });
 }
 function ring(x,y,color,r0,r1,life,width){
   rings.push({x,y,color,r0,r1,life,age:0,width});
@@ -1065,41 +1073,46 @@ function drawRing(cx, cy, radius, holdT, safeEnd, fogLo, fogHi, heat, alpha, see
   // ink backing so the whole gauge pops off the sky
   arcAt(cx,cy,radius, 0, FOG_END, "rgba(16,8,32,0.80)", ZONE_W + 7);
   arcAt(cx,cy,radius, 0, FOG_END, "rgba(46,26,74,0.92)", ZONE_W);        // unknown track
-  arcAt(cx,cy,radius, fogHi, FOG_END, "rgba(22,10,40,0.95)", ZONE_W);    // dead stretch
-  arcAt(cx,cy,radius, 0, safeEnd, "rgba(88,232,132,0.92)", ZONE_W);      // guaranteed safe
+  arcAt(cx,cy,radius, fogHi, FOG_END, "rgba(22,10,40,0.95)", ZONE_W);    // gone — no fruit survives here
+  // UNRIPE: safe, and deliberately drab. This band is not a reward, it is the
+  // part of the stem where the fruit is still worth nothing.
+  arcAt(cx,cy,radius, 0, safeEnd, "rgba(122,146,128,0.55)", ZONE_W);
 
-  // the uncertain band — jittery, never quite still
+  // RIPE: the paying stretch. Gold, glittering, uncertain — treasure whose
+  // exact extent you cannot see. Never red: red tells players to stay out, and
+  // staying out is the losing line.
   if (fogHi > fogLo){
     const a0 = ringAngle(fogLo), a1 = ringAngle(fogHi);
     ctx.save();
     ctx.beginPath(); ctx.arc(cx, cy, radius, a0, a1);
-    ctx.strokeStyle = `rgba(190,40,60,${0.42 + 0.14*pulse})`;
+    ctx.strokeStyle = `rgba(196,138,28,${0.60 + 0.12*pulse})`;
     ctx.lineWidth = ZONE_W; ctx.lineCap = "butt"; ctx.stroke();
-    const steps = Math.max(2, Math.floor((a1-a0)/0.052));
-    ctx.lineWidth = 4.2; ctx.lineCap = "round";
+    const steps = Math.max(2, Math.floor((a1-a0)/0.045));
+    ctx.lineCap = "round";
     for (let i=0;i<=steps;i++){
-      const a  = lerp(a0, a1, i/steps) + (hash1(i*3.1 + seed)-0.5)*0.032;
-      const r0 = radius - ZONE_W/2 + (hash1(i*7.7+seed)-0.5)*5;
-      const r1 = radius + ZONE_W/2 + (hash1(i*11.3+seed)-0.5)*5;
+      const a  = lerp(a0, a1, i/steps) + (hash1(i*3.1 + seed)-0.5)*0.030;
+      const rr = radius + (hash1(i*7.7+seed)-0.5)*(ZONE_W-6);
+      const tw = 2.2 + hash1(i*13.9+seed)*3.4;
       ctx.beginPath();
-      ctx.moveTo(cx + Math.cos(a)*r0, cy + Math.sin(a)*r0);
-      ctx.lineTo(cx + Math.cos(a)*r1, cy + Math.sin(a)*r1);
-      ctx.strokeStyle = `rgba(255,150,132,${0.45 + 0.40*hash1(i*5.5+seed)})`;
-      ctx.stroke();
+      ctx.arc(cx + Math.cos(a)*rr, cy + Math.sin(a)*rr, tw, 0, TAU);
+      ctx.fillStyle = `rgba(255,226,150,${0.40 + 0.55*hash1(i*5.5+seed)})`;
+      ctx.fill();
     }
     ctx.restore();
   }
 
-  // the edge of safety — the line you are choosing to cross
+  // where the money starts — a gold gate, not a warning line
   const sa = ringAngle(safeEnd);
   ctx.beginPath();
-  ctx.moveTo(cx + Math.cos(sa)*(radius - ZONE_W/2 - 5), cy + Math.sin(sa)*(radius - ZONE_W/2 - 5));
-  ctx.lineTo(cx + Math.cos(sa)*(radius + ZONE_W/2 + 5), cy + Math.sin(sa)*(radius + ZONE_W/2 + 5));
-  ctx.strokeStyle = CREAM; ctx.lineWidth = 5; ctx.lineCap = "round"; ctx.stroke();
+  ctx.moveTo(cx + Math.cos(sa)*(radius - ZONE_W/2 - 6), cy + Math.sin(sa)*(radius - ZONE_W/2 - 6));
+  ctx.lineTo(cx + Math.cos(sa)*(radius + ZONE_W/2 + 6), cy + Math.sin(sa)*(radius + ZONE_W/2 + 6));
+  ctx.strokeStyle = GOLD; ctx.lineWidth = 5; ctx.lineCap = "round"; ctx.stroke();
 
-  // travelled — thin, so the zone underneath still reads
+  // Travelled — thin, so the zone underneath still reads. Split at the gate:
+  // the stretch spent unripe stays drab, only the paying part lights up.
   arcAt(cx,cy,radius, 0, holdT, "rgba(16,8,32,0.55)", FILL_W + 5, "round");
-  arcAt(cx,cy,radius, 0, holdT, heat, FILL_W, "round");
+  arcAt(cx,cy,radius, 0, Math.min(holdT, safeEnd), "rgba(150,172,156,0.85)", FILL_W, "round");
+  if (holdT > safeEnd) arcAt(cx,cy,radius, safeEnd, holdT, heat, FILL_W, "round");
 
   // needle
   const na = ringAngle(holdT);
@@ -1299,28 +1312,37 @@ function doPluck(){
     age: 0, col, tilt: 0, spin: rand(-5,5),
   };
 
-  spawnSparks(a.x, a.y, 16, mixHex(col,"#ffffff",0.5), 520);
-  ring(a.x, a.y, col, r*0.6, r*2.4, 0.42, 10);
-  // On a win, show what the stem would have given you. Telling players what
-  // they left behind is what makes them hold longer next time.
-  const greenCapped = !inFog && before >= GREEN_CAP;
-  popText(a.x, a.y - r - 26, "+" + fmt(gain), clutch ? "#FFF07A" : CREAM, {
-    size: clamp(42 + Math.log2(1+gain/40)*9, 42, 96),
-    sub: clutch      ? "CLUTCH ×1.5"
-       : greenCapped ? "banked — no × from green"
-       : missed > gain*1.12 ? "had " + fmt(missed) : null,
-  });
-  if (clutch){
-    banner("CLUTCH!", "#FFF07A", 0.9);
-    G.flash = 0.45; G.flashColor = "#FFF3A0";
-    G.freeze = 0.07;
-    addShake(12);
-    ring(a.x, a.y, "#FFF07A", r*0.4, r*3.4, 0.55, 14);
+  if (!inFog){
+    // An unripe pluck is a non-event, and it must FEEL like one: dull thud,
+    // grey number, no fanfare — and a loud gold reminder of what waiting was
+    // worth. Players chase the feeling long before they decode the colours.
+    spawnSparks(a.x, a.y, 5, "rgba(190,205,192,0.9)", 200);
+    popText(a.x, a.y - r - 26, "+" + fmt(gain), "rgba(196,208,198,0.95)", {
+      size: clamp(34 + Math.log2(1+gain/40)*5, 34, 54),
+      sub: "UNRIPE  ·  RIPE WAS " + fmt(missed),
+      subColor: GOLD, subScale: 0.62, life: 1.5,
+    });
+    Audio_.dud();
+    addShake(1.5);
   } else {
-    addShake(4.5);
+    spawnSparks(a.x, a.y, 16, mixHex(col,"#ffffff",0.5), 520);
+    ring(a.x, a.y, col, r*0.6, r*2.4, 0.42, 10);
+    popText(a.x, a.y - r - 26, "+" + fmt(gain), clutch ? "#FFF07A" : CREAM, {
+      size: clamp(42 + Math.log2(1+gain/40)*9, 42, 96),
+      sub: clutch ? "CLUTCH ×1.5" : (missed > gain*1.12 ? "had " + fmt(missed) : "RIPE  +1 ×"),
+      subColor: clutch ? "#FFF07A" : GOLD,
+    });
+    if (clutch){
+      banner("CLUTCH!", "#FFF07A", 0.9);
+      G.flash = 0.45; G.flashColor = "#FFF3A0";
+      G.freeze = 0.07;
+      addShake(12);
+      ring(a.x, a.y, "#FFF07A", r*0.4, r*3.4, 0.55, 14);
+    } else {
+      addShake(4.5);
+    }
+    Audio_.pluck(G.chain, clutch);
   }
-
-  Audio_.pluck(G.chain, clutch);
   Audio_.stopDrone();
 
   stem.fling(G.fly.vx*0.8, G.fly.vy*0.8);
@@ -1575,15 +1597,15 @@ function drawHUD(){
   roundRect(-bw, -36, bw, 72, 22); inkStroke(6);
   celText(label, -bw/2, 2, 47, (capped||G.overtime) ? INK : CREAM, { ow:0 });
 
-  // Chain pips. The first GREEN_CAP are green — that is as far as safe plucks
-  // will ever carry you. Everything gold has to be earned in the fog.
+  // Chain pips. The first GREEN_CAP are drab — that is as far as unripe plucks
+  // will ever carry you. Every gold notch has to be earned on a ripe one.
   const pw = 11, pgap = 4, totalW = CHAIN_CAP*pw + (CHAIN_CAP-1)*pgap;
   for (let i=0;i<CHAIN_CAP;i++){
-    const lit   = i < G.chain;
-    const green = i < GREEN_CAP;
+    const lit  = i < G.chain;
+    const drab = i < GREEN_CAP;
     roundRect(-totalW + i*(pw+pgap), 40, pw, 12, 5);
-    ctx.fillStyle = lit ? (G.overtime ? "#FF8CA6" : (green ? "#6BE49A" : GOLD))
-                        : (green ? "rgba(107,228,154,0.22)" : "rgba(20,10,38,0.55)");
+    ctx.fillStyle = lit ? (G.overtime ? "#FF8CA6" : (drab ? "rgba(160,180,166,0.85)" : GOLD))
+                        : (drab ? "rgba(160,180,166,0.20)" : "rgba(20,10,38,0.55)");
     ctx.fill();
   }
   if (G.chain > CHAIN_CAP){
@@ -1591,9 +1613,9 @@ function drawHUD(){
   }
   ctx.restore();
 
-  if (G.overtime)                   celText("NO CEILING",        672, 188, 20, "#FF9AB0", { align:"right", ow:5 });
-  else if (capped)                  celText("MAXED — GO DEEPER", 672, 188, 20, GOLD,      { align:"right", ow:5 });
-  else if (G.chain >= GREEN_CAP)    celText("PAST ×3 NEEDS FOG", 672, 188, 20, "#FFB4C6", { align:"right", ow:5 });
+  if (G.overtime)                celText("NO CEILING",         672, 188, 20, "#FF9AB0", { align:"right", ow:5 });
+  else if (capped)               celText("MAXED — HOLD LONGER",672, 188, 20, GOLD,      { align:"right", ow:5 });
+  else if (G.chain >= GREEN_CAP) celText("RIPE ONLY PAST ×3",  672, 188, 20, GOLD,      { align:"right", ow:5 });
 
   drawTimerBar();
 }
@@ -1630,9 +1652,9 @@ function drawTitleText(){
   ctx.globalAlpha = 0.75 + Math.sin(G.t*3.2)*0.25;
   celText("HOLD  TO  RIPEN", 360, 930, 42, CREAM, { shadow:5 });
   ctx.restore();
-  celText("RELEASE  BEFORE  IT  BURSTS", 360, 984, 29, "#FFB4C6", { ow:7 });
-  celText("GREEN BANKS  ·  RED GROWS THE CHAIN", 360, 1030, 22, "#8CF9A8", { ow:5 });
-  celText("60 SECONDS.  ALWAYS.", 360, 1068, 22, "rgba(255,243,220,0.6)", { ow:5 });
+  celText("THE LONGER YOU DARE, THE MORE IT PAYS", 360, 982, 24, GOLD, { ow:6 });
+  celText("RELEASE  BEFORE  IT  BURSTS", 360, 1024, 27, "#FFB4C6", { ow:7 });
+  celText("UNRIPE FRUIT IS WORTH ALMOST NOTHING", 360, 1064, 21, "rgba(178,196,182,0.95)", { ow:5 });
 
   if (Save.data.best > 0){
     roundRect(360-152, 1102, 304, 58, 22);
@@ -1649,8 +1671,8 @@ function verdict(){
   if (G.plucks + G.bursts === 0)  return "You didn't pluck a single one.";
   if (G.clutches >= 3)            return "Living on the edge. Terrifying to watch.";
   if (G.bursts === 0)             return "Ice cold — and capped at ×3 all run.";
-  if (G.topChain <= GREEN_CAP)    return "Green only caps you at ×3. Go into the red.";
-  if (avg < se*0.92)              return "Too safe. The money is past the green.";
+  if (G.topChain <= GREEN_CAP)    return "Unripe fruit caps you at ×3. Let it ripen.";
+  if (avg < se*0.92)              return "Picking green. The money is in the gold.";
   if (G.bursts > G.plucks*0.6)    return "Reckless. Beautiful, but reckless.";
   if (G.topChain >= CHAIN_CAP)    return "Chain maxed. Now hold longer.";
   return "Dialled in. Push half a second deeper.";
@@ -1799,15 +1821,40 @@ function render(){
 
     if (playing && (isArmed() || holdT > 0)){
       const [lo,hi] = fogWindow();
-      drawRing(gx, gy, r + 50, holdT, safeEndNow(), lo, hi, col,
+      const se  = safeEndNow();
+      const rad = r + 50;
+      drawRing(gx, gy, rad, holdT, se, lo, hi, col,
                clamp(holdT*4, 0, 1), Math.floor(G.t*24),
                0.5 + 0.5*Math.sin(G.t*11));
-      const val = gemValue(holdT) * G.chain * (G.overtime?OVERTIME_MUL:1);
+
+      const otm = G.overtime ? OVERTIME_MUL : 1;
+      const val = gemValue(holdT) * G.chain * otm;
       const fs  = clamp(r*0.50, 24, 60);
       ctx.save();
       ctx.globalAlpha = clamp(holdT*5,0,1);
       celText(fmt(val), gx, gy+2, fs, CREAM, { ow: Math.max(4, fs*0.22), shadow:3 });
+
+      // What the fruit is right now, in words. Colour can be misread; this
+      // cannot. "UNRIPE" is the thing nobody wants to be holding.
+      const risk = clamp((holdT - se) / Math.max(0.01, hi - se), 0, 1);
+      const tag  = holdT <= se ? "UNRIPE" : risk > 0.72 ? "OVERRIPE" : "RIPE";
+      const tagC = holdT <= se ? "rgba(178,196,182,0.95)" : risk > 0.72 ? "#FF8A6B" : GOLD;
+      celText(tag, gx, gy + fs*0.78, clamp(r*0.23, 14, 26), tagC,
+              { ow: Math.max(3, r*0.055) });
       ctx.restore();
+
+      // The pull: what a pluck OUT THERE would pay, floating in the gold band
+      // ahead of the needle. An argument in numbers, not in colour.
+      if (hi > lo + 0.05){
+        const aheadT = lo + (hi - lo)*0.55;
+        const aa = ringAngle(aheadT);
+        const ax = gx + Math.cos(aa)*(rad + 34), ay = gy + Math.sin(aa)*(rad + 34);
+        ctx.save();
+        ctx.globalAlpha = clamp(holdT*3, 0, 1) * (0.72 + 0.28*Math.sin(G.t*5));
+        celText(fmt(gemValue(aheadT) * G.chain * otm), ax, ay,
+                clamp(r*0.30, 20, 34), GOLD, { ow:6, shadow:3 });
+        ctx.restore();
+      }
     }
   }
 
@@ -1841,8 +1888,8 @@ function render(){
     const s = p.age < 0.16 ? easeOutBack(p.age/0.16) : 1;
     ctx.scale(s, s);
     celText(p.text, 0, 0, p.size, p.color, { shadow:5, ow: Math.max(6, p.size*0.20) });
-    if (p.sub) celText(p.sub, 0, p.size*0.72, Math.max(19, p.size*0.36),
-                       "rgba(255,243,220,0.72)", { ow:5 });
+    if (p.sub) celText(p.sub, 0, p.size*0.78, Math.max(20, p.size*p.subScale),
+                       p.subColor, { ow:5 });
     ctx.restore();
   }
 
@@ -1954,7 +2001,7 @@ function frame(now){
   requestAnimationFrame(frame);
   let raw = (now - last)/1000;
   last = now;
-  if (raw > 0.1) raw = 0.1;               // tab-switch guard
+  raw = clamp(raw, 0, 0.1);               // tab-switch guard; never let dt run backwards
   G.t += raw;
 
   // hit-stop, then slow-motion for the final pluck
