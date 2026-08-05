@@ -96,7 +96,7 @@ const ctx = cvs.getContext('2d', { alpha: false });
 const VW = 900;                 // design width, fixed
 let   VH = 1800;                // design height, follows aspect
 let   SC = 1;                   // VH / 1800 — vertical scale for physics
-let   SCALE = 1, DPR = 1;
+let   SCALE = 1, DPR = 1, DPR_CAP = 2;
 let   SAFE_T = 0, SAFE_B = 0;   // notch insets in design units
 const MIN_A = 0.435, MAX_A = 0.615;
 
@@ -159,17 +159,31 @@ const SND = {
     o.connect(this.env(dur, peak == null ? .3 : peak, atk));
     o.start(t); o.stop(t + dur + .03);
   },
+  /* One shared white-noise buffer, played from a random offset.  Allocating a
+     buffer and filling it with thousands of Math.random() calls on every pop and
+     every bounce was the main source of audio-thread hitching on device.        */
+  _noise: null,
+  noiseBuf() {
+    if (!this._noise) {
+      const n = Math.floor(this.ctx.sampleRate * 1.2);
+      const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+      this._noise = buf;
+    }
+    return this._noise;
+  },
   noise(dur, peak, hp, lp) {
     if (!this.ready || !this.on) return;
-    const t = this.ctx.currentTime, n = Math.floor(this.ctx.sampleRate * dur);
-    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
-    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const t = this.ctx.currentTime;
+    const buf = this.noiseBuf();
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const off = Math.random() * Math.max(0, buf.duration - dur - .01);
     let node = src;
     if (hp) { const f = this.ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp; node.connect(f); node = f; }
     if (lp) { const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp; node.connect(f); node = f; }
     node.connect(this.env(dur, peak == null ? .22 : peak, .004));
-    src.start(t);
+    src.start(t, off, dur);
   },
 
   bounce(pw) { this.tone(210 + pw * 190, .13, 'triangle', .34, 120 + pw * 90); this.noise(.05, .10, 900, 4200); },
@@ -301,7 +315,12 @@ function orbSprite(key, R, col, label, opt) {
    comes from `swell`: a round-joined stroke in the fill colour that fattens and
    rounds the glyph before it is filled.  That trick also rescues the fallbacks. */
 const FONT = '"Arial Rounded MT Bold","SF Pro Rounded",Nunito,"Baloo 2","Avenir Next",system-ui,-apple-system,"Trebuchet MS",sans-serif';
-function fnt(px) { return '700 ' + px.toFixed(1) + 'px ' + FONT; }
+/* font strings are re-parsed by the engine on every assignment — cache them */
+const _fontCache = {};
+function fnt(px) {
+  const k = Math.round(px * 10) / 10;
+  return _fontCache[k] || (_fontCache[k] = '700 ' + k + 'px ' + FONT);
+}
 
 const HAS_TRACK = typeof CanvasRenderingContext2D !== 'undefined' &&
   'letterSpacing' in CanvasRenderingContext2D.prototype;
@@ -329,7 +348,8 @@ function txt(s, x, y, size, o) {
   ctx.textAlign = o.align || 'center';
   ctx.textBaseline = o.baseline || 'middle';
   ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.miterLimit = 2;
-  track(o.tr ? size * o.tr : 0);
+  const tr = o.tr ? size * o.tr : 0;
+  if (tr) track(tr);                       // only letterspaced text pays for it
 
   const inkW = o.inkW == null ? .30 : o.inkW;
   const swell = o.swell == null ? .13 : o.swell;
@@ -349,12 +369,13 @@ function txt(s, x, y, size, o) {
     if (inkW > 0) ctx.strokeText(s, x, y); else ctx.fillText(s, x, y);
     ctx.restore();
   }
+  /* offset ink stroke instead of a blurred shadow — shadowBlur costs a full
+     off-screen rasterise per call and the HUD makes ~10 of these a frame */
   if (o.shadow !== false && inkW > 0) {
     ctx.save();
-    ctx.shadowColor = 'rgba(14,8,2,.45)';
-    ctx.shadowBlur = size * .20; ctx.shadowOffsetY = size * .10;
-    ctx.lineWidth = size * inkW; ctx.strokeStyle = o.ink || C.ink;
-    ctx.strokeText(s, x, y);
+    ctx.globalAlpha = .42;
+    ctx.lineWidth = size * inkW; ctx.strokeStyle = '#180D02';
+    ctx.strokeText(s, x, y + size * .085);
     ctx.restore();
   }
   if (inkW > 0) { ctx.lineWidth = size * inkW; ctx.strokeStyle = o.ink || C.ink; ctx.strokeText(s, x, y); }
@@ -362,12 +383,15 @@ function txt(s, x, y, size, o) {
   if (swell > 0) { ctx.lineWidth = size * swell; ctx.strokeStyle = fill; ctx.strokeText(s, x, y); }
   ctx.fillStyle = fill; ctx.fillText(s, x, y);
 
-  track(0);
+  if (tr) track(0);
   ctx.restore();
 }
 function txtW(s, size, tr) {
-  ctx.save(); ctx.font = fnt(size); track(tr ? size * tr : 0);
-  const w = ctx.measureText(s).width; track(0); ctx.restore();
+  ctx.save(); ctx.font = fnt(size);
+  if (tr) track(size * tr);
+  const w = ctx.measureText(s).width;
+  if (tr) track(0);
+  ctx.restore();
   return w;
 }
 
@@ -490,7 +514,9 @@ const WD = { lit: '#F7DCAE', base: '#D9A868', mid: '#B27F41', dark: '#7E5222', i
 
 function paddleSprite() {
   if (SPR.paddle) return SPR.paddle;
-  const S = 2.4;
+  /* 620 design units land at ~540 device px on a phone; 1.8x is already
+     oversampled and 2.4x was costing 10 MB of canvas memory for nothing */
+  const S = 1.8;
   const W = 620, H = 720;
   const OX = W / 2, OY = 172;                      // origin = paddle face centre
   const cv = mkCanvas(W * S, H * S);
@@ -980,8 +1006,11 @@ const K = {
 
   PAD_HALF: 178,          // matches PAD.rx — the hitbox is exactly the painted blade
   PAD_CATCH: 0.28,        // ball radius fraction beyond the blade that still counts
-  FOLLOW: 19,             // paddle smoothing rate
-  PAD_VMAX: 3400,
+  /* The paddle is meant to sit UNDER the thumb, not swim after it.  FOLLOW 19 took
+     ~8 frames to close the gap, which read as butter; 130 closes it in two and the
+     residual smoothing only exists to swallow single-frame pointer jitter. */
+  FOLLOW: 130,
+  PAD_VMAX: 13000,
 
   BALL_R: 39,
   ORB_BOOST: 1.02,
@@ -1332,9 +1361,9 @@ function stepPaddle(dt) {
   if (Math.abs(nx - P.x) > maxStep) nx = P.x + sgn(nx - P.x) * maxStep;
   P.x = nx;
   const inst = dt > 0 ? (P.x - px0) / dt : 0;
-  P.vx = smooth(P.vx, inst, dt, 22);
-  P.tilt = smooth(P.tilt, clamp(-P.vx / 2600, -.22, .22), dt, 12);
-  P.bob = Math.sin(G.t * 1.7) * 4;
+  P.vx = smooth(P.vx, inst, dt, 26);
+  P.tilt = smooth(P.tilt, clamp(-P.vx / 3400, -.20, .20), dt, 20);
+  /* no idle bob — it floated the blade and wobbled the contact plane by ±4px */
 }
 
 function stepBall(dt) {
@@ -1370,7 +1399,7 @@ function stepBall(dt) {
     }
 
     /* paddle */
-    const hy = L.hitY + P.bob;
+    const hy = L.hitY;
     if (B.vy > 0 && py - B.r < hy && B.y + B.r >= hy) {
       const dx = B.x - P.x;
       const reach = K.PAD_HALF + B.r * K.PAD_CATCH;
@@ -1515,25 +1544,48 @@ BG.onload = () => {
   bgReady = true;
   document.getElementById('backdrop').style.backgroundImage = 'url("' + BG.src + '")';
   document.getElementById('boot').classList.add('gone');
+  buildBG();
 };
 BG.onerror = () => { bgReady = false; document.getElementById('boot').classList.add('gone'); };
 BG.src = BG_SRC;
 
+/* The source art is 871x1805 and the canvas is up to ~2.6 Mpx.  Rescaling it every
+   frame was the single biggest cost on device, so it is resampled ONCE into a
+   device-resolution buffer and then blitted 1:1 with the transform reset.        */
+let BGC = null, bgKey = '';
+function buildBG() {
+  if (!bgReady || !BG.naturalWidth) { BGC = null; return; }
+  const px = DPR * SCALE;                        // device px per design unit
+  const zoom = 1.045;                            // slack for the parallax pan
+  const s = Math.max(VW * zoom / BG.naturalWidth, VH * zoom / BG.naturalHeight);
+  const w = Math.ceil(BG.naturalWidth * s * px);
+  const h = Math.ceil(BG.naturalHeight * s * px);
+  const key = w + 'x' + h;
+  if (key === bgKey && BGC) return;
+  BGC = mkCanvas(w, h);
+  const g = BGC.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(BG, 0, 0, w, h);
+  BGC._w = w; BGC._h = h;
+  bgKey = key;
+}
+
 function drawBG() {
-  if (!bgReady) {
+  if (!BGC) {
     const g = ctx.createLinearGradient(0, 0, 0, VH);
     g.addColorStop(0, '#0B63D6'); g.addColorStop(.55, '#3FA8F0'); g.addColorStop(1, '#2C7A3F');
     ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
     return;
   }
-  const zoom = 1.045;
-  const tw = VW * zoom, th = VH * zoom;
-  const s = Math.max(tw / BG.naturalWidth, th / BG.naturalHeight);
-  const w = BG.naturalWidth * s, h = BG.naturalHeight * s;
+  const px = DPR * SCALE;
   const par = (P.x - VW / 2) * -0.016;
-  const ox = (VW - w) * .5 + par;
-  const oy = (VH - h) * .84 + Math.sin(G.bgDrift * .22) * 5;
-  ctx.drawImage(BG, ox, oy, w, h);
+  const ox = Math.round((VW * px - BGC._w) * .5 + par * px);
+  const oy = Math.round((VH * px - BGC._h) * .84 + Math.sin(G.bgDrift * .22) * 5 * px);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(BGC, ox, oy);
+  ctx.restore();
 }
 
 function drawOrbs() {
@@ -1683,10 +1735,10 @@ function chip(s, x, y, col, size) {
   const h = size * 1.46;
   ctx.save();
   ctx.translate(x, y);
-  ctx.shadowColor = 'rgba(8,4,2,.45)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 5;
+  ctx.beginPath(); rrPath(ctx, -w / 2, -h / 2 + 5, w, h, h * .42);
+  ctx.fillStyle = 'rgba(8,4,2,.32)'; ctx.fill();
   ctx.beginPath(); rrPath(ctx, -w / 2, -h / 2, w, h, h * .42);
   ctx.fillStyle = C.wood.base; ctx.fill();
-  ctx.shadowColor = 'transparent';
   ctx.lineWidth = 5; ctx.strokeStyle = C.wood.ink; ctx.stroke();
   ctx.beginPath(); rrPath(ctx, -w / 2 + 6, -h / 2 + 6, w - 12, h - 12, h * .32);
   const g = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
@@ -1699,7 +1751,7 @@ function chip(s, x, y, col, size) {
 function drawPaddle() {
   const spr = paddleSprite();
   const S = spr._S;
-  const py = L.paddleY + P.bob;
+  const py = L.paddleY;
 
   /* floor shadow */
   ctx.save();
@@ -1791,20 +1843,76 @@ function drawTexts() {
 /* ------------------------------------------------------------------ HUD -- */
 /* A signboard: warm wooden bezel, brass rivets, enamel panel inset — the same
    construction as the target boards painted into the background art.           */
-function rivet(x, y, r) {
-  const g = ctx.createRadialGradient(x - r * .34, y - r * .40, r * .1, x, y, r);
+function rivetOn(c, x, y, r) {
+  const g = c.createRadialGradient(x - r * .34, y - r * .40, r * .1, x, y, r);
   g.addColorStop(0, '#FFF2CC'); g.addColorStop(.42, C.brass); g.addColorStop(1, '#8A5A10');
-  ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
-  ctx.lineWidth = Math.max(1.6, r * .34); ctx.strokeStyle = '#4A2E06'; ctx.stroke();
+  c.fillStyle = g;
+  c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+  c.lineWidth = Math.max(1.6, r * .34); c.strokeStyle = '#4A2E06'; c.stroke();
+}
+function rivet(x, y, r) { rivetOn(ctx, x, y, r); }
+/* Plaques are static chrome, so each distinct one is baked to a sprite once and
+   blitted after that.  Live-drawing them cost ~8 gradients + a blurred shadow
+   apiece, 4-5 times a frame.                                                    */
+const PLQ = {};
+const PLQ_PAD = 30, PLQ_SS = 2;
+function plaqueSprite(w, h, r, o) {
+  const pad = o.pad, ir = Math.max(5, r - pad * .75);
+  const en = o.enamel || C.enamel, W = C.wood;
+  const S = PLQ_SS, P0 = PLQ_PAD;
+  const cv = mkCanvas((w + P0 * 2) * S, (h + P0 * 2) * S);
+  const g = cv.getContext('2d');
+  g.scale(S, S); g.translate(P0, P0);
+
+  g.save();
+  g.shadowColor = 'rgba(8,14,26,.50)'; g.shadowBlur = 20; g.shadowOffsetY = 8;
+  g.beginPath(); rrPath(g, 0, 0, w, h, r);
+  let gr = g.createLinearGradient(0, 0, 0, h);
+  gr.addColorStop(0, W.lit); gr.addColorStop(.40, W.base);
+  gr.addColorStop(.76, W.mid); gr.addColorStop(1, W.dark);
+  g.fillStyle = gr; g.fill();
+  g.restore();
+
+  g.save();
+  g.beginPath(); rrPath(g, 0, 0, w, h, r); g.clip();
+  g.globalAlpha = .12; g.lineWidth = 2.6; g.strokeStyle = W.ink;
+  for (let i = 0; i < 4; i++) {
+    const yy = h * (i + .5) / 4;
+    g.beginPath(); g.moveTo(-4, yy);
+    g.bezierCurveTo(w * .32, yy + 5, w * .64, yy - 5, w + 4, yy + 2);
+    g.stroke();
+  }
+  g.restore();
+  g.lineWidth = o.bw || 5.5; g.strokeStyle = W.ink;
+  g.beginPath(); rrPath(g, 0, 0, w, h, r); g.stroke();
+
+  g.beginPath(); rrPath(g, pad, pad, w - pad * 2, h - pad * 2, ir);
+  gr = g.createLinearGradient(0, pad, 0, h - pad);
+  gr.addColorStop(0, en[0]); gr.addColorStop(1, en[1]);
+  g.fillStyle = gr; g.fill();
+  g.save();
+  g.beginPath(); rrPath(g, pad, pad, w - pad * 2, h - pad * 2, ir); g.clip();
+  gr = g.createLinearGradient(0, pad, 0, pad + (h - pad * 2) * .55);
+  gr.addColorStop(0, 'rgba(255,255,255,.22)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(pad, pad, w - pad * 2, (h - pad * 2) * .55);
+  gr = g.createLinearGradient(0, h - pad - (h - pad * 2) * .4, 0, h - pad);
+  gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.28)');
+  g.fillStyle = gr; g.fillRect(pad, h - pad - (h - pad * 2) * .4, w - pad * 2, (h - pad * 2) * .4);
+  g.restore();
+  g.lineWidth = 3.5; g.strokeStyle = 'rgba(12,7,2,.55)';
+  g.beginPath(); rrPath(g, pad, pad, w - pad * 2, h - pad * 2, ir); g.stroke();
+
+  if (o.rivets !== false) {
+    const ins = Math.max(pad * .56, r * .40), rr2 = o.rivetR || 6;
+    rivetOn(g, ins, ins, rr2); rivetOn(g, w - ins, ins, rr2);
+    rivetOn(g, ins, h - ins, rr2); rivetOn(g, w - ins, h - ins, rr2);
+  }
+  cv._S = S; cv._w = w + P0 * 2; cv._h = h + P0 * 2;
+  return cv;
 }
 function plaque(x, y, w, h, r, o) {
   o = o || {};
-  const pad = o.pad == null ? 13 : o.pad;
-  const ir = Math.max(5, r - pad * .75);
-  const W = C.wood;
-  ctx.save();
-
+  if (o.pad == null) o.pad = 13;
   if (o.glow) {
     ctx.save(); ctx.globalCompositeOperation = 'lighter';
     const gg = ctx.createRadialGradient(x + w / 2, y + h / 2, 8, x + w / 2, y + h / 2, Math.max(w, h) * .78);
@@ -1812,54 +1920,11 @@ function plaque(x, y, w, h, r, o) {
     ctx.fillStyle = gg; ctx.fillRect(x - w * .5, y - h * .6, w * 2, h * 2.2);
     ctx.restore();
   }
-
-  /* wooden bezel */
-  ctx.save();
-  ctx.shadowColor = 'rgba(8,14,26,.50)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 8;
-  ctx.beginPath(); rrPath(ctx, x, y, w, h, r);
-  let g = ctx.createLinearGradient(0, y, 0, y + h);
-  g.addColorStop(0, W.lit); g.addColorStop(.40, W.base);
-  g.addColorStop(.76, W.mid); g.addColorStop(1, W.dark);
-  ctx.fillStyle = g; ctx.fill();
-  ctx.restore();
-  ctx.save();
-  ctx.beginPath(); rrPath(ctx, x, y, w, h, r); ctx.clip();
-  ctx.globalAlpha = .12; ctx.lineWidth = 2.6; ctx.strokeStyle = W.ink;
-  for (let i = 0; i < 4; i++) {
-    const yy = y + h * (i + .5) / 4;
-    ctx.beginPath(); ctx.moveTo(x - 4, yy);
-    ctx.bezierCurveTo(x + w * .32, yy + 5, x + w * .64, yy - 5, x + w + 4, yy + 2);
-    ctx.stroke();
-  }
-  ctx.restore();
-  ctx.lineWidth = o.bw || 5.5; ctx.strokeStyle = W.ink;
-  ctx.beginPath(); rrPath(ctx, x, y, w, h, r); ctx.stroke();
-
-  /* enamel face */
-  const en = o.enamel || C.enamel;
-  ctx.beginPath(); rrPath(ctx, x + pad, y + pad, w - pad * 2, h - pad * 2, ir);
-  g = ctx.createLinearGradient(0, y + pad, 0, y + h - pad);
-  g.addColorStop(0, en[0]); g.addColorStop(1, en[1]);
-  ctx.fillStyle = g; ctx.fill();
-  ctx.save();
-  ctx.beginPath(); rrPath(ctx, x + pad, y + pad, w - pad * 2, h - pad * 2, ir); ctx.clip();
-  const gh = ctx.createLinearGradient(0, y + pad, 0, y + pad + (h - pad * 2) * .55);
-  gh.addColorStop(0, 'rgba(255,255,255,.22)'); gh.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = gh; ctx.fillRect(x + pad, y + pad, w - pad * 2, (h - pad * 2) * .55);
-  const gs = ctx.createLinearGradient(0, y + h - pad - (h - pad * 2) * .4, 0, y + h - pad);
-  gs.addColorStop(0, 'rgba(0,0,0,0)'); gs.addColorStop(1, 'rgba(0,0,0,.28)');
-  ctx.fillStyle = gs; ctx.fillRect(x + pad, y + h - pad - (h - pad * 2) * .4, w - pad * 2, (h - pad * 2) * .4);
-  ctx.restore();
-  ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(12,7,2,.55)';
-  ctx.beginPath(); rrPath(ctx, x + pad, y + pad, w - pad * 2, h - pad * 2, ir); ctx.stroke();
-
-  /* brass rivets on the bezel */
-  if (o.rivets !== false) {
-    const ins = Math.max(pad * .56, r * .40), rr2 = o.rivetR || 6;
-    rivet(x + ins, y + ins, rr2); rivet(x + w - ins, y + ins, rr2);
-    rivet(x + ins, y + h - ins, rr2); rivet(x + w - ins, y + h - ins, rr2);
-  }
-  ctx.restore();
+  const key = w + '|' + h + '|' + r + '|' + o.pad + '|' + (o.rivets === false ? 0 : 1) +
+    '|' + (o.rivetR || 6) + '|' + (o.bw || 5.5) + '|' + (o.enamel || C.enamel).join('');
+  let spr = PLQ[key];
+  if (!spr) spr = PLQ[key] = plaqueSprite(w, h, r, o);
+  ctx.drawImage(spr, x - PLQ_PAD, y - PLQ_PAD, spr._w, spr._h);
 }
 /* small caps label, letterspaced, sits on enamel */
 function cap(s, x, y, size, col, align) {
@@ -1873,41 +1938,54 @@ function label(s, x, y, size, col, align, strokeW) {
 function drawHUD() {
   const top = 22 + SAFE_T;
 
-  /* --- SCORE panel (hangs from the top edge) --- */
+  /* --- SCORE plank (hangs from the top edge; baked once, blitted after) --- */
   const sw = 348, sx = (VW - sw) / 2, sh = 144 + SAFE_T;
-  ctx.save();
-  ctx.shadowColor = 'rgba(4,10,22,.6)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
-  ctx.beginPath();
-  ctx.moveTo(sx, -20); ctx.lineTo(sx + sw, -20);
-  ctx.lineTo(sx + sw, sh - 34); ctx.arcTo(sx + sw, sh, sx + sw - 34, sh, 34);
-  ctx.lineTo(sx + 34, sh); ctx.arcTo(sx, sh, sx, sh - 34, 34);
-  ctx.closePath();
-  const g2 = ctx.createLinearGradient(0, 0, 0, sh);
-  g2.addColorStop(0, C.wood.lit); g2.addColorStop(.34, C.wood.base);
-  g2.addColorStop(.74, C.wood.mid); g2.addColorStop(1, C.wood.dark);
-  ctx.fillStyle = g2; ctx.fill();
-  ctx.shadowColor = 'transparent';
-  ctx.lineWidth = 6; ctx.strokeStyle = C.wood.ink; ctx.stroke();
-  ctx.restore();
-  /* enamel face inside the plank */
-  ctx.save();
-  const ep = 14;
-  ctx.beginPath();
-  ctx.moveTo(sx + ep, -20); ctx.lineTo(sx + sw - ep, -20);
-  ctx.lineTo(sx + sw - ep, sh - ep - 22); ctx.arcTo(sx + sw - ep, sh - ep, sx + sw - ep - 22, sh - ep, 22);
-  ctx.lineTo(sx + ep + 22, sh - ep); ctx.arcTo(sx + ep, sh - ep, sx + ep, sh - ep - 22, 22);
-  ctx.closePath();
-  const g3 = ctx.createLinearGradient(0, 0, 0, sh);
-  g3.addColorStop(0, C.enamel[0]); g3.addColorStop(1, C.enamel[1]);
-  ctx.fillStyle = g3; ctx.fill();
-  ctx.save(); ctx.clip();
-  const gg2 = ctx.createLinearGradient(0, 0, 0, sh * .58);
-  gg2.addColorStop(0, 'rgba(255,255,255,.20)'); gg2.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = gg2; ctx.fillRect(sx, -20, sw, sh * .58);
-  ctx.restore();
-  ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(12,7,2,.5)'; ctx.stroke();
-  ctx.restore();
-  rivet(sx + 26, sh - 26, 6); rivet(sx + sw - 26, sh - 26, 6);
+  const skey = 'score' + sw + '|' + sh;
+  let splank = PLQ[skey];
+  if (!splank) {
+    const S = PLQ_SS, P0 = PLQ_PAD;
+    const cv = mkCanvas((sw + P0 * 2) * S, (sh + 20 + P0 * 2) * S);
+    const g = cv.getContext('2d');
+    g.scale(S, S); g.translate(P0, P0 + 20);
+    const plank = () => {
+      g.beginPath();
+      g.moveTo(0, -20); g.lineTo(sw, -20);
+      g.lineTo(sw, sh - 34); g.arcTo(sw, sh, sw - 34, sh, 34);
+      g.lineTo(34, sh); g.arcTo(0, sh, 0, sh - 34, 34);
+      g.closePath();
+    };
+    g.save();
+    g.shadowColor = 'rgba(4,10,22,.6)'; g.shadowBlur = 22; g.shadowOffsetY = 8;
+    plank();
+    let gr = g.createLinearGradient(0, 0, 0, sh);
+    gr.addColorStop(0, C.wood.lit); gr.addColorStop(.34, C.wood.base);
+    gr.addColorStop(.74, C.wood.mid); gr.addColorStop(1, C.wood.dark);
+    g.fillStyle = gr; g.fill();
+    g.restore();
+    plank(); g.lineWidth = 6; g.strokeStyle = C.wood.ink; g.stroke();
+    const ep = 14;
+    const face = () => {
+      g.beginPath();
+      g.moveTo(ep, -20); g.lineTo(sw - ep, -20);
+      g.lineTo(sw - ep, sh - ep - 22); g.arcTo(sw - ep, sh - ep, sw - ep - 22, sh - ep, 22);
+      g.lineTo(ep + 22, sh - ep); g.arcTo(ep, sh - ep, ep, sh - ep - 22, 22);
+      g.closePath();
+    };
+    face();
+    gr = g.createLinearGradient(0, 0, 0, sh);
+    gr.addColorStop(0, C.enamel[0]); gr.addColorStop(1, C.enamel[1]);
+    g.fillStyle = gr; g.fill();
+    g.save(); face(); g.clip();
+    gr = g.createLinearGradient(0, 0, 0, sh * .58);
+    gr.addColorStop(0, 'rgba(255,255,255,.20)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, -20, sw, sh * .58);
+    g.restore();
+    face(); g.lineWidth = 3.5; g.strokeStyle = 'rgba(12,7,2,.5)'; g.stroke();
+    rivetOn(g, 26, sh - 26, 6); rivetOn(g, sw - 26, sh - 26, 6);
+    cv._w = sw + P0 * 2; cv._h = sh + 20 + P0 * 2;
+    splank = PLQ[skey] = cv;
+  }
+  ctx.drawImage(splank, sx - PLQ_PAD, -20 - PLQ_PAD, splank._w, splank._h);
 
   cap('SCORE', VW / 2, sh - 92, 23);
   const scPulse = 1 + G.scorePop * .13;
@@ -2331,6 +2409,23 @@ function render() {
   if (DBG.on) drawDebug();
 }
 
+/* Safety net for devices slower than anything I can profile: if play is genuinely
+   missing frames, step the render resolution down once or twice.  One-way, so it
+   can never oscillate, and it only samples while the ball is actually live.     */
+const PERF = { n: 0, sum: 0, steps: 0 };
+function perfWatch(dt) {
+  if (G.state !== 'play' || G.hint || dt > .05) return;
+  PERF.sum += dt; PERF.n++;
+  if (PERF.n < 150) return;
+  const avg = PERF.sum / PERF.n;
+  PERF.sum = 0; PERF.n = 0;
+  if (avg > .021 && PERF.steps < 2 && DPR_CAP > 1.01) {
+    PERF.steps++;
+    DPR_CAP = Math.max(1, DPR_CAP - .5);
+    resize();
+  }
+}
+
 const DBG = { on: false, fps: 60 };
 function drawDebug() {
   ctx.save();
@@ -2449,7 +2544,9 @@ function resize() {
   SAFE_T = insT / SCALE;
   SAFE_B = insB / SCALE;
 
-  DPR = Math.min(3, window.devicePixelRatio || 1);
+  /* 3x on a phone means ~3 Mpx of fill per frame for artwork that is soft-edged
+     anyway.  Capping at 2 halves the pixel cost and is not visibly different. */
+  DPR = Math.min(DPR_CAP, window.devicePixelRatio || 1);
   cvs.style.width = cssW + 'px';
   cvs.style.height = cssH + 'px';
   cvs.width = Math.round(cssW * DPR);
@@ -2457,6 +2554,14 @@ function resize() {
   ctx.setTransform(DPR * SCALE, 0, 0, DPR * SCALE, 0, 0);
   ctx.imageSmoothingQuality = 'high';
 
+  /* the blurred page backdrop is a permanently composited layer — drop it the
+     moment the canvas covers the viewport, which is every phone in portrait */
+  const covered = cssW >= aw - 1 && cssH >= ah - 1;
+  const bd = document.getElementById('backdrop'), vg = document.getElementById('vig');
+  if (bd) bd.style.display = covered ? 'none' : '';
+  if (vg) vg.style.display = covered ? 'none' : '';
+
+  buildBG();
   layout();
   if (G.state === 'menu') { P.x = P.target = VW / 2; B.x = VW / 2; B.y = VH * .5; }
 }
@@ -2476,6 +2581,7 @@ function frame(ts) {
   last = ts;
   if (dt > 0.1) dt = 0.1;
   DBG.fps = DBG.fps * .92 + (1 / Math.max(1e-4, dt)) * .08;
+  perfWatch(dt);
 
   if (!G.frozen) {
     /* keyboard nudge */
@@ -2587,7 +2693,8 @@ function makeBot(errPx, solve, opt) {
 }
 
 window.__PP = {
-  G, B, P, K, L, SPR,
+  G, B, P, K, L, SPR, render,
+  gpu() { return { DPR, SCALE, VW, VH, backing: cvs.width + 'x' + cvs.height }; },
   start(seed) {
     RNG = mulberry32((seed >>> 0) || 1);
     resetRun(); G.state = 'play'; G.frozen = true; G.hint = false;
