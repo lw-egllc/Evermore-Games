@@ -71,7 +71,7 @@
   #warnNeed{font-size:13px;opacity:.9;font-weight:700;}
 
   /* ---------- balance meter ---------- */
-  #meterWrap{position:absolute;bottom:104px;left:50%;transform:translateX(-50%);
+  #meterWrap{position:absolute;bottom:206px;left:50%;transform:translateX(-50%);
              width:min(70vw,340px);text-align:center;}
   #meterLabel{font-size:11px;letter-spacing:2.5px;opacity:.65;margin-bottom:5px;font-weight:800;}
   #meter{position:relative;height:16px;background:rgba(10,13,22,.62);
@@ -90,7 +90,7 @@
   #meter.danger #meterMark{background:var(--hot);}
 
   /* ---------- action buttons ---------- */
-  .abtn{position:absolute;bottom:26px;width:82px;height:82px;border-radius:50%;
+  .abtn{position:absolute;bottom:28px;width:82px;height:82px;border-radius:50%;
         background:rgba(255,255,255,.14);border:3px solid rgba(255,255,255,.4);
         backdrop-filter:blur(7px);pointer-events:auto;display:flex;flex-direction:column;
         align-items:center;justify-content:center;font-weight:900;font-size:12px;
@@ -108,12 +108,57 @@
              background:radial-gradient(ellipse at center,transparent 38%,rgba(255,30,45,.72) 100%);
              transition:opacity .08s linear;}
 
+  /* ---------- balance slider ---------- */
+  /* Sits between the two action buttons so a thumb reaches it naturally, and
+     the whole canvas maps onto it ‚Äî you never have to hit the track exactly. */
+  /* Full width, ABOVE the buttons. Squeezed between them it was only ~150px
+     on a 375px phone ‚Äî 75px of travel per side, far too cramped to balance
+     with. Above them it gets the whole screen width, and since the entire
+     canvas maps onto the track you can slide anywhere, not just on it. */
+  #slideWrap{position:absolute;left:16px;right:16px;bottom:126px;text-align:center;}
+  #slideHint{font-size:10px;letter-spacing:3px;opacity:.55;font-weight:800;
+             margin-bottom:6px;transition:opacity .4s;}
+  #slideTrack{position:relative;height:30px;border-radius:99px;
+              background:rgba(10,13,22,.55);border:2px solid rgba(255,255,255,.22);
+              backdrop-filter:blur(7px);}
+  #slideTrack::before{content:'';position:absolute;left:50%;top:5px;bottom:5px;
+                      width:2px;margin-left:-1px;background:rgba(255,255,255,.28);}
+  #slideTrack.active{border-color:rgba(125,211,252,.75);
+                     box-shadow:0 0 16px rgba(125,211,252,.35);}
+  /* the pole itself */
+  #slideHandle{position:absolute;top:50%;left:50%;width:44px;height:44px;
+               transform:translate(-50%,-50%);border-radius:99px;
+               background:var(--gold);border:3px solid var(--ink);
+               box-shadow:0 3px 0 rgba(0,0,0,.35);}
+  /* ghost showing where the thumb is asking it to go */
+  #slideTarget{position:absolute;top:50%;left:50%;width:20px;height:20px;
+               transform:translate(-50%,-50%);border-radius:99px;opacity:0;
+               background:rgba(255,255,255,.55);transition:opacity .15s;}
+
+  /* Portrait: the walker sits dead centre, so anything in the middle of the
+     screen lands on them. Group the meter down with the slider (state next to
+     the control that changes it) and drop the label, which was printing
+     across the character's face. */
+  @media (max-aspect-ratio:3/4){
+    #meterLabel{display:none;}
+    #meterWrap{bottom:186px;width:min(84vw,360px);}
+    #toasts{bottom:250px;}
+  }
+
+  @media (max-height:700px){
+    .abtn{width:68px;height:68px;bottom:20px;}
+    #slideWrap{bottom:104px;}
+    #meterWrap{bottom:178px;}
+    #toasts{bottom:236px;}
+    #slideHint{margin-bottom:3px;}
+  }
+
   #damage{position:absolute;inset:0;background:radial-gradient(ellipse at center,
           transparent 42%, rgba(255,40,50,.55) 100%);opacity:0;}
   #damage.on{animation:dmg .4s ease-out;}
   @keyframes dmg{from{opacity:1;}to{opacity:0;}}
 
-  #toasts{position:absolute;bottom:190px;left:50%;transform:translateX(-50%);
+  #toasts{position:absolute;bottom:272px;left:50%;transform:translateX(-50%);
           display:flex;flex-direction:column-reverse;align-items:center;gap:3px;}
   .toast{font-size:19px;font-weight:900;letter-spacing:.6px;color:var(--mint);
          text-shadow:0 3px 0 rgba(0,0,0,.4);animation:rise 1s ease-out forwards;white-space:nowrap;}
@@ -190,6 +235,14 @@
     <div class="abtn" id="btnDuck"><span>‚§ì</span>DUCK</div>
     <div class="abtn" id="btnJump"><span>‚§í</span>JUMP</div>
 
+    <div id="slideWrap">
+      <div id="slideHint">SLIDE TO BALANCE</div>
+      <div id="slideTrack">
+        <div id="slideTarget"></div>
+        <div id="slideHandle"></div>
+      </div>
+    </div>
+
     <div id="toasts"></div>
     <div id="damage"></div>
     <div id="teeterVig"></div>
@@ -201,10 +254,10 @@
     <button class="btn" id="btnPlay">PLAY</button>
     <div id="bestTitle"></div>
     <div class="howto">
-      <b>Drag anywhere</b> to move your balance pole.<br>
-      Or <b>hold the left / right side</b> to lean.<br>
-      <b>Swipe up</b> to jump gaps ¬∑ <b>swipe down</b> to duck.<br>
-      Watch the flags and dust ‚Äî the wind warns you first.
+      <b>Slide your thumb</b> left and right to move the balance pole.<br>
+      The pole <b>lags behind you</b> ‚Äî don't overcorrect.<br>
+      <b>Swipe up</b> to jump ¬∑ <b>swipe down</b> to duck (or use the buttons).<br>
+      Coloured rings on the rope tell you what's coming.
     </div>
   </div>
 
@@ -315,11 +368,18 @@ TR.CFG = {
      drained the threat out of every obstacle in the game. */
   HIT_TEETER_COST: 0.45,
 
+  /* How far you must ACTIVELY lean away to clear a drone or falling brick.
+     These used to only check you were not leaning INTO them, which meant a
+     centred player was never punished and collected a free near-miss for
+     doing nothing ‚Äî the LEAN prompt fired every time and mattered none of
+     them. Requiring a real lean is what makes them the "commit to it and
+     hold it" obstacle they are described as. */
+  LEAN_CLEAR: 0.14,     // radians of deliberate lean away
+
   /* --- Scoring bands ---------------------------------------------------- */
   PERFECT_LINE_BAND: 0.25,  // |balance| under this = Perfect Line ticking
   CLEAN_JERK_LIMIT: 9.0,    // rad/s^3 ceiling for a correction to be "clean"
   COMBO_BREAK_BAND: 0.90,   // |balance| over this drops the combo
-  NEAR_MISS_DIST: 1.5,      // metres
 
   SCORE_PER_METRE: 10,
   SCORE_NEAR_MISS: 250,
@@ -332,7 +392,13 @@ TR.CFG = {
   DUCK_TIME: 0.62,
   JUMP_TIME: 0.72,
   JUMP_HEIGHT: 1.5,
-  REACT_GRACE: 0.10,    // input buffer so early taps aren't eaten
+
+  /* Recovery time after an action ends, before you can use it again. Without
+     it both abilities can be held permanently by spamming: a 0.72s jump with
+     a one-frame gap meant 98% airborne uptime, and permanent ducking makes
+     every DUCK obstacle free. The timing window IS the obstacle, so the
+     ability has to have downtime. */
+  ACTION_COOLDOWN: 0.42,
 };
 
 /* --- Difficulty tiers -----------------------------------------------------
@@ -365,6 +431,28 @@ TR.TIERS = [
     ropeModes: 3, windMax: 1.00, gustRate: 0.46, obstacleRate: 0.58,
     walkSpeed: 6.6, spanLength: 120, ropeRadius: 0.022, storm: 1.0 },
 ];
+
+/* --- Quality budget -------------------------------------------------------
+   Phones are the target platform, and the desktop budget (90 buildings, 900
+   rain points, 2x pixel ratio) is far too heavy for a mid-range one ‚Äî the
+   storm tiers are the worst case because rain and fog land at the same time
+   as the highest obstacle density. Detect once and scale the scene. */
+TR.detectQuality = function () {
+  if (typeof window === 'undefined') {
+    return { mobile: false, pixelRatio: 2.0, buildings: 90, ropeSeg: 110, dust: 420, rain: 900, farBuildings: 70 };
+  }
+  var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  /* Fall back to screen size when the window reports nothing useful: some
+     embed and just-loaded contexts hand back innerWidth 0, which would read
+     as "very narrow" and silently force every desktop into mobile quality. */
+  var w = window.innerWidth || (window.screen && window.screen.width) || 1280;
+  var h = window.innerHeight || (window.screen && window.screen.height) || 800;
+  var narrow = Math.min(w, h) < 820;
+  var mobile = coarse || narrow;
+  return mobile
+    ? { mobile: true,  pixelRatio: 1.5, buildings: 46, ropeSeg: 64, dust: 170, rain: 320, farBuildings: 40 }
+    : { mobile: false, pixelRatio: 2.0, buildings: 90, ropeSeg: 110, dust: 420, rain: 900, farBuildings: 70 };
+};
 
 TR.lerp = function (a, b, t) { return a + (b - a) * t; };
 TR.clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
@@ -468,6 +556,26 @@ TR.Balance.prototype.setInput = function (x) {
   this.input = TR.clamp(x, -1, 1);
 };
 
+/* Burn or drain the recovery clock for one sub-step. Shared by the grounded
+   and airborne paths so a jump cannot pause it. grip defaults to 1 in the air,
+   where there is no rope to grip in the first place. */
+TR.Balance.prototype._accrueTeeter = function (h, env, C, grip) {
+  var out = Math.abs(this.theta) / env.fallAngle;
+  var depth = out > C.TEETER_BAND
+    ? TR.clamp((out - C.TEETER_BAND) / (1 - C.TEETER_BAND), 0, 1)
+    : 0;
+  if (depth > 0) {
+    this.teeter += h * (0.55 + 0.85 * depth);
+  } else {
+    /* Recovering your footing is a grip action, so ice slows the drain as
+       well as the fight-back drag ‚Äî and in mid-air you cannot recover at all,
+       so the drain is disabled entirely. */
+    if (grip === undefined) return;
+    this.teeter -= h * C.TEETER_RECOVER * grip;
+    if (this.teeter < 0) this.teeter = 0;
+  }
+};
+
 /* env = {
      instability, fallAngle,   // from the difficulty tier
      wind,                     // -1..1+, signed, from WindSystem
@@ -491,8 +599,22 @@ TR.Balance.prototype.step = function (dt, env) {
     if (this.poleX > C.POLE_MAX) { this.poleX = C.POLE_MAX; if (this.poleV > 0) this.poleV = 0; }
     if (this.poleX < -C.POLE_MAX) { this.poleX = -C.POLE_MAX; if (this.poleV < 0) this.poleV = 0; }
 
-    /* While airborne the pole still swings but cannot torque you. */
-    if (env.locked) continue;
+    /* Airborne: your feet are off the rope, so nothing can torque you ‚Äî no
+       gravity through the contact point, no wind purchase, no pole. But you
+       DO keep rotating at whatever rate you left with, and the teeter clock
+       keeps running, because leaving the ground does not un-lose your balance.
+
+       Skipping the whole step instead (the original behaviour) froze theta,
+       omega AND the clock, which made jumping a full invulnerability frame.
+       With a ~0.7s jump and no cooldown that meant spamming jump survived
+       EXPERT indefinitely with zero balance input ‚Äî 98% airborne, and ~40x
+       the score of doing nothing. Jumping must preserve your peril, not
+       erase it. */
+    if (env.locked) {
+      this.theta += this.omega * h;
+      this._accrueTeeter(h, env, C);
+      continue;
+    }
 
     var alpha = 0;
 
@@ -548,15 +670,7 @@ TR.Balance.prototype.step = function (dt, env) {
        Burn rate scales with how far out you are, so a lurch to the edge of
        the band is survivable a good while while a deep one gives you well
        under a second. Done per sub-step so it is framerate independent. */
-    if (depth > 0) {
-      this.teeter += h * (0.55 + 0.85 * depth);
-    } else {
-      /* Recovering your footing is a grip action too, so ice slows the drain
-         as well as the fight-back drag. Together those are what make an icy
-         stretch genuinely different rather than just visually blue. */
-      this.teeter -= h * C.TEETER_RECOVER * grip;
-      if (this.teeter < 0) this.teeter = 0;
-    }
+    this._accrueTeeter(h, env, C, grip);
 
     // Jerk, for the "Clean Balance" bonus: smooth corrections score, panic
     // stabs do not.
@@ -1127,9 +1241,10 @@ function canvasTex(w, h, draw) {
   return t;
 }
 
-TR.World = function (scene, renderer) {
+TR.World = function (scene, renderer, quality) {
   this.scene = scene;
   this.renderer = renderer;
+  this.Q = quality || TR.detectQuality();
   this.storm = 0;
   this.t = 0;
   this.flashT = 0;
@@ -1175,8 +1290,44 @@ TR.World = function (scene, renderer) {
   this._buildSkyline();
   this._buildRope();
   this._buildClouds();
+  this._buildFlags();
   this._buildParticles();
   this._buildRain();
+};
+
+/* --- rooftop flags -------------------------------------------------------
+   The spec's wind cue list is clouds / leaves / flags / dust / audio, and
+   flags were the one never built ‚Äî three comments in this codebase claimed
+   they existed. They matter because they are the only cue that reads wind
+   DIRECTION unambiguously at a glance: a flag streams the way the wind
+   blows, whereas dust needs you to track motion and clouds are too slow. */
+TR.World.prototype._buildFlags = function () {
+  this.flags = [];
+  var poleGeo = new THREE.CylinderGeometry(0.12, 0.12, 9, 5);
+  var poleMat = new THREE.MeshLambertMaterial({ color: 0xb9c2d0, flatShading: true });
+  var clothGeo = new THREE.PlaneGeometry(3.4, 2.0, 6, 1);
+  var n = this.Q.mobile ? 6 : 10;
+  for (var i = 0; i < n; i++) {
+    var g = new THREE.Group();
+    var pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.y = 4.5;
+    g.add(pole);
+    var pivot = new THREE.Group();
+    pivot.position.y = 8.2;
+    g.add(pivot);
+    var cloth = new THREE.Mesh(clothGeo, new THREE.MeshLambertMaterial({
+      color: i % 2 ? 0xff5a5f : 0xffd23f, side: THREE.DoubleSide, flatShading: true
+    }));
+    /* Anchored at the pole edge so it pivots from the mast, not its middle. */
+    cloth.position.x = 1.7;
+    pivot.add(cloth);
+    g.pivot = pivot;
+    g.cloth = cloth;
+    g.side = i % 2 ? 1 : -1;
+    g.visible = false;
+    this.scene.add(g);
+    this.flags.push(g);
+  }
 };
 
 /* --- skyline -------------------------------------------------------------
@@ -1202,7 +1353,7 @@ TR.World.prototype._buildSkyline = function () {
   var geo = new THREE.BoxGeometry(1, 1, 1);
   var mat = new THREE.MeshLambertMaterial({ map: winTex, flatShading: true });
 
-  this.NEAR = 90;
+  this.NEAR = this.Q.buildings;
   this.buildings = new THREE.InstancedMesh(geo, mat, this.NEAR);
   this.buildings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   this.buildings.frustumCulled = false;
@@ -1213,14 +1364,15 @@ TR.World.prototype._buildSkyline = function () {
       side: i % 2 ? 1 : -1,
       x: 0, z: 0, w: 0, d: 0, h: 0
     });
-    this._recycleBuilding(i, -200 + i * 26);
+    this._recycleBuilding(i, -200 + i * (520 / this.NEAR));
   }
 
   /* Far bank ‚Äî never moves, just parallax scenery. */
-  var far = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0x8b9ab4, flatShading: true }), 70);
+  var FAR = this.Q.farBuildings;
+  var far = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0x8b9ab4, flatShading: true }), FAR);
   var m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-  for (var j = 0; j < 70; j++) {
-    var ang = (j / 70) * Math.PI * 2;
+  for (var j = 0; j < FAR; j++) {
+    var ang = (j / FAR) * Math.PI * 2;
     var rad = 240 + Math.random() * 260;
     var hh = 60 + Math.random() * 190;
     p.set(Math.cos(ang) * rad, -hh / 2 + 6, Math.sin(ang) * rad);
@@ -1259,7 +1411,7 @@ TR.World.prototype._writeBuilding = function (i) {
    A tube built once and deformed in place every frame. Rebuilding
    TubeGeometry each frame would allocate ~100KB per frame and stutter. */
 TR.World.prototype._buildRope = function () {
-  this.RSEG = 110;   // rings along the span
+  this.RSEG = this.Q.ropeSeg;   // rings along the span
   this.RRAD = 6;     // sides
   var verts = (this.RSEG + 1) * this.RRAD;
   var pos = new Float32Array(verts * 3);
@@ -1338,7 +1490,7 @@ TR.World.prototype._buildClouds = function () {
    The most legible wind cue: they stream horizontally, and their speed and
    direction ARE the wind vector. */
 TR.World.prototype._buildParticles = function () {
-  var N = 420;
+  var N = this.Q.dust;
   this.PN = N;
   var pos = new Float32Array(N * 3);
   this._pVel = new Float32Array(N);
@@ -1365,7 +1517,7 @@ TR.World.prototype._buildParticles = function () {
 };
 
 TR.World.prototype._buildRain = function () {
-  var N = 900;
+  var N = this.Q.rain;
   this.RN = N;
   var pos = new Float32Array(N * 3);
   for (var i = 0; i < N; i++) {
@@ -1425,6 +1577,24 @@ TR.World.prototype.update = function (dt, wind, tier, playerZ) {
     if (cl.group.position.z < playerZ - 260) cl.group.position.z += 900;
   }
 
+  /* Flags: the clearest read on wind DIRECTION. The cloth swings to point
+     downwind and ripples harder as the wind builds, so a gust is legible from
+     the shape of the flag alone. */
+  for (var fi = 0; fi < this.flags.length; fi++) {
+    var fl = this.flags[fi];
+    if (!fl.visible || fl.position.z < playerZ - 40) {
+      /* Perch on a rooftop ahead, alternating sides of the corridor. */
+      fl.position.set(fl.side * (26 + Math.random() * 34), 0, playerZ + 70 + Math.random() * 150);
+      fl.visible = true;
+    }
+    /* Point downwind: yaw to the wind's side, and hang limp when it is calm. */
+    var limp = 1 - Math.min(1, Math.abs(w) * 2.4);
+    fl.pivot.rotation.y = (w >= 0 ? 0 : Math.PI) + w * 0.35;
+    fl.pivot.rotation.z = -0.15 - limp * 1.15 +
+                          Math.sin(this.t * (3 + Math.abs(w) * 9) + fi) * 0.10 * (1 - limp);
+    fl.cloth.rotation.y = Math.sin(this.t * (4 + Math.abs(w) * 11) + fi * 1.7) * 0.22 * (1 - limp);
+  }
+
   /* Dust: opacity and speed both track wind magnitude, so a gust is visible
      before it is felt. */
   var dp = this.dust.geometry.attributes.position.array;
@@ -1465,6 +1635,7 @@ TR.World.prototype.shiftZ = function (dz) {
   var i;
   for (i = 0; i < this.NEAR; i++) { this._bData[i].z -= dz; this._writeBuilding(i); }
   for (i = 0; i < this.clouds.length; i++) this.clouds[i].group.position.z -= dz;
+  for (i = 0; i < this.flags.length; i++) this.flags[i].position.z -= dz;
   var dp = this.dust.geometry.attributes.position.array;
   for (i = 0; i < this.PN; i++) dp[i * 3 + 2] -= dz;
   this.dust.geometry.attributes.position.needsUpdate = true;
@@ -1498,6 +1669,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = TR;
    warning is live, and it is never shorter than a human reaction.
    ===========================================================================*/
 var TR = (typeof TR !== 'undefined') ? TR : {};
+/* Same shim as physics/rope/wind: under node, attach to the shared TR from
+   config rather than starting a private one, so test/obstacles.test.js can
+   drive this module headlessly against a three.js stub. No-op in the browser,
+   where the build already hands each module the shared TR. */
+if (typeof require !== 'undefined' && typeof TR.CFG === 'undefined') {
+  TR = require('./config.js');
+}
 
 TR.OBSTACLE_SPECS = {
   bird:      { minTier: 0, weight: 3.0, leadTime: 1.10, needs: 'DUCK',  label: 'BIRD' },
@@ -1520,24 +1698,45 @@ TR.Obstacles = function (scene) {
 
 TR.Obstacles.prototype.clear = function () {
   for (var i = 0; i < this.list.length; i++) {
-    if (this.list[i].mesh) this.pool.remove(this.list[i].mesh);
-    if (this.list[i].ring) this.pool.remove(this.list[i].ring);
+    var o = this.list[i];
+    if (o.mesh) this.pool.remove(o.mesh);
+    if (o.ring) {
+      this.pool.remove(o.ring);
+      /* Everything else shares cached geometry/materials, but ring materials
+         are per-instance so they must be released explicitly. */
+      o.ring.ring.material.dispose();
+      o.ring.halo.material.dispose();
+    }
   }
   this.list = [];
 };
 
-/* --- meshes -------------------------------------------------------------- */
-function flat(c) { return new THREE.MeshLambertMaterial({ color: c, flatShading: true }); }
+/* --- meshes ---------------------------------------------------------------
+   Geometries and materials are CACHED and shared across every instance.
+   Obstacles are rebuilt from scratch on every span, and three.js never
+   garbage-collects GPU resources ‚Äî detaching a mesh from the scene graph
+   frees nothing. Allocating per spawn leaked ~4.6 geometries per span
+   forever, which on a phone is a slow crash rather than a slow leak. */
+var _geo = {}, _mat = {};
+function G(key, make) { return _geo[key] || (_geo[key] = make()); }
+function flat(c) {
+  var k = 'f' + c;
+  return _mat[k] || (_mat[k] = new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+}
+function basic(c) {
+  var k = 'b' + c;
+  return _mat[k] || (_mat[k] = new THREE.MeshBasicMaterial({ color: c }));
+}
 
 function makeBird() {
   var g = new THREE.Group();
-  var body = new THREE.Mesh(new THREE.SphereGeometry(0.38, 8, 6), flat(0x2b3340));
+  var body = new THREE.Mesh(G('bird.body', function () { return new THREE.SphereGeometry(0.38, 8, 6); }), flat(0x2b3340));
   body.scale.set(1.5, 0.85, 0.9);
   g.add(body);
-  var beak = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.32, 5), flat(0xffb43d));
+  var beak = new THREE.Mesh(G('bird.beak', function () { return new THREE.ConeGeometry(0.10, 0.32, 5); }), flat(0xffb43d));
   beak.rotation.x = -Math.PI / 2; beak.position.z = -0.38;
   g.add(beak);
-  var wingGeo = new THREE.BoxGeometry(1.25, 0.07, 0.52);
+  var wingGeo = G('bird.wing', function () { return new THREE.BoxGeometry(1.25, 0.07, 0.52); });
   g.wings = [];
   [-1, 1].forEach(function (s) {
     var w = new THREE.Mesh(wingGeo, flat(0x4c5768));
@@ -1549,17 +1748,17 @@ function makeBird() {
 
 function makeDrone() {
   var g = new THREE.Group();
-  var body = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.24, 0.62), flat(0x2b3038));
-  g.add(body);
-  var eye = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+  g.add(new THREE.Mesh(G('drone.body', function () { return new THREE.BoxGeometry(0.62, 0.24, 0.62); }), flat(0x2b3038)));
+  var eye = new THREE.Mesh(G('drone.eye', function () { return new THREE.SphereGeometry(0.11, 8, 6); }), basic(0xff3b30));
   eye.position.set(0, -0.10, -0.28);
   g.add(eye);
+  var armGeo = G('drone.arm', function () { return new THREE.BoxGeometry(0.10, 0.06, 0.10); });
+  var rotGeo = G('drone.rotor', function () { return new THREE.CylinderGeometry(0.26, 0.26, 0.02, 8); });
   g.rotors = [];
   [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(function (c) {
-    var arm = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.06, 0.10), flat(0x4a515c));
+    var arm = new THREE.Mesh(armGeo, flat(0x4a515c));
     arm.position.set(c[0] * 0.42, 0.06, c[1] * 0.42);
-    var rot = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.02, 8), flat(0x9aa3b0));
+    var rot = new THREE.Mesh(rotGeo, flat(0x9aa3b0));
     rot.position.set(c[0] * 0.42, 0.16, c[1] * 0.42);
     g.add(arm, rot); g.rotors.push(rot);
   });
@@ -1568,18 +1767,19 @@ function makeDrone() {
 
 function makeSign() {
   var g = new THREE.Group();
-  var bar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6), flat(0x555b66));
+  var bar = new THREE.Mesh(G('sign.bar', function () { return new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6); }), flat(0x555b66));
   bar.rotation.z = Math.PI / 2; bar.position.y = 1.9;
   g.add(bar);
   var pivot = new THREE.Group();
   pivot.position.y = 1.9;
   g.add(pivot);
+  var chainGeo = G('sign.chain', function () { return new THREE.CylinderGeometry(0.02, 0.02, 0.75, 4); });
   [-0.62, 0.62].forEach(function (x) {
-    var ch = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.75, 4), flat(0x777d88));
+    var ch = new THREE.Mesh(chainGeo, flat(0x777d88));
     ch.position.set(x, -0.38, 0);
     pivot.add(ch);
   });
-  var board = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.85, 0.10), flat(0xe8483c));
+  var board = new THREE.Mesh(G('sign.board', function () { return new THREE.BoxGeometry(1.8, 0.85, 0.10); }), flat(0xe8483c));
   board.position.y = -1.18;
   pivot.add(board);
   g.pivot = pivot;
@@ -1588,20 +1788,19 @@ function makeSign() {
 
 function makeDebris() {
   var g = new THREE.Group();
-  var b = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.30), flat(0xa8563c));
-  g.add(b);
+  g.add(new THREE.Mesh(G('debris.brick', function () { return new THREE.BoxGeometry(0.42, 0.26, 0.30); }), flat(0xa8563c)));
   return g;
 }
 
 function makeHeli() {
   var g = new THREE.Group();
-  var body = new THREE.Mesh(new THREE.CapsuleGeometry(0.85, 1.5, 3, 8), flat(0x2e6f4e));
+  var body = new THREE.Mesh(G('heli.body', function () { return new THREE.CapsuleGeometry(0.85, 1.5, 3, 8); }), flat(0x2e6f4e));
   body.rotation.z = Math.PI / 2;
   g.add(body);
-  var tail = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.24, 0.24), flat(0x2e6f4e));
+  var tail = new THREE.Mesh(G('heli.tail', function () { return new THREE.BoxGeometry(3.0, 0.24, 0.24); }), flat(0x2e6f4e));
   tail.position.x = 2.0;
   g.add(tail);
-  var rotor = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.08, 0.42), flat(0x333a44));
+  var rotor = new THREE.Mesh(G('heli.rotor', function () { return new THREE.BoxGeometry(7.5, 0.08, 0.42); }), flat(0x333a44));
   rotor.position.y = 1.05;
   g.add(rotor);
   g.rotor = rotor;
@@ -1610,13 +1809,13 @@ function makeHeli() {
 
 function makeCrane() {
   var g = new THREE.Group();
-  var mast = new THREE.Mesh(new THREE.BoxGeometry(0.7, 26, 0.7), flat(0xf2c14e));
+  var mast = new THREE.Mesh(G('crane.mast', function () { return new THREE.BoxGeometry(0.7, 26, 0.7); }), flat(0xf2c14e));
   mast.position.y = -13;
   g.add(mast);
-  var jib = new THREE.Mesh(new THREE.BoxGeometry(20, 0.6, 0.6), flat(0xf2c14e));
+  var jib = new THREE.Mesh(G('crane.jib', function () { return new THREE.BoxGeometry(20, 0.6, 0.6); }), flat(0xf2c14e));
   jib.position.set(-6, 0, 0);
   g.add(jib);
-  var cable = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 9, 4), flat(0x3a3f48));
+  var cable = new THREE.Mesh(G('crane.cable', function () { return new THREE.CylinderGeometry(0.04, 0.04, 9, 4); }), flat(0x3a3f48));
   cable.position.set(-11, -4.5, 0);
   g.add(cable);
   g.cable = cable;
@@ -1666,15 +1865,17 @@ TR.ACTION_COLOUR = { DUCK: 0xffb020, JUMP: 0x51e08a, LEAN: 0xc389ff };
 
 function makeActionRing(colour) {
   var g = new THREE.Group();
+  /* Geometry is shared; the MATERIALS are per-instance because each ring
+     fades independently with its own distance. clear() disposes them. */
   var ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.62, 0.075, 6, 18),
+    G('ring.core', function () { return new THREE.TorusGeometry(0.62, 0.075, 6, 18); }),
     new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.95 })
   );
   g.add(ring);
   /* A second, larger ghost ring that pulses ‚Äî motion on the marker reads at
      distances where the ring itself is only a few pixels across. */
   var halo = new THREE.Mesh(
-    new THREE.TorusGeometry(0.62, 0.035, 6, 18),
+    G('ring.halo', function () { return new THREE.TorusGeometry(0.62, 0.035, 6, 18); }),
     new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.4 })
   );
   g.add(halo);
@@ -1700,10 +1901,23 @@ TR.Obstacles.prototype._spawn = function (type, u, rope, spanLength, tier) {
   } else if (type === 'sign') {
     o.mesh = makeSign();
     o.swingPhase = Math.random() * Math.PI * 2;
+    /* Decide ONCE whether this sign will be in the way. Walk speed is
+       constant, so the arrival time ‚Äî and therefore the swing phase on
+       arrival ‚Äî is knowable at spawn. Re-deriving it per frame from a live
+       eta let rounding flip the answer near the 0.45 threshold, so a sign
+       could warn and then resolve harmless. */
+    var arriveT = (u * spanLength) / Math.max(tier.walkSpeed, 0.001);
+    o.lowAtArrival = Math.abs(Math.sin(arriveT * 1.7 + o.swingPhase)) < 0.45;
   } else if (type === 'debris') {
     o.mesh = makeDebris();
     o.lateral = o.side * (0.55 + Math.random() * 0.5);
-    o.fallY = 22;
+    /* Start height derived from the fall so the brick lands exactly as you
+       arrive. It was hardcoded to 22m while only falling for leadTime
+       (1.25s x 13m/s = 16.25m), so it was still 5.75m overhead at impact ‚Äî
+       outside the landing window, meaning debris could never hit OR near-miss.
+       The obstacle existed but did nothing at all. */
+    o.fallSpeed = 13;
+    o.fallY = o.fallSpeed * spec.leadTime + 0.8;
   } else if (type === 'heli') {
     o.mesh = makeHeli();
   } else if (type === 'crane') {
@@ -1733,6 +1947,14 @@ TR.Obstacles.prototype._spawn = function (type, u, rope, spanLength, tier) {
   this.list.push(o);
 };
 
+/* Where the sign's board will be when the player reaches it. The swing is
+   deterministic, so this is knowable in advance ‚Äî which matters because the
+   board is only dangerous at the bottom of its arc. Without predicting it the
+   game showed a DUCK ring for every sign while only 28% were actually
+   dangerous, so the prompt was noise 72% of the time and ducking correctly
+   was rewarded with nothing. */
+function signWillBeLow(o) { return !!o.lowAtArrival; }
+
 /* --- per-frame -----------------------------------------------------------
    ctx = { dt, playerU, playerZ, spanLength, walkSpeed, balance, theta,
            ducking, airborne, rope, wind, world, emit } */
@@ -1748,8 +1970,11 @@ TR.Obstacles.prototype.update = function (ctx) {
     var metres = du * ctx.spanLength;
     var eta = metres / Math.max(ctx.walkSpeed, 0.001);
 
-    /* Warning window. */
-    if (!o.resolved && eta > 0 && eta < o.spec.leadTime) {
+    /* Warning window. A sign that will be swung clear when you arrive is not
+       a threat, so it neither warns nor shows a ring. */
+    var threatens = (o.type !== 'sign') || signWillBeLow(o);
+    o.threatens = threatens;
+    if (!o.resolved && threatens && eta > 0 && eta < o.spec.leadTime) {
       if (eta < nearestWarn) {
         nearestWarn = eta;
         this.warning = {
@@ -1786,7 +2011,7 @@ TR.Obstacles.prototype._animate = function (o, ctx, du, metres, eta) {
   /* Rope collar: clamped to the rope so its size and spacing give an honest
      read on distance, and it pulses harder the closer it gets. */
   if (o.ring) {
-    var show = !o.resolved && metres > -1.5 && metres < 46;
+    var show = !o.resolved && o.threatens !== false && metres > -1.5 && metres < 46;
     o.ring.visible = show;
     if (show) {
       var ru = TR.clamp(o.u, 0, 1);
@@ -1819,10 +2044,10 @@ TR.Obstacles.prototype._animate = function (o, ctx, du, metres, eta) {
     for (var r = 0; r < o.mesh.rotors.length; r++) o.mesh.rotors[r].rotation.y += dt * 42;
   } else if (o.type === 'sign') {
     o.mesh.position.x = ctx.rope.lateralAt(o.u);
-    o.mesh.pivot.rotation.z = Math.sin(o.t * 1.7 + o.swingPhase) * 0.75;
+    o.mesh.pivot.rotation.z = Math.sin(o.t * 1.7 + o.swingPhase) * (o.lowAtArrival ? 0.42 : 0.95);
   } else if (o.type === 'debris') {
     /* Starts falling once it is inside the warning window. */
-    if (o.warned) o.fallY -= dt * 13;
+    if (o.warned) o.fallY -= dt * o.fallSpeed;
     o.mesh.position.set(ctx.rope.lateralAt(o.u) + o.lateral, Math.max(o.fallY, -30), o.z);
     o.mesh.rotation.x += dt * 4.5; o.mesh.rotation.z += dt * 3.1;
   } else if (o.type === 'heli') {
@@ -1833,6 +2058,13 @@ TR.Obstacles.prototype._animate = function (o, ctx, du, metres, eta) {
     o.mesh.cable.rotation.z = Math.sin(o.t * 1.3) * 0.2;
   }
 };
+
+/* Did the player actually lean clear of a side-hazard? Positive means leaning
+   AWAY from it by that many radians. */
+function leanedClear(o, ctx) {
+  var away = (o.lateral > 0 ? -1 : 1) * ctx.theta;
+  return away > TR.CFG.LEAN_CLEAR;
+}
 
 TR.Obstacles.prototype._resolve = function (o, ctx) {
   var C = TR.CFG;
@@ -1849,41 +2081,33 @@ TR.Obstacles.prototype._resolve = function (o, ctx) {
       break;
 
     case 'sign':
-      /* The board is only dangerous at the bottom of its arc. */
-      var swing = Math.abs(Math.sin(o.t * 1.7 + o.swingPhase));
-      var low = swing < 0.45;
-      if (!low || ctx.ducking) {
-        o.nearMiss = low;
-        if (low) ctx.emit('nearMiss', o);
+      /* Only dangerous at the bottom of its arc ‚Äî and if it is swung high it
+         was never flagged, so passing under it is simply uneventful. */
+      if (!signWillBeLow(o)) break;
+      if (ctx.ducking || ctx.airborne) {
+        ctx.emit('nearMiss', o);
       } else {
-        o.hit = true;
         ctx.emit('hit', { obstacle: o, impulse: 1.9 * o.side });
       }
       break;
 
     case 'debris':
-      /* Dangerous only if it is still falling through your level and you are
-         leaning into its column. */
-      var landing = o.fallY < 3 && o.fallY > -1.5;
-      var leaningInto = (ctx.theta * o.lateral) > 0.10;
-      if (landing && leaningInto && !ctx.airborne) {
-        o.hit = true;
-        ctx.emit('hit', { obstacle: o, impulse: 1.7 * -o.side });
-      } else if (landing) {
-        o.nearMiss = true;
+      /* Only in play while it is actually falling through your level. */
+      if (!(o.fallY < 3 && o.fallY > -1.5)) break;
+      if (ctx.airborne || leanedClear(o, ctx)) {
         ctx.emit('nearMiss', o);
+      } else {
+        ctx.emit('hit', { obstacle: o, impulse: 1.7 * -o.side });
       }
       break;
 
     case 'drone':
-      /* You must be leaning AWAY from it. Leaning into it clips you. */
-      var into = (ctx.theta * o.lateral) > 0.06;
-      if (into && !ctx.airborne) {
-        o.hit = true;
-        ctx.emit('hit', { obstacle: o, impulse: 1.6 * -o.lateral });
-      } else {
-        o.nearMiss = true;
+      /* It hovers in your path: you have to lean out around it and hold that
+         lean through the pass. Standing centred clips you. */
+      if (ctx.airborne || leanedClear(o, ctx)) {
         ctx.emit('nearMiss', o);
+      } else {
+        ctx.emit('hit', { obstacle: o, impulse: 1.6 * -o.lateral });
       }
       break;
 
@@ -2067,6 +2291,8 @@ TR.UI = function () {
     windArrow: $('windArrow'), windBar: $('windBar'),
     warn: $('warn'), warnLabel: $('warnLabel'), warnNeed: $('warnNeed'),
     warnBar: $('warnBar'),
+    slideTrack: $('slideTrack'), slideHandle: $('slideHandle'),
+    slideTarget: $('slideTarget'), slideHint: $('slideHint'),
     toasts: $('toasts'), damage: $('damage'),
     best: $('bestTitle'),
     ovScore: $('ovScore'), ovBest: $('ovBest'), ovNew: $('ovNew'),
@@ -2173,6 +2399,16 @@ TR.UI.prototype.update = function (s) {
   this.el.meterFill.style.width = (danger * 50) + '%';
   this.el.meterFill.style.left = b < 0 ? (50 - danger * 50) + '%' : '50%';
 
+  /* Balance slider: the handle is the POLE, the ghost is your thumb. The
+     lag between them is the momentum system made visible. */
+  var pole = Math.max(-1, Math.min(1, s.pole || 0));
+  var tgt = Math.max(-1, Math.min(1, s.target || 0));
+  this.el.slideHandle.style.left = (50 + pole * 46) + '%';
+  this.el.slideTarget.style.left = (50 + tgt * 46) + '%';
+  this.el.slideTarget.style.opacity = s.sliding ? 0.85 : 0;
+  this.el.slideTrack.classList.toggle('active', !!s.sliding);
+  if (s.sliding && !this._slid) { this._slid = true; this.el.slideHint.style.opacity = 0; }
+
   /* Wind: arrow direction and length. */
   var w = Math.max(-1.5, Math.min(1.5, s.wind));
   this.el.windArrow.textContent = w < -0.03 ? '‚Üê' : (w > 0.03 ? '‚Üí' : '‚Ä¢');
@@ -2252,13 +2488,14 @@ TR.Game.prototype._initThree = function () {
   var r = this.renderer = new THREE.WebGLRenderer({
     canvas: this.canvas, antialias: true, powerPreference: 'high-performance'
   });
-  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  this.Q = TR.detectQuality();
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.Q.pixelRatio));
   r.outputColorSpace = THREE.SRGBColorSpace;
 
   this.scene = new THREE.Scene();
   this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 2000);
 
-  this.world = new TR.World(this.scene, r);
+  this.world = new TR.World(this.scene, r, this.Q);
   this.obstacles = new TR.Obstacles(this.scene);
 
   this.char = TR.makeCharacter();
@@ -2283,63 +2520,111 @@ TR.Game.prototype._initThree = function () {
 TR.Game.prototype._resize = function () {
   var w = window.innerWidth, h = window.innerHeight;
   this.renderer.setSize(w, h, false);
-  this.camera.aspect = w / h;
+  var aspect = w / h;
+  this.camera.aspect = aspect;
+  /* three.js fov is VERTICAL, so a tall portrait phone at 62deg shows an
+     enormous amount of sky and shrinks the walker to a thumbnail. Narrow the
+     vertical fov as the frame gets taller to keep them a readable size. */
+  this.camera.fov = aspect < 0.75 ? 46 : 62;
   this.camera.updateProjectionMatrix();
 };
 
 /* --- input ---------------------------------------------------------------
-   One pointer drives the pole. A pointer that MOVES is a drag (analog pole);
-   a pointer that stays put is a hold on a screen half (digital lean). That
-   split means neither scheme has to be chosen up front ‚Äî the player's own
-   gesture picks. */
+   SLIDING BALANCE. Your thumb's horizontal position maps ABSOLUTELY onto the
+   pole: thumb at the left end of the track = pole hard left. Absolute beats
+   the old relative drag on a phone because the on-screen handle and your
+   thumb are always the same thing, so you can see the pole lagging behind
+   your finger ‚Äî which is the whole feel of the game ‚Äî instead of having to
+   infer it. Releasing lets the pole spring back to neutral.
+
+   MULTI-TOUCH is not optional here. The balance finger is claimed by
+   identifier and held until THAT finger lifts, so tapping DUCK or JUMP with
+   a second thumb cannot steal it. Reading touches[0] (the old behaviour)
+   silently handed control to whichever finger happened to be first in the
+   list, which on a phone meant every duck yanked your balance. */
 TR.Game.prototype._initInput = function () {
   var self = this;
-  this.ptr = { down: false, mode: null, startX: 0, startY: 0, x: 0, y: 0, t: 0 };
+  this.slideX = null;      // clientX of the balance finger, null = released
+  this.slideId = null;     // its touch identifier
+  this.slideStartY = 0;
   this.key = { left: false, right: false };
   this.inputAxis = 0;
 
-  function pos(e) {
-    var t = e.touches ? e.touches[0] : e;
-    return { x: t.clientX, y: t.clientY };
+  /* Measure the real track element so the mapping always matches what is
+     drawn, at any screen size or safe-area inset. */
+  this._trackRect = function () {
+    var el = document.getElementById('slideTrack');
+    if (el) {
+      var r = el.getBoundingClientRect();
+      if (r.width > 20) return r;
+    }
+    return { left: window.innerWidth * 0.10, width: window.innerWidth * 0.80 };
+  };
+
+  function tapThroughScreens() {
+    if (self.state === 'TITLE') { self.start(); return true; }
+    if (self.state === 'DEAD') { if (self.deadT > 0.8) self.start(); return true; }
+    return false;
   }
 
-  function down(e) {
-    if (self.state === 'TITLE') { self.start(); return; }
-    if (self.state === 'DEAD') { if (self.deadT > 0.8) self.start(); return; }
-    var p = pos(e);
-    self.ptr.down = true; self.ptr.mode = null;
-    self.ptr.startX = self.ptr.x = p.x;
-    self.ptr.startY = self.ptr.y = p.y;
-    self.ptr.t = 0;
-    e.preventDefault();
-  }
-  function move(e) {
-    if (!self.ptr.down) return;
-    var p = pos(e);
-    self.ptr.x = p.x; self.ptr.y = p.y;
-    var dx = p.x - self.ptr.startX, dy = p.y - self.ptr.startY;
-    if (self.ptr.mode === null && Math.abs(dx) > 11) self.ptr.mode = 'drag';
-    /* Vertical flicks are duck / jump, and they win over a horizontal drag
-       only if they are clearly vertical. */
-    if (Math.abs(dy) > 46 && Math.abs(dy) > Math.abs(dx) * 1.4) {
-      if (dy < 0) self.jump(); else self.duck();
-      self.ptr.startY = p.y;
+  function onTouchStart(e) {
+    if (tapThroughScreens()) { e.preventDefault(); return; }
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (self.slideId === null) {
+        self.slideId = t.identifier;
+        self.slideX = t.clientX;
+        self.slideStartY = t.clientY;
+        break;              // one finger balances; the rest are for buttons
+      }
     }
     e.preventDefault();
   }
-  function up(e) {
-    self.ptr.down = false; self.ptr.mode = null;
-    if (e) e.preventDefault();
+  function onTouchMove(e) {
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (t.identifier !== self.slideId) continue;
+      self.slideX = t.clientX;
+      /* A clear vertical flick still ducks or jumps, so one-thumb play works
+         without ever reaching for the buttons. */
+      var dy = t.clientY - self.slideStartY;
+      if (Math.abs(dy) > 52) {
+        if (dy < 0) self.jump(); else self.duck();
+        self.slideStartY = t.clientY;
+      }
+    }
+    e.preventDefault();
+  }
+  function onTouchEnd(e) {
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === self.slideId) {
+        self.slideId = null;
+        self.slideX = null;
+      }
+    }
   }
 
   var c = this.canvas;
-  c.addEventListener('touchstart', down, { passive: false });
-  c.addEventListener('touchmove', move, { passive: false });
-  c.addEventListener('touchend', up, { passive: false });
-  c.addEventListener('touchcancel', up, { passive: false });
-  c.addEventListener('mousedown', down);
-  window.addEventListener('mousemove', move);
-  window.addEventListener('mouseup', up);
+  c.addEventListener('touchstart', onTouchStart, { passive: false });
+  c.addEventListener('touchmove', onTouchMove, { passive: false });
+  c.addEventListener('touchend', onTouchEnd, { passive: false });
+  c.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+  /* Mouse mirrors the same absolute mapping so desktop and phone agree. */
+  c.addEventListener('mousedown', function (e) {
+    if (tapThroughScreens()) return;
+    self.slideId = 'mouse';
+    self.slideX = e.clientX;
+    self.slideStartY = e.clientY;
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (self.slideId !== 'mouse') return;
+    self.slideX = e.clientX;
+  });
+  window.addEventListener('mouseup', function () {
+    if (self.slideId !== 'mouse') return;
+    self.slideId = null; self.slideX = null;
+  });
 
   window.addEventListener('keydown', function (e) {
     if (e.repeat) return;
@@ -2365,18 +2650,13 @@ TR.Game.prototype._initInput = function () {
   this.ui.onPlay(function () { self.start(); });
 };
 
+/* Returns the SCREEN-space axis: -1 hard left, +1 hard right. update() negates
+   it into world space ‚Äî see the sign note there. */
 TR.Game.prototype._readInput = function (dt) {
   var axis = 0;
-  if (this.ptr.down) {
-    this.ptr.t += dt;
-    if (this.ptr.mode === 'drag') {
-      /* Relative drag: the pole tracks how far you have pulled from where
-         you first touched, so you can re-grip anywhere on screen. */
-      var span = window.innerWidth * 0.20;
-      axis = TR.clamp((this.ptr.x - this.ptr.startX) / span, -1, 1);
-    } else if (this.ptr.t > 0.05) {
-      axis = (this.ptr.startX < window.innerWidth * 0.5) ? -0.9 : 0.9;
-    }
+  if (this.slideX !== null) {
+    var r = this._trackRect();
+    axis = TR.clamp(((this.slideX - r.left) / Math.max(r.width, 1)) * 2 - 1, -1, 1);
   }
   if (this.key.left) axis -= 1;
   if (this.key.right) axis += 1;
@@ -2387,15 +2667,17 @@ TR.Game.prototype._readInput = function (dt) {
 /* --- actions -------------------------------------------------------------- */
 TR.Game.prototype.jump = function () {
   if (this.state !== 'PLAY') return;
-  if (this.jumpT > 0 || this.duckT > 0) return;
+  if (this.jumpT > 0 || this.duckT > 0 || this.actionCd > 0) return;
   this.jumpT = TR.CFG.JUMP_TIME;
+  this.actionCd = TR.CFG.JUMP_TIME + TR.CFG.ACTION_COOLDOWN;
   this.audio.jump();
 };
 
 TR.Game.prototype.duck = function () {
   if (this.state !== 'PLAY') return;
-  if (this.jumpT > 0) return;
+  if (this.jumpT > 0 || this.duckT > 0 || this.actionCd > 0) return;
   this.duckT = TR.CFG.DUCK_TIME;
+  this.actionCd = TR.CFG.DUCK_TIME + TR.CFG.ACTION_COOLDOWN;
   this.audio.duck();
 };
 
@@ -2414,6 +2696,7 @@ TR.Game.prototype.reset = function () {
   this.perfectTime = 0;
   this.duckT = 0;
   this.jumpT = 0;
+  this.actionCd = 0;
   this.deadT = 0;
   this.shake = 0;
   this._wasCorrecting = 0;
@@ -2520,6 +2803,7 @@ TR.Game.prototype.update = function (dt) {
 
   /* ---- timers ---- */
   this.duckT = Math.max(0, this.duckT - dt);
+  this.actionCd = Math.max(0, this.actionCd - dt);
   var wasAir = this.jumpT > 0;
   this.jumpT = Math.max(0, this.jumpT - dt);
   var airborne = this.jumpT > 0;
@@ -2828,6 +3112,12 @@ TR.Game.prototype._updateHud = function (dt) {
     balance: -this.balance.balance,
     perfect: this.balance.isPerfectLine(),
     teeter: this.balance.teeterFrac,
+    /* Both in SCREEN space. pole is where the pole actually is, target is
+       where the thumb is asking it to go ‚Äî showing the gap between them is
+       what teaches the player that the pole has inertia. */
+    pole: -this.balance.poleX,
+    target: this.inputAxis,
+    sliding: this.slideX !== null,
     tier: this.tier.name,
     wind: -this.wind.value,
     windWarning: ww ? { label: ww.label, dir: -ww.dir, type: ww.type,
