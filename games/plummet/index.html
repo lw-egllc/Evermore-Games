@@ -129,12 +129,13 @@ const elCore = document.getElementById('coreV');
 let W=0,H=0,CX=0,CY=0,S=0,DPR=1;
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, 2);
-  W = window.innerWidth; H = window.innerHeight;
+  W = Math.max(1, window.innerWidth  || 1);
+  H = Math.max(1, window.innerHeight || 1);
   cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
   cv.style.width = W+'px'; cv.style.height = H+'px';
   ctx.setTransform(DPR,0,0,DPR,0,0);
   CX = W/2; CY = H*0.5;
-  S  = Math.min(W*0.46, H*0.36);   // radius of the shaft at the pod's plane
+  S  = Math.max(1, Math.min(W*0.46, H*0.36));   // never 0: it divides the drag gain   // radius of the shaft at the pod's plane
 }
 addEventListener('resize', resize, {passive:true});
 resize();
@@ -250,12 +251,31 @@ const slowAmt = () => slowT>0 ? (1-timeScale())/(1-SLOW_MIN) : 0;
 // ───────────────────────────── hazards ─────────────────────────────
 // a hazard is a set of chords across the shaft's cross-section, plus
 // an optional deadly ring. it rushes up at you and only bites at z=0.
-function spawn(z){
-  const d = diff();
+// how close a hazard comes to a point, evaluated at an arbitrary moment in its life
+function threatAt(h, px, py, life){
+  const saved=h.life; h.life=life;
+  let m=Infinity;
+  for(const b of h.bars){
+    const g=barAt(h,b);
+    if(Math.abs(g.o)<0.995) m=Math.min(m, Math.abs(px*g.nx+py*g.ny-g.o)-BEAM_R);
+  }
+  for(const sp of h.spokes) m=Math.min(m, spokeDist(h,sp,px,py)-BEAM_R);
+  if(h.ring) m=Math.min(m, ringDist(h,px,py)-BEAM_R);
+  h.life=saved;
+  return m;
+}
+
+function buildHazard(kind, d, z){
   const h = {z, pz:z, life:0, bars:[], spokes:[], hub:0, cx:0, cy:0, nodes:false, gap:0, gapA:0,
              ang:Math.random()*6.283, spin:0, sweepA:0, sweepF:0,
              ph:Math.random()*6.283, ring:0, ringAmp:0, ringF:0};
   const flip = () => Math.random()<0.5?-1:1;
+  buildKind(h, kind, d);
+  return h;
+}
+
+function spawn(z){
+  const d = diff();
 
   const pool = ['bar','gate'];
   if(d>0.06) pool.push('bar','sweep');
@@ -286,6 +306,37 @@ function spawn(z){
     if(kind==='collar'){ sinceCollar=0; collarEvery=3+((Math.random()*3)|0); }
   }
 
+  const h = commitHazard(kind, d, z);
+  hazards.push(h);
+}
+
+// re-roll a hazard until it actually threatens where the pod is sitting.
+// Generation used to be blind, so a single fixed point survived ~27 hazards in
+// a row — standing still was the strongest line in the game.
+function commitHazard(kind, d, z){
+  const aimChance = 0.34 + 0.42*d;
+  let h = buildHazard(kind, d, z);
+  if(Math.random() > aimChance) return h;
+
+  // speed rises during the hazard's flight, so use the average, not the current
+  const arrive = z/Math.max(speed + z*0.006, 0.001);
+
+  for(let i=0;i<14;i++){
+    if(threatAt(h, pod.x, pod.y, arrive) < POD_R) return h;   // covers you: move or die
+    h = buildHazard(kind, d, z);
+  }
+
+  // Some shapes simply cannot reach where you're sitting — a collar at r=0.85
+  // can never touch a camper at r=0.3. Fall back to a chord, which can be
+  // constructed through any interior point exactly.
+  h = buildHazard('bar', d, z);
+  const a = h.ang;
+  h.bars[0].o = pod.x*Math.cos(a) + pod.y*Math.sin(a) + rnd(-0.025,0.025);
+  return h;
+}
+
+function buildKind(h, kind, d){
+  const flip = () => Math.random()<0.5?-1:1;
   switch(kind){
     case 'bar':
       h.bars=[{a:0,o:rnd(-0.65,0.65)}]; break;
@@ -359,11 +410,12 @@ function spawn(z){
     }
     case 'tracker': {                                   // aims at where you sit when it spawns
       h.ang=Math.random()*6.283;
+      // pod clamps to 0.922, so an aim clamped to 0.80 structurally missed
+      // anyone hugging the rim — the exact players it exists to punish
       const aim = pod.x*Math.cos(h.ang) + pod.y*Math.sin(h.ang);
-      h.bars=[{a:0,o:clamp(aim+rnd(-0.06,0.06),-0.8,0.8)}]; break;
+      h.bars=[{a:0,o:clamp(aim+rnd(-0.06,0.06),-0.90,0.90)}]; break;
     }
   }
-  hazards.push(h);
 }
 
 // bar geometry at the current moment
@@ -413,6 +465,7 @@ let dragId=null, lastX=0, lastY=0;
 const keys={};
 
 function moveTargetTo(x,y){
+  if(!Number.isFinite(x)||!Number.isFinite(y)) return;
   target.x=x; target.y=y;
   const m=Math.hypot(target.x,target.y), lim=1-POD_R-0.02;
   if(m>lim){ target.x=target.x/m*lim; target.y=target.y/m*lim; }
@@ -420,17 +473,16 @@ function moveTargetTo(x,y){
 
 cv.addEventListener('pointerdown', e=>{
   try{ cv.setPointerCapture(e.pointerId); }catch(_){}   // throws in some webviews
+  if(state==='paused') return;
   start();                                              // no-op if already playing
   if(dragId!==null) return;                             // ignore extra fingers
   dragId=e.pointerId; lastX=e.clientX; lastY=e.clientY;
 });
 cv.addEventListener('pointermove', e=>{
   if(state!=='play') return;
-  if(e.pointerType==='mouse' && dragId===null){
-    moveTargetTo((e.clientX-CX)/S, (e.clientY-CY)/S);   // desktop: hover to steer
-    return;
-  }
-  if(e.pointerId!==dragId) return;                      // only the steering finger
+  // Mouse used to steer on hover, which let a desktop player reposition
+  // instantly while touch needed real finger travel. Same relative drag for both.
+  if(e.pointerId!==dragId) return;                      // only the steering pointer
   const k = 1.55/S;                                     // touch: relative drag
   moveTargetTo(target.x + (e.clientX-lastX)*k, target.y + (e.clientY-lastY)*k);
   lastX=e.clientX; lastY=e.clientY;
@@ -442,7 +494,7 @@ cv.addEventListener('pointercancel', endDrag);
 // last-resort fallback: nothing layered over the canvas should ever be able to
 // lock a touch-only player out of starting
 for(const ev of ['pointerdown','touchstart','mousedown']){
-  addEventListener(ev, ()=>{ start(); }, {passive:true});
+  addEventListener(ev, ()=>{ if(state!=='paused') start(); }, {passive:true});
 }
 
 addEventListener('keydown', e=>{
@@ -460,7 +512,7 @@ function showMenu(){
   panel.innerHTML =
     '<h1>PLUMMET</h1><div class="rule"></div>' +
     '<div class="sub">You are falling down a live laser shaft.<br>' +
-    'Steer the pod through the gaps.<br>Every 200 m the shaft surges.<br>You do not slow down.</div>' +
+    'Drag anywhere to steer the pod.<br>Every 200 m the shaft surges.<br>You do not slow down.</div>' +
     '<button class="btn" id="startBtn">Tap to drop</button>' +
     '<div class="go">or press space</div>';
   wireStart();
@@ -483,6 +535,24 @@ function start(){
   if(Date.now()<startLock) return;                 // ignore the release that killed you
   reset(); state='play'; ui.classList.add('hide');
 }
+function pauseGame(){
+  if(state!=='play') return;
+  state='paused'; dragId=null;
+  ui.classList.remove('hide');
+  panel.innerHTML =
+    '<div class="fail">DESCENT HELD</div>' +
+    '<div class="sub">The shaft is hidden while paused.</div>' +
+    '<button class="btn" id="resumeBtn">Resume</button>';
+  const b=document.getElementById('resumeBtn');
+  if(b){
+    const go=e=>{ if(e) e.preventDefault(); state='play'; ui.classList.add('hide'); };
+    b.addEventListener('click', go);
+    b.addEventListener('touchend', go, {passive:false});
+  }
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) pauseGame(); });
+addEventListener('blur', pauseGame);
+
 // wire the panel button each time a panel is rendered
 function wireStart(){
   startLock = Date.now()+400;
@@ -505,6 +575,7 @@ function update(dt, real){
     if(deadFor>0.75 && ui.classList.contains('hide')) showDead();
     return;
   }
+  if(state==='paused'){ return; }
   if(state!=='play'){ updateSparks(dt); return; }
 
   // fall — each surge band adds a permanent kick on top of the depth ramp
@@ -546,6 +617,9 @@ function update(dt, real){
   if(keys.arrowright||keys.d) moveTargetTo(target.x+kv, target.y);
   if(keys.arrowup   ||keys.w) moveTargetTo(target.x, target.y-kv);
   if(keys.arrowdown ||keys.s) moveTargetTo(target.x, target.y+kv);
+
+  if(!Number.isFinite(target.x)||!Number.isFinite(target.y)){ target.x=0; target.y=0; }
+  if(!Number.isFinite(pod.x)   ||!Number.isFinite(pod.y))   { pod.x=0;    pod.y=0;    }
 
   // pod eases toward the target — gives the thing a little mass
   const k = 1-Math.exp(-19*dt);
@@ -712,6 +786,10 @@ function draw(){
     ctx.moveTo(CX-w, H*0.24+12); ctx.lineTo(CX+w, H*0.24+12);
     ctx.stroke();
     ctx.globalAlpha=1;
+  }
+
+  if(state==='paused'){                     // obscure the board, not just freeze it
+    ctx.fillStyle='rgba(5,6,15,0.97)'; ctx.fillRect(0,0,W,H);
   }
 
   if(flash>0){ ctx.fillStyle='rgba(255,61,127,'+(flash*0.42)+')'; ctx.fillRect(0,0,W,H); }
@@ -941,7 +1019,9 @@ function drawGauge(){
 // ───────────────────────────── loop ─────────────────────────────
 let prev=performance.now();
 function frame(now){
-  const real=Math.min((now-prev)/1000, 1/30);
+  let real=(now-prev)/1000;
+  if(!Number.isFinite(real) || real<0) real=0;          // clock went backwards
+  real=Math.min(real, 1/30);
   prev=now;
   if(slowT>0) slowT=Math.max(0, slowT-real);   // the beat runs on real seconds
   update(real*timeScale(), real);
