@@ -17,14 +17,20 @@
   #vig{position:fixed;inset:0;z-index:1;pointer-events:none;
     background:radial-gradient(ellipse at center,rgba(0,0,0,0) 45%,rgba(0,0,0,.55) 100%)}
   #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2}
-  #c{display:block;border-radius:0;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 30px 90px rgba(0,0,0,.65);
-    image-rendering:auto;touch-action:none}
+  /* NO box-shadow here.  A 90px-blur shadow on a full-screen canvas forces Safari
+     to re-rasterise a large blurred layer every time the canvas updates — it is
+     invisible when the canvas covers the screen and it halved the framerate on
+     iPhone.  The pillarboxed desktop case adds it back via .framed.            */
+  #c{display:block;image-rendering:auto;touch-action:none}
+  #c.framed{box-shadow:0 0 0 1px rgba(0,0,0,.5),0 24px 70px rgba(0,0,0,.6)}
   #safe{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;
     padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
   #boot{position:fixed;inset:0;z-index:9;display:flex;align-items:center;justify-content:center;
     background:#050A16;color:#8FA8D8;font-weight:800;letter-spacing:.22em;font-size:13px;
     transition:opacity .45s ease}
-  #boot.gone{opacity:0;pointer-events:none}
+  /* visibility:hidden, not just opacity:0 — a transparent full-screen element is
+     still a composited layer on iOS */
+  #boot.gone{opacity:0;visibility:hidden;pointer-events:none}
 </style>
 </head>
 <body>
@@ -1543,7 +1549,10 @@ const BG = new Image();
 let bgReady = false;
 BG.onload = () => {
   bgReady = true;
-  document.getElementById('backdrop').style.backgroundImage = 'url("' + BG.src + '")';
+  /* only feed the blurred backdrop when it is actually visible — otherwise this
+     is a second full decode of the image plus a 38px blur for nothing */
+  const bd = document.getElementById('backdrop');
+  if (bd && bd.style.display !== 'none') bd.style.backgroundImage = 'url("' + BG.src + '")';
   document.getElementById('boot').classList.add('gone');
   buildBG();
 };
@@ -2424,13 +2433,16 @@ function render() {
    missing frames, step the render resolution down once or twice.  One-way, so it
    can never oscillate, and it only samples while the ball is actually live.     */
 const PERF = { n: 0, sum: 0, steps: 0 };
-function perfWatch(dt) {
-  if (G.state !== 'play' || G.hint || dt > .05) return;
-  PERF.sum += dt; PERF.n++;
-  if (PERF.n < 150) return;
+function perfWatch(renderMs) {
+  if (G.state !== 'play' || G.hint) return;
+  PERF.sum += renderMs; PERF.n++;
+  if (PERF.n < 120) return;
   const avg = PERF.sum / PERF.n;
   PERF.sum = 0; PERF.n = 0;
-  if (avg > .021 && PERF.steps < 2 && DPR_CAP > 1.01) {
+  /* Only shed resolution when OUR drawing is genuinely eating the budget.  The
+     first version watched frame INTERVAL, so an externally throttled rAF (Low
+     Power Mode, thermal, compositor stalls) made it downscale for no benefit. */
+  if (avg > 8 && PERF.steps < 2 && DPR_CAP > 1.01) {
     PERF.steps++;
     DPR_CAP = Math.max(1, DPR_CAP - .5);
     resize();
@@ -2439,20 +2451,25 @@ function perfWatch(dt) {
 
 /* Triple-tap the empty top-left corner to toggle this. It is the only way to read
    a real framerate on a phone, where there is no console. */
-const DBG = { on: false, fps: 60, rfps: 60, worst: 0 };
+const DBG = { on: false, fps: 60, rfps: 60, worst: 0, draw: 0, upd: 0 };
 function drawDebug() {
   ctx.save();
   const y0 = 20 + SAFE_T;
-  ctx.fillStyle = 'rgba(0,0,0,.72)';
-  ctx.beginPath(); rrPath(ctx, 16, y0, 340, 150, 14); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,.75)';
+  ctx.beginPath(); rrPath(ctx, 16, y0, 360, 180, 14); ctx.fill();
   ctx.font = fnt(30); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillStyle = DBG.rfps > 55 ? '#7CFFB0' : DBG.rfps > 45 ? '#FFD447' : '#FF6A80';
   ctx.fillText('DRAW ' + DBG.rfps.toFixed(0) + ' fps', 30, y0 + 14);
   ctx.font = fnt(21); ctx.fillStyle = '#9FD8FF';
+  /* my work vs the frame the browser hands me — if mine is small and rAF is slow,
+     the throttle is external (Low Power Mode, thermal, compositor) */
+  const mine = DBG.draw + DBG.upd;
+  const budget = 1000 / Math.max(1, DBG.fps);
   const rows = [
-    'rAF ' + DBG.fps.toFixed(0) + ' Hz   worst ' + DBG.worst.toFixed(0) + ' ms',
-    'DPR ' + DPR + '  ' + cvs.width + 'x' + cvs.height + '  VH ' + VH,
-    'orbs ' + G.orbs.length + '  parts ' + G.parts.length + '  pace ' + G.pace.toFixed(2)
+    'my work ' + mine.toFixed(1) + ' ms of ' + budget.toFixed(0) + ' ms frame',
+    '  draw ' + DBG.draw.toFixed(1) + '  update ' + DBG.upd.toFixed(1) + '  peak ' + DBG.worst.toFixed(0),
+    'rAF ' + DBG.fps.toFixed(0) + ' Hz   DPR ' + DPR + '  ' + cvs.width + 'x' + cvs.height,
+    mine < budget * .35 ? '=> BROWSER-CAPPED, not the game' : '=> game-bound'
   ];
   rows.forEach((r, i) => ctx.fillText(r, 30, y0 + 56 + i * 28));
   ctx.restore();
@@ -2585,6 +2602,7 @@ function resize() {
   const bd = document.getElementById('backdrop'), vg = document.getElementById('vig');
   if (bd) bd.style.display = covered ? 'none' : '';
   if (vg) vg.style.display = covered ? 'none' : '';
+  cvs.classList.toggle('framed', !covered);
 
   buildBG();
   layout();
@@ -2612,7 +2630,6 @@ function frame(ts) {
   last = ts;
   if (dt > 0.1) dt = 0.1;
   DBG.fps = DBG.fps * .92 + (1 / Math.max(1e-4, dt)) * .08;
-  perfWatch(dt);
 
   if (!G.frozen) {
     /* keyboard nudge */
@@ -2622,21 +2639,22 @@ function frame(ts) {
     }
     /* menu idle: drift the paddle */
     if (G.state === 'menu') P.target = VW / 2 + Math.sin(G.t * .7) * 180;
+    const u0 = performance.now();
     update(dt);
+    DBG.upd = DBG.upd * .9 + (performance.now() - u0) * .1;
   }
   renderAcc += dt;
   if (renderAcc >= RENDER_DT) {
     renderAcc = 0;
-    const t0 = DBG.on ? performance.now() : 0;
+    const t0 = performance.now();
     render();
-    if (DBG.on) {
-      const ms = performance.now() - t0;
-      if (ms > DBG.worst) DBG.worst = ms;
-      DBG.worst *= .995;
-    }
-    const now = ts;
-    if (lastDraw) DBG.rfps = DBG.rfps * .9 + (1000 / Math.max(1, now - lastDraw)) * .1;
-    lastDraw = now;
+    const ms = performance.now() - t0;
+    perfWatch(ms);
+    DBG.draw = DBG.draw * .9 + ms * .1;
+    if (ms > DBG.worst) DBG.worst = ms;
+    DBG.worst *= .995;
+    if (lastDraw) DBG.rfps = DBG.rfps * .9 + (1000 / Math.max(1, ts - lastDraw)) * .1;
+    lastDraw = ts;
   }
 }
 let lastDraw = 0;
