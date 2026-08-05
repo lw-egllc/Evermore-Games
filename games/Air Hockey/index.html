@@ -1,0 +1,1947 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#06122E">
+<title>RINK — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#05102A;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#05102A}
+  canvas{display:block;touch-action:none;
+    box-shadow:0 0 120px rgba(0,0,0,.85)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+/* =========================================================================
+   RINK  —  Evermore Arcade prototype
+   Air hockey against a CPU robot. One thumb drags your mallet.
+   Sixty seconds, or first to three goals — whichever lands first.
+   Single file. Procedural art, procedural audio, hand-written physics.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+const eIn   = t => t * t * t;
+const eBack = t => { const c = 2.70158; return 1 + c * Math.pow(t-1,3) + 1.70158 * Math.pow(t-1,2); };
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* Parses both '#RRGGBB' and 'rgb(r,g,b)' so the colour helpers compose —
+   rgba(tone(x)) is a normal thing to write, and addColorStop throws on a
+   malformed colour rather than ignoring it the way fillStyle does. */
+const _hx = {};
+function HX(h) {
+  let v = _hx[h]; if (v) return v;
+  if (h.charCodeAt(0) === 35){
+    v = [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  } else {
+    const m = h.match(/-?\d+(\.\d+)?/g);
+    v = (m && m.length >= 3) ? [m[0]|0, m[1]|0, m[2]|0] : [255,255,255];
+  }
+  _hx[h] = v; return v;
+}
+function rgba(h, a){ const A = HX(h); return 'rgba('+A[0]+','+A[1]+','+A[2]+','+a+')'; }
+function mix(a, b, t){ const A=HX(a), B=HX(b); t=clamp(t,0,1);
+  return 'rgb('+(A[0]+(B[0]-A[0])*t|0)+','+(A[1]+(B[1]-A[1])*t|0)+','+(A[2]+(B[2]-A[2])*t|0)+')'; }
+function tone(h, f){ const A=HX(h);
+  return 'rgb('+clamp(A[0]*f|0,0,255)+','+clamp(A[1]*f|0,0,255)+','+clamp(A[2]*f|0,0,255)+')'; }
+function commas(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+/* smooth pseudo-noise for the shake — reproducible, no allocation */
+function noise1(t, s){
+  return Math.sin(t*1.0+s*11.13)*0.5 + Math.sin(t*2.31+s*4.77)*0.32 + Math.sin(t*4.13+s*8.91)*0.18;
+}
+
+/* ---------------------------------------------------------------- palette */
+const C = {
+  bgHi:'#1A4894', bgMid:'#0B2258', bgLo:'#050F27', bgEdge:'#030A1C',
+
+  red:'#E8443C', redHi:'#FF8074', redLo:'#B0242A', redInk:'#6C0E16', redGlow:'#FF6152',
+  blu:'#3D80EE', bluHi:'#8CBEFF', bluLo:'#1C48B6', bluInk:'#0D2870', bluGlow:'#59A6FF',
+
+  ice:'#F4F6FC', iceLo:'#DDE3F1', iceDot:'#B9C6E2', iceEdge:'#AEBBD8',
+  ink:'#091230', ink2:'#12224A', ink3:'#1D3163',
+
+  puck:'#191D27', puckHi:'#5A6274', puckRim:'#8F99B2',
+  gold:'#FFC53D', goldHi:'#FFE9A6', goldLo:'#C07E0C',
+  white:'#FFFFFF', cream:'#FFF7E6',
+  hot:'#FF5B34', grn:'#3ED66E', grnLo:'#1E9945',
+};
+
+/* ================================================================== AUDIO */
+class Snd {
+  constructor(){ this.ctx=null; this.on=true; this.master=null; this.hum=null; this.humG=null; this.nb=null; }
+  init(){
+    if (this.ctx){ if (this.ctx.state==='suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC){ this.on=false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = 0.85;
+    this.master.connect(this.ctx.destination);
+    // shared noise buffer
+    const n = this.ctx.sampleRate * 1.0, b = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i=0;i<n;i++) d[i] = Math.random()*2-1;
+    this.nb = b;
+    this.startHum();
+  }
+  get t(){ return this.ctx.currentTime; }
+  startHum(){
+    // the blower under the table — a soft filtered rumble that sells the surface
+    const s = this.ctx.createBufferSource(); s.buffer = this.nb; s.loop = true;
+    const f = this.ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 190; f.Q.value = 0.8;
+    const f2 = this.ctx.createBiquadFilter(); f2.type='highpass'; f2.frequency.value = 55;
+    const g = this.ctx.createGain(); g.gain.value = 0.0;
+    s.connect(f); f.connect(f2); f2.connect(g); g.connect(this.master);
+    s.start(); this.hum = s; this.humG = g;
+  }
+  humLevel(v){ if (!this.ctx||!this.humG) return;
+    this.humG.gain.setTargetAtTime(this.on ? v : 0, this.t, 0.25); }
+
+  noise(dur, freq, Q, gain, type){
+    if (!this.ctx||!this.on) return;
+    const s = this.ctx.createBufferSource(); s.buffer = this.nb;
+    s.playbackRate.value = 0.8 + Math.random()*0.4;
+    const f = this.ctx.createBiquadFilter(); f.type = type||'bandpass'; f.frequency.value = freq; f.Q.value = Q;
+    const g = this.ctx.createGain();
+    const t = this.t;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t+0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t+dur+0.02);
+  }
+  blip(freq, dur, gain, type, slide){
+    if (!this.ctx||!this.on) return;
+    const o = this.ctx.createOscillator(); o.type = type||'sine';
+    const g = this.ctx.createGain(); const t = this.t;
+    o.frequency.setValueAtTime(freq, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,slide), t+dur);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t+dur+0.02);
+  }
+  /* puck meets mallet — the signature clack */
+  clack(v){
+    const p = clamp(v/260, 0.10, 1);
+    this.noise(0.05+0.05*p, 1500+2200*p, 1.1, 0.22+0.34*p);
+    this.blip(220+340*p, 0.055, 0.16+0.20*p, 'triangle', 120+180*p);
+  }
+  rail(v){
+    const p = clamp(v/260, 0.06, 1);
+    this.noise(0.045+0.04*p, 820+900*p, 2.2, 0.14+0.26*p);
+    this.blip(120+180*p, 0.05, 0.09+0.13*p, 'square', 70);
+  }
+  post(){ this.blip(1180, 0.28, 0.20, 'triangle', 880); this.blip(1770, 0.20, 0.10, 'sine', 1400);
+          this.noise(0.10, 3200, 3.0, 0.16); }
+  goal(mine){
+    if (!this.ctx||!this.on) return;
+    const t = this.t, base = mine ? 138 : 104;
+    for (let i=0;i<3;i++){
+      const o = this.ctx.createOscillator(); o.type='sawtooth';
+      o.frequency.value = base*(1+i*0.005)*(i===2?2:1);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.13,t+0.02);
+      g.gain.setValueAtTime(0.13,t+0.55); g.gain.exponentialRampToValueAtTime(0.0001,t+0.9);
+      const f = this.ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=2000;
+      o.connect(f); f.connect(g); g.connect(this.master); o.start(t); o.stop(t+0.95);
+    }
+    // crowd swell
+    const s = this.ctx.createBufferSource(); s.buffer = this.nb;
+    const f = this.ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value=1100; f.Q.value=0.7;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(mine?0.15:0.07,t+0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+1.5);
+    s.connect(f); f.connect(g); g.connect(this.master); s.start(t); s.stop(t+1.6);
+    if (mine){ const ds=[0,4,7,12];
+      ds.forEach((d,i)=>setTimeout(()=>this.blip(392*Math.pow(2,d/12),0.20,0.13,'square'), i*70)); }
+  }
+  beep(hi){ this.blip(hi?740:440, 0.14, 0.16, 'square'); }
+  whistle(){
+    if (!this.ctx||!this.on) return;
+    const t=this.t;
+    const o=this.ctx.createOscillator(); o.type='sine';
+    o.frequency.setValueAtTime(1750,t); o.frequency.setValueAtTime(1980,t+0.10);
+    o.frequency.setValueAtTime(1750,t+0.20);
+    const lfo=this.ctx.createOscillator(); lfo.type='sine'; lfo.frequency.value=32;
+    const lg=this.ctx.createGain(); lg.gain.value=110; lfo.connect(lg); lg.connect(o.frequency);
+    const g=this.ctx.createGain();
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.16,t+0.02);
+    g.gain.setValueAtTime(0.16,t+0.34); g.gain.exponentialRampToValueAtTime(0.0001,t+0.55);
+    o.connect(g); g.connect(this.master); o.start(t); lfo.start(t); o.stop(t+0.6); lfo.stop(t+0.6);
+  }
+  coin(i){ this.blip(880*Math.pow(2,(i%6)/12), 0.07, 0.10, 'square'); }
+  ui(up){ this.blip(up?620:420, 0.06, 0.11, 'square'); }
+  win(){ [0,4,7,12,16].forEach((d,i)=>setTimeout(()=>this.blip(392*Math.pow(2,d/12),0.30,0.14,'triangle'), i*90)); }
+  lose(){ [0,-3,-7].forEach((d,i)=>setTimeout(()=>this.blip(330*Math.pow(2,d/12),0.34,0.13,'sawtooth'), i*130)); }
+}
+const S = new Snd();
+
+/* =================================================================== SAVE */
+const SAVE = {
+  coins: 500, skin: 0, owned: [1,0,0,0,0], sound: 1, haptic: 1, level: 1, reduced: 0,
+  load(){ try{ const j = JSON.parse(localStorage.getItem('rink.v1')||'null');
+    if (j) Object.assign(this, j); }catch(e){} },
+  save(){ try{ localStorage.setItem('rink.v1', JSON.stringify({
+    coins:this.coins, skin:this.skin, owned:this.owned, sound:this.sound,
+    haptic:this.haptic, level:this.level, reduced:this.reduced })); }catch(e){} },
+};
+SAVE.load();
+
+const SKINS = [
+  { name:'ROOKIE',  cost:0,    a:'#3D80EE', b:'#8CBEFF', c:'#1C48B6' },
+  { name:'MINT',    cost:250,  a:'#25C79A', b:'#8DF5D6', c:'#0B7E63' },
+  { name:'SUNSET',  cost:500,  a:'#FF8A2B', b:'#FFD08A', c:'#B34A05' },
+  { name:'VIOLET',  cost:850,  a:'#9B5BF0', b:'#D3B0FF', c:'#5A26A8' },
+  { name:'CHROME',  cost:1400, a:'#B9C6DC', b:'#FFFFFF', c:'#5C6B84' },
+];
+
+const LEVELS = [
+  { name:'ROOKIE', v:0.34 },
+  { name:'PRO',    v:0.53 },
+  { name:'LEGEND', v:0.80 },
+];
+
+/* =============================================================== CONSTANTS
+   Sim units: the table interior is TW x TH. Everything below is in those
+   units and in units/second. Nothing in the sim knows about pixels.        */
+const K = {
+  TW: 100, TH: 178,
+  RAIL: 9,                 // rail thickness, drawn outside the interior
+  GOAL_W: 42,              // mouth width
+  GOAL_D: 8,               // recess depth (visual)
+  POST_R: 1.5,
+  CORNER: 10,              // interior corner radius — see applyWalls()
+
+  PUCK_R: 4.0,
+  MALLET_R: 7.3,
+
+  PUCK_MAX: 420,           // hard speed ceiling
+  PUCK_STOP: 1.2,
+  DAMP: 0.27,              // exponential velocity decay /s
+  WALL_E: 0.90,
+  MALLET_E: 0.62,
+  STRIKE_GAIN: 0.45,       // how much the mallet's own approach speed adds
+  TANG_FRIC: 0.10,
+  MIN_SEP: 6,              // minimum outward speed after a mallet contact
+
+  P_SPEED: 250,            // player mallet speed cap
+  P_ACC: 2600,             // player mallet acceleration — see stepMallet()
+  GRAB_DECAY: 0.30,        // seconds for the grab offset to melt away
+
+  SUB_LEN: 1.2, SUB_MAX: 10,
+
+  MATCH_TIME: 60,
+  GOALS_TO_WIN: 3,
+  OT_MAX: 30,              // sudden death cannot run forever
+  GOAL_FREEZE: 1.35,
+  COUNT_IN: 2.6,
+  IDLE_MAX: 4.0,           // possession clock — a parked puck is turned over
+  IDLE_WARN: 2.4,
+
+  CPU_LEVEL: 0.53,
+};
+
+/* the CPU's whole personality, derived from one dial */
+const CPU = { spd:0, acc:0, think:0, lag:0, err:0, aggr:0, defY:0, reach:0, bank:0, pow:0 };
+function cpuTune(){
+  const L = clamp(K.CPU_LEVEL, 0, 1);
+  CPU.spd   = lerp(120, 255, L);       // mallet speed cap
+  CPU.acc   = lerp(900, 2400, L);      // how fast it can build a swing
+  CPU.think = lerp(0.150, 0.045, L);   // re-plan interval
+  CPU.lag   = lerp(0.250, 0.060, L);   // perception delay — THE difficulty dial.
+                                       // A keeper with bounded speed covers the
+                                       // whole mouth unless it reacts late: at
+                                       // 360 u/s a shot flies the half in 0.19 s,
+                                       // so every 10 ms of lag is ~1.9 units of
+                                       // goal it cannot get back to.
+  CPU.err   = lerp(26, 3.5, L);        // aim error at the goal line, units
+  CPU.aggr  = lerp(0.55, 0.98, L);     // willingness to leave the crease
+  CPU.defY  = lerp(25, 17, L);         // defensive line depth
+  CPU.reach = lerp(0.52, 0.94, L);     // how far up-table it will chase
+  CPU.bank  = lerp(0.85, 0.05, L);     // how badly it MIS-reads a bank shot
+  CPU.pow   = lerp(0.72, 1.00, L);     // fraction of its speed it commits to a strike
+}
+cpuTune();
+
+/* ================================================================== STATE */
+const P  = { x:50, y:120, vx:0, vy:0, live:true, trail:[] };
+const MP = { x:50, y:150, vx:0, vy:0, tx:50, ty:150, minX:0, maxX:0, minY:0, maxY:0, lastTouch:-9 };
+const MC = { x:50, y:28,  vx:0, vy:0, tx:50, ty:28,  minX:0, maxX:0, minY:0, maxY:0, lastTouch:-9 };
+
+const RUN = {
+  state:'boot',      // boot | countdown | play | goal | over
+  seed:1, rnd:Math.random,
+  you:0, cpu:0, left:K.MATCH_TIME, t:0, tick:0,
+  ot:false, otTime:0,
+  freeze:0, scorer:0, lastGoalY:0,
+  idle:0, idleSide:0,
+  saves:0, hits:0, topShot:0, streak:0, bestStreak:0,
+  coinGain:0, coinShown:0, result:0,
+  overT:0, countT:0, banner:null, bannerT:0,
+  touched:false, log:[],
+};
+
+const FX = {
+  trauma:0, hitstop:0, timeScale:1, flash:0, flashCol:'#FFFFFF',
+  parts:[], rings:[], floats:[], glowP:0, glowC:0,
+  heat:0,   // 0..1 — rises in the closing seconds, drives the palette lift
+};
+for (let i=0;i<420;i++) FX.parts.push({live:false,x:0,y:0,vx:0,vy:0,r:0,life:0,max:0,c:'#fff',sh:0});
+for (let i=0;i<24;i++)  FX.rings.push({live:false,x:0,y:0,r:0,r1:0,life:0,max:0,c:'#fff',w:1});
+for (let i=0;i<10;i++)  FX.floats.push({live:false,x:0,y:0,txt:'',life:0,max:0,c:'#fff',sz:1});
+
+let RENDER = true;   // the bot harness turns this off
+
+/* ------------------------------------------------------------------- FX */
+function trauma(v){ if (SAVE.reduced) v *= 0.35; FX.trauma = clamp(FX.trauma+v, 0, 1); }
+function hitstop(t){ FX.hitstop = Math.max(FX.hitstop, t); }
+function burst(x, y, n, col, spd, up){
+  if (!RENDER) return;
+  for (let i=0, made=0; i<FX.parts.length && made<n; i++){
+    const p = FX.parts[i]; if (p.live) continue;
+    const a = RUN.rnd()*TAU, s = spd*(0.35+RUN.rnd()*0.85);
+    p.live=true; p.x=x; p.y=y; p.vx=Math.cos(a)*s; p.vy=Math.sin(a)*s - (up||0);
+    p.r = 0.7+RUN.rnd()*1.9; p.max = 0.42+RUN.rnd()*0.55; p.life=p.max;
+    p.c = col; p.sh = RUN.rnd()<0.35?1:0; made++;
+  }
+}
+function ring(x,y,r0,r1,life,col,w){
+  if (!RENDER) return;
+  for (let i=0;i<FX.rings.length;i++){ const g=FX.rings[i]; if (g.live) continue;
+    g.live=true; g.x=x; g.y=y; g.r=r0; g.r1=r1; g.max=life; g.life=life; g.c=col; g.w=w||1.4; return; }
+}
+function floatTxt(x,y,txt,col,sz){
+  if (!RENDER) return;
+  for (let i=0;i<FX.floats.length;i++){ const f=FX.floats[i]; if (f.live) continue;
+    f.live=true; f.x=x; f.y=y; f.txt=txt; f.c=col; f.sz=sz||1; f.max=0.9; f.life=0.9; return; }
+}
+function banner(txt, sub, t){ RUN.banner = {txt, sub}; RUN.bannerT = t||1.2; }
+function buzz(ms){ if (SAVE.haptic && navigator.vibrate) { try{ navigator.vibrate(ms); }catch(e){} } }
+
+function stepFX(dt){
+  FX.trauma = clamp(FX.trauma - 1.2*dt, 0, 1);
+  FX.flash  = Math.max(0, FX.flash - dt*5.5);
+  FX.glowP  = Math.max(0, FX.glowP - dt*2.2);
+  FX.glowC  = Math.max(0, FX.glowC - dt*2.2);
+  if (RUN.bannerT > 0){ RUN.bannerT -= dt; if (RUN.bannerT<=0) RUN.banner=null; }
+  for (let i=0;i<FX.parts.length;i++){ const p=FX.parts[i]; if (!p.live) continue;
+    p.life -= dt; if (p.life<=0){ p.live=false; continue; }
+    p.x += p.vx*dt; p.y += p.vy*dt; p.vx *= (1-2.0*dt); p.vy = p.vy*(1-2.0*dt) + 46*dt; }
+  for (let i=0;i<FX.rings.length;i++){ const g=FX.rings[i]; if (!g.live) continue;
+    g.life -= dt; if (g.life<=0) g.live=false; }
+  for (let i=0;i<FX.floats.length;i++){ const f=FX.floats[i]; if (!f.live) continue;
+    f.life -= dt; if (f.life<=0) f.live=false; }
+}
+
+/* ================================================================ PHYSICS */
+function clampSpeed(o){
+  const s = Math.hypot(o.vx, o.vy);
+  if (s > K.PUCK_MAX){ const k = K.PUCK_MAX/s; o.vx*=k; o.vy*=k; }
+  else if (s < K.PUCK_STOP){ o.vx=0; o.vy=0; }
+}
+
+/* Each mallet is confined to its own half. The bound is exact — a mallet's
+   edge reaches the centre line and no further — so the two never overlap and
+   the sim needs no mallet-vs-mallet case. */
+function setBounds(){
+  const R = K.MALLET_R;
+  MP.minX = R; MP.maxX = K.TW-R; MP.minY = K.TH/2 + R; MP.maxY = K.TH - R;
+  MC.minX = R; MC.maxX = K.TW-R; MC.minY = R;          MC.maxY = K.TH/2 - R;
+}
+setBounds();
+
+/* The mallet has MASS. It chases the target under a bounded acceleration
+   rather than snapping to top speed.
+
+   This is the single most load-bearing line in the game. With a massless
+   mallet every contact is a maximum-power contact — power becomes free, the
+   wind-up is pointless, and a bot that simply drives at the puck out-scores
+   every skilled line (measured: `chase` beat the whole fleet). With mass, a
+   jab from rest carries almost nothing and a prepared swing carries
+   everything, so *where you set up* is the skill. It also makes the mallet
+   feel like an object instead of a cursor. */
+function stepMallet(m, dt, spd, acc){
+  const tx = clamp(m.tx, m.minX, m.maxX), ty = clamp(m.ty, m.minY, m.maxY);
+  const dx = tx - m.x, dy = ty - m.y, d = Math.hypot(dx, dy);
+  let dvx = 0, dvy = 0;
+  if (d > 1e-6){
+    // arrival speed that brakes onto the target instead of orbiting it
+    const arrive = Math.min(spd, d/dt, Math.sqrt(2*acc*d));
+    dvx = dx/d*arrive; dvy = dy/d*arrive;
+  }
+  let ax = (dvx-m.vx)/dt, ay = (dvy-m.vy)/dt;
+  const am = Math.hypot(ax, ay);
+  if (am > acc){ const k = acc/am; ax *= k; ay *= k; }
+  m.vx += ax*dt; m.vy += ay*dt;
+  const s = Math.hypot(m.vx, m.vy);
+  if (s > spd){ const k = spd/s; m.vx *= k; m.vy *= k; }
+  let nx = m.x + m.vx*dt, ny = m.y + m.vy*dt;
+  // hitting the edge of your own half kills the velocity into it
+  if (nx < m.minX){ nx = m.minX; if (m.vx < 0) m.vx = 0; }
+  else if (nx > m.maxX){ nx = m.maxX; if (m.vx > 0) m.vx = 0; }
+  if (ny < m.minY){ ny = m.minY; if (m.vy < 0) m.vy = 0; }
+  else if (ny > m.maxY){ ny = m.maxY; if (m.vy > 0) m.vy = 0; }
+  m.x = nx; m.y = ny;
+}
+
+/* Puck against a mallet. The mallet is infinitely massive — it is a finger.
+   Two terms: an elastic bounce off the relative velocity, plus a strike gain
+   on the mallet's own approach speed. The second term is the skill gate:
+   a parked mallet returns a soft puck, a driven one slams it.              */
+/* Push the puck clear of a mallet WITHOUT shoving it through a board. If the
+   mallet has it trapped against a wall it squirts out along the wall, which
+   is both what really happens and what stops a mallet pinning the puck out
+   of bounds forever. */
+function separate(m){
+  const rr = K.PUCK_R + K.MALLET_R, R = K.PUCK_R, CX = K.TW/2, HG = K.GOAL_W/2;
+  for (let i=0;i<3;i++){
+    P.x = clamp(P.x, R, K.TW-R);
+    if (Math.abs(P.x-CX) > HG) P.y = clamp(P.y, R, K.TH-R);
+    const dx = P.x-m.x, dy = P.y-m.y, d = Math.hypot(dx, dy);
+    if (d >= rr-0.02) return;
+    const nx = d>1e-6 ? dx/d : 0, ny = d>1e-6 ? dy/d : (m.y < K.TH/2 ? 1 : -1);
+    let tx = -ny, ty = nx;
+    // take the tangent that heads back toward open table
+    if (tx*(CX-P.x) + ty*(K.TH/2-P.y) < 0){ tx = -tx; ty = -ty; }
+    const push = rr - d + 0.06;
+    P.x += tx*push; P.y += ty*push;
+    const vt = P.vx*tx + P.vy*ty;
+    if (vt < K.MIN_SEP){ P.vx += tx*(K.MIN_SEP-vt); P.vy += ty*(K.MIN_SEP-vt); }
+  }
+  P.x = clamp(P.x, R, K.TW-R);
+  if (Math.abs(P.x-CX) > HG) P.y = clamp(P.y, R, K.TH-R);
+}
+
+function hitMallet(m, isPlayer){
+  const dx = P.x-m.x, dy = P.y-m.y, rr = K.PUCK_R + K.MALLET_R;
+  let d = Math.hypot(dx, dy);
+  if (d >= rr) return 0;
+  if (d < 1e-5){ d = 1e-5; }
+  const nx = dx/d, ny = dy/d;
+  P.x = m.x + nx*rr; P.y = m.y + ny*rr;
+  separate(m);
+
+  const rvx = P.vx-m.vx, rvy = P.vy-m.vy;
+  const vn  = rvx*nx + rvy*ny;
+  let impact = 0;
+  if (vn < 0){
+    const j = -(1+K.MALLET_E)*vn;
+    P.vx += nx*j; P.vy += ny*j;
+    const tvx = rvx - vn*nx, tvy = rvy - vn*ny;
+    P.vx -= tvx*K.TANG_FRIC; P.vy -= tvy*K.TANG_FRIC;
+    impact = -vn;
+  }
+  const mn = m.vx*nx + m.vy*ny;
+  if (mn > 0){ P.vx += nx*mn*K.STRIKE_GAIN; P.vy += ny*mn*K.STRIKE_GAIN; impact += mn*0.8; }
+  const out = P.vx*nx + P.vy*ny;
+  if (out < K.MIN_SEP){ P.vx += nx*(K.MIN_SEP-out); P.vy += ny*(K.MIN_SEP-out); }
+  clampSpeed(P);
+
+  // One contact = one event. Without this cooldown a puck resting against a
+  // mallet re-fires every substep and inflates the counters (and the audio)
+  // by three orders of magnitude.
+  const fresh = RUN.t - m.lastTouch > 0.12;
+  m.lastTouch = RUN.t;
+  if (!fresh) return impact;
+
+  const spd = Math.hypot(P.vx, P.vy);
+  if (isPlayer){
+    RUN.hits++; RUN.streak++;
+    if (RUN.streak > RUN.bestStreak) RUN.bestStreak = RUN.streak;
+    if (spd > RUN.topShot) RUN.topShot = spd;
+    // a save is a contact that reversed a puck genuinely coming at your goal
+    if (vn < -40 && P.vy < 0) RUN.saves++;
+    FX.glowP = 1;
+  } else FX.glowC = 1;
+
+  if (RENDER){
+    S.clack(impact);
+    ring(P.x, P.y, K.PUCK_R+1, K.PUCK_R+7+impact*0.05, 0.30,
+         isPlayer ? C.bluGlow : C.redGlow, 1.6);
+    if (impact > 90){
+      burst(P.x, P.y, 5+Math.min(11, impact*0.05|0), isPlayer?C.bluHi:C.redHi, impact*0.5);
+      trauma(clamp(impact/460, 0, 0.42)); buzz(impact>170?14:8);
+    }
+  }
+  return impact;
+}
+
+/* The boards, as one pure function of a {x,y,vx,vy} state — so the CPU's
+   prediction bounces off exactly the geometry the sim does.
+
+   The interior corners are ROUNDED, matching the art. This is not decoration:
+   with square corners a puck wedged into a corner is geometrically
+   unreachable — a mallet big enough to hit it cannot stand behind it — and
+   the match deadlocks. A curved corner ejects it back into play by itself.
+   Returns the impact speed, or 0.                                          */
+function applyWalls(s){
+  const R = K.PUCK_R, CX = K.TW/2, HG = K.GOAL_W/2, CR = K.CORNER, lim = CR - R;
+  let hit = 0, postHit = 0, px = 0, py = 0, e = 0;
+
+  if (s.x < R){          s.x = R;        s.vx = -s.vx*K.WALL_E; hit = Math.abs(s.vx); }
+  else if (s.x > K.TW-R){ s.x = K.TW-R;  s.vx = -s.vx*K.WALL_E; hit = Math.abs(s.vx); }
+
+  // end walls, with a gap at the goal mouth
+  if (s.y < R && Math.abs(s.x-CX) > HG){
+    s.y = R; s.vy = -s.vy*K.WALL_E; hit = Math.max(hit, Math.abs(s.vy)); }
+  if (s.y > K.TH-R && Math.abs(s.x-CX) > HG){
+    s.y = K.TH-R; s.vy = -s.vy*K.WALL_E; hit = Math.max(hit, Math.abs(s.vy)); }
+
+  // rounded corners
+  for (let a=0; a<2; a++) for (let b=0; b<2; b++){
+    const cx0 = a ? K.TW-CR : CR, cy0 = b ? K.TH-CR : CR;
+    if ((a ? s.x > cx0 : s.x < cx0) && (b ? s.y > cy0 : s.y < cy0)){
+      const dx = s.x-cx0, dy = s.y-cy0, d = Math.hypot(dx, dy);
+      if (d > lim && d > 1e-6){
+        const ux = dx/d, uy = dy/d;
+        s.x = cx0 + ux*lim; s.y = cy0 + uy*lim;
+        const vn = s.vx*ux + s.vy*uy;               // outward component
+        if (vn > 0){ const j = (1+K.WALL_E)*vn; s.vx -= ux*j; s.vy -= uy*j; hit = Math.max(hit, vn); }
+      }
+    }
+  }
+
+  // goal posts — the source of every "off the post!" in the game
+  for (let g=-1; g<=1; g+=2){
+    for (let q=0; q<2; q++){
+      const gx = CX + g*HG, gy = q ? K.TH : 0;
+      const dx = s.x-gx, dy = s.y-gy, rr = R + K.POST_R;
+      const d = Math.hypot(dx, dy);
+      if (d < rr && d > 1e-6){
+        const ux = dx/d, uy = dy/d;
+        s.x = gx + ux*rr; s.y = gy + uy*rr;
+        const vn = s.vx*ux + s.vy*uy;
+        if (vn < 0){ const j = -(1+K.WALL_E)*vn; s.vx += ux*j; s.vy += uy*j;
+          postHit = -vn; px = gx; py = gy; e = q; }
+      }
+    }
+  }
+  s._post = postHit; s._px = px; s._py = py; s._pe = e;
+  return hit;
+}
+
+function bounceWalls(){
+  const hit = applyWalls(P);
+  if (RENDER && P._post > 25){
+    S.post(); ring(P._px, P._py, 1, 10, 0.4, C.gold, 2.2); trauma(0.30);
+    floatTxt(P._px, P._py + (P._pe ? -12 : 12), 'POST!', C.gold, 0.8);
+  }
+  if (hit > 22 && RENDER){
+    S.rail(hit);
+    ring(P.x, P.y, K.PUCK_R, K.PUCK_R+6, 0.26, C.white, 1.1);
+    if (hit > 150){ trauma(clamp(hit/900,0,0.22)); burst(P.x,P.y,4,C.white,hit*0.3); }
+  }
+  clampSpeed(P);
+}
+
+/* one fixed sim tick */
+function simStep(dt){
+  if (RUN.state === 'countdown'){
+    RUN.countT -= dt;
+    const n = Math.ceil(RUN.countT/0.8);
+    if (n !== RUN._lastN){ RUN._lastN = n; if (RENDER && n>0 && n<=3){ S.beep(n===1); ring(K.TW/2,K.TH/2,4,26,0.5,n===1?C.gold:C.white,2); } }
+    if (RUN.countT <= 0){ RUN.state='play'; RUN._lastN=0; if (RENDER) S.whistle(); }
+    // mallets still track during the count-in — you can settle your grip
+    stepMallet(MP, dt, K.P_SPEED, K.P_ACC);
+    stepMallet(MC, dt, CPU.spd*0.6, CPU.acc);
+    return;
+  }
+  if (RUN.state === 'goal'){
+    RUN.freeze -= dt;
+    // the puck sinks into the recess, then the drop
+    const k = clamp(1 - RUN.freeze/K.GOAL_FREEZE, 0, 1);
+    P.y = RUN.lastGoalY + (RUN.scorer===1 ? -1 : 1) * eOut(clamp(k*2.6,0,1)) * (K.GOAL_D-1);
+    P.vx = P.vy = 0;
+    stepMallet(MP, dt, K.P_SPEED, K.P_ACC);
+    stepMallet(MC, dt, CPU.spd*0.7, CPU.acc);
+    if (RUN.freeze <= 0) afterGoal();
+    return;
+  }
+  if (RUN.state === 'over'){
+    RUN.overT += dt;
+    if (RUN.coinShown < RUN.coinGain){
+      const step = Math.max(1, Math.ceil(RUN.coinGain/28));
+      const before = RUN.coinShown;
+      RUN.coinShown = Math.min(RUN.coinGain, RUN.coinShown + step);
+      if (RENDER && RUN.overT > 0.8 && before !== RUN.coinShown && ((RUN.coinShown/step|0)%2===0))
+        S.coin(RUN.coinShown/step|0);
+    }
+    return;
+  }
+  if (RUN.state !== 'play') return;
+
+  RUN.t += dt; RUN.tick++;
+  if (!RUN.ot){
+    RUN.left -= dt;
+    if (RUN.left <= 0){ RUN.left = 0; endOfRegulation(); if (RUN.state!=='play') return; }
+  } else {
+    RUN.otTime += dt;
+    // sudden death is bounded — two stalemated players must not hang the match
+    if (RUN.otTime >= K.OT_MAX){ finish(); return; }
+  }
+
+  cpuTick(dt);
+
+  const sp = Math.hypot(P.vx, P.vy);
+  const mv = Math.max(Math.abs(MP.vx)+Math.abs(MP.vy), Math.abs(MC.vx)+Math.abs(MC.vy));
+  let n = Math.ceil(Math.max(sp, mv) * dt / K.SUB_LEN);
+  n = clamp(n, 1, K.SUB_MAX);
+  const h = dt/n;
+
+  for (let i=0;i<n;i++){
+    stepMallet(MP, h, K.P_SPEED, K.P_ACC);
+    stepMallet(MC, h, CPU.spd, CPU.acc);
+    const k = Math.exp(-K.DAMP*h);
+    P.vx *= k; P.vy *= k;
+    P.x += P.vx*h; P.y += P.vy*h;
+    bounceWalls();
+    hitMallet(MP, true);
+    hitMallet(MC, false);
+    if (checkGoal()) return;
+  }
+  clampSpeed(P);
+
+  // Shot clock. Purely a function of puck speed — deliberately NOT "and no
+  // mallet is near it", because the worst stall in the game is a mallet
+  // holding the puck still, and a proximity test exempts exactly that case.
+  const speed = Math.hypot(P.vx, P.vy);
+  const side = P.y > K.TH/2 ? 1 : -1;
+  if (speed < 9){
+    if (side !== RUN.idleSide){ RUN.idleSide = side; RUN.idle = 0; }
+    RUN.idle += dt;
+    if (RUN.idle >= K.IDLE_MAX){
+      RUN.idle = 0;
+      dropPuck(-side);
+      banner('TURNOVER', side===1 ? 'PLAY THE PUCK' : '', 1.0);
+      if (RENDER){ S.whistle(); ring(P.x,P.y,2,20,0.5,C.gold,2); }
+      RUN.log.push('turnover:'+(side===1?'you':'cpu'));
+    }
+  } else { RUN.idle = 0; RUN.idleSide = 0; }
+
+  // trail
+  if (RENDER){
+    P.trail.push(P.x, P.y);
+    if (P.trail.length > 26) P.trail.splice(0, P.trail.length-26);
+  }
+
+  // closing heat
+  const rem = RUN.ot ? 0 : RUN.left;
+  FX.heat = RUN.ot ? 1 : clamp((12-rem)/12, 0, 1);
+}
+
+function checkGoal(){
+  const CX = K.TW/2, HG = K.GOAL_W/2;
+  if (P.y <= 0 && Math.abs(P.x-CX) < HG){ score(1); return true; }
+  if (P.y >= K.TH && Math.abs(P.x-CX) < HG){ score(-1); return true; }
+  return false;
+}
+
+function score(who){
+  RUN.scorer = who;
+  RUN.lastGoalY = who===1 ? 0 : K.TH;
+  P.x = clamp(P.x, K.TW/2-HGsafe(), K.TW/2+HGsafe());
+  P.y = RUN.lastGoalY;
+  P.vx = P.vy = 0; P.trail.length = 0;
+  if (who===1) RUN.you++; else { RUN.cpu++; RUN.streak = 0; }
+  RUN.state = 'goal'; RUN.freeze = K.GOAL_FREEZE;
+  RUN.log.push((who===1?'you':'cpu')+':'+RUN.you+'-'+RUN.cpu);
+
+  if (RENDER){
+    const col = who===1 ? C.blu : C.red, hi = who===1 ? C.bluHi : C.redHi;
+    S.goal(who===1);
+    trauma(who===1 ? 0.95 : 0.75); hitstop(0.10); buzz(who===1?[18,40,26]:34);
+    FX.flash = who===1 ? 0.85 : 0.5; FX.flashCol = who===1 ? C.bluHi : C.redHi;
+    burst(P.x, P.y, 60, hi, 190, who===1?60:-60);
+    burst(P.x, P.y, 34, C.white, 130, who===1?40:-40);
+    burst(P.x, P.y, 26, col, 240, 0);
+    ring(P.x, P.y, 3, 46, 0.65, hi, 3);
+    ring(P.x, P.y, 3, 74, 0.9, C.white, 1.4);
+    banner(who===1 ? 'GOAL!' : 'CONCEDED', '', 1.25);
+  }
+}
+function HGsafe(){ return K.GOAL_W/2 - K.PUCK_R*0.7; }
+
+function dropPuck(side){
+  // side: +1 puts it in the player's half, -1 in the CPU's
+  P.x = K.TW/2; P.y = K.TH/2 + side*34;
+  P.vx = 0; P.vy = 0; P.trail.length = 0;
+  RUN.idle = 0; RUN.idleSide = 0;
+}
+
+function afterGoal(){
+  if (RUN.you >= K.GOALS_TO_WIN || RUN.cpu >= K.GOALS_TO_WIN || (RUN.ot)){ finish(); return; }
+  if (!RUN.ot && RUN.left <= 0){ endOfRegulation(); if (RUN.state!=='play') return; }
+  // the conceding side gets the drop
+  dropPuck(RUN.scorer===1 ? -1 : 1);
+  RUN.state = 'play';
+}
+
+function endOfRegulation(){
+  if (RUN.you !== RUN.cpu){ finish(); return; }
+  RUN.ot = true; RUN.left = 0;
+  banner('SUDDEN DEATH', 'NEXT GOAL WINS', 1.6);
+  if (RENDER){ S.whistle(); trauma(0.55); FX.flash=0.5; FX.flashCol=C.gold; }
+  RUN.log.push('overtime');
+}
+
+function finish(){
+  RUN.state = 'over'; RUN.overT = 0;
+  RUN.result = RUN.you > RUN.cpu ? 1 : RUN.you < RUN.cpu ? -1 : 0;
+  // Goals and a fast win carry the payout; saves are a garnish and are CAPPED.
+  // Uncapped they paid 172 of 197 coins for a scoreless draw, which made
+  // walling up the highest-earning line in the game.
+  const secLeft = Math.max(0, Math.round(RUN.left));
+  RUN.coinGain = RUN.you*60 + Math.min(RUN.saves*2, 60)
+               + (RUN.result===1 ? 150 + secLeft*3 : RUN.result===0 ? 25 : 15);
+  RUN.coinShown = 0;
+  if (RENDER){
+    S.whistle();
+    setTimeout(()=>{ RUN.result===1 ? S.win() : S.lose(); }, 380);
+    trauma(0.6); hitstop(0.12);
+    SAVE.coins += RUN.coinGain; SAVE.save();
+  }
+  RUN.log.push('final:'+RUN.you+'-'+RUN.cpu);
+}
+
+/* ==================================================================== CPU
+   The robot runs the same physics you do. It has a bounded mallet speed, a
+   perception delay, a re-plan interval and an aim error — all derived from
+   CPU_LEVEL. It never gets a bigger mallet, a faster puck, or knowledge of
+   the future beyond the trace it computes from what it can see.            */
+const cpuS = { mode:'home', tx:50, ty:28, timer:0, hist:[], dirx:0, diry:1, atk:false, atkT:0 };
+
+/* distance from a point to a segment */
+function segDist(ax,ay,bx,by,px,py){
+  const dx=bx-ax, dy=by-ay, L=dx*dx+dy*dy;
+  let t = L>1e-9 ? ((px-ax)*dx+(py-ay)*dy)/L : 0;
+  t = clamp(t,0,1);
+  return Math.hypot(ax+dx*t-px, ay+dy*t-py);
+}
+
+const _tr = { x:0, y:0, vx:0, vy:0 };
+function tracePuck(x, y, vx, vy, yLine, maxT){
+  // forward-integrate through the SAME board geometry the sim uses, so a
+  // predicted bank shot lands where the real one does
+  const h = 1/120; let t = 0, b = 0;
+  const s = _tr; s.x = x; s.y = y; s.vx = vx; s.vy = vy;
+  const dir = yLine > y ? 1 : -1;
+  while (t < maxT){
+    const k = Math.exp(-K.DAMP*h); s.vx*=k; s.vy*=k;
+    const py = s.y, px = s.x;
+    const ny = py + s.vy*h, nx = px + s.vx*h;
+    if ((dir>0 && ny >= yLine) || (dir<0 && ny <= yLine)){
+      const f = Math.abs(s.vy)>1e-6 ? (yLine-py)/(ny-py) : 0;
+      return { hit:true, t:t+h*f, x:px+(nx-px)*f, vx:s.vx, vy:s.vy, s:Math.hypot(s.vx,s.vy), b };
+    }
+    s.x = nx; s.y = ny; t += h;
+    if (applyWalls(s) > 0) b++;
+    if (Math.hypot(s.vx,s.vy) < 2) break;
+  }
+  return { hit:false, t:maxT, x:s.x, vx:s.vx, vy:s.vy, s:Math.hypot(s.vx,s.vy), b };
+}
+
+/* Pick a strike direction from the puck. Candidates fan across the legal
+   range; each is traced to the player's goal line and scored on whether it
+   goes in and how far it lands from the player's mallet.                   */
+function pickShot(px, py, pmx, pmy){
+  const CX = K.TW/2, HG = K.GOAL_W/2, RR = K.MALLET_R + K.PUCK_R;
+  let best = null;
+  const N = 15;
+  for (let i=0;i<N;i++){
+    const a = lerp(-1.16, 1.16, i/(N-1));            // angle from straight-down
+    const dx = Math.sin(a), dy = Math.cos(a);
+    // the CPU must be able to stand behind the puck to hit this way
+    const ax = px - dx*RR, ay = py - dy*RR;
+    if (ay < MC.minY-0.6 || ay > MC.maxY+0.6 || ax < MC.minX-0.6 || ax > MC.maxX+0.6) continue;
+    const spd = CPU.spd*CPU.pow;
+    const v = 1.62*spd + 0.45*spd;                   // what the strike will produce
+    const sh = Math.min(v, K.PUCK_MAX);
+    // trace to just short of the end wall, NOT to y=TH — a shot that misses the
+    // mouth bounces off the boards and never reaches TH, so tracing to the line
+    // itself throws away every non-scoring candidate and leaves the robot with
+    // no way to clear its own end.
+    const r = tracePuck(px, py, dx*sh, dy*sh, K.TH - K.PUCK_R - 0.5, 2.2);
+    if (!r.hit) continue;
+    const inGoal = Math.abs(r.x-CX) < HG - K.PUCK_R*0.75;
+    // how far from the keeper's mallet does it arrive?
+    const d = tracePuck(px, py, dx*sh, dy*sh, Math.min(K.TH-22, pmy), 2.2);
+    const open = d.hit ? Math.min(Math.abs(d.x - pmx), 44) : 20;
+    let s = (inGoal ? 100 : 0) + open*1.5 + r.s*0.05 - Math.abs(a)*6;
+    if (!inGoal) s -= 40;
+    if (!best || s > best.s){ best = { s, dx, dy, ax, ay, inGoal }; }
+  }
+  return best;
+}
+
+function cpuTick(dt){
+  // perception: the robot acts on a delayed snapshot of the puck
+  cpuS.hist.push(RUN.t, P.x, P.y, P.vx, P.vy);
+  if (cpuS.hist.length > 400) cpuS.hist.splice(0, cpuS.hist.length-400);
+  let px=P.x, py=P.y, pvx=P.vx, pvy=P.vy;
+  const want = RUN.t - CPU.lag;
+  for (let i=cpuS.hist.length-5; i>=0; i-=5){
+    if (cpuS.hist[i] <= want){ px=cpuS.hist[i+1]; py=cpuS.hist[i+2]; pvx=cpuS.hist[i+3]; pvy=cpuS.hist[i+4]; break; }
+  }
+
+  // the attack decision is sticky: rolled once, then committed to. Re-rolling
+  // it every think tick made the robot twitch in and out of its wind-up.
+  cpuS.atkT -= dt;
+  if (P.y > K.TH/2) cpuS.atkT = 0;
+
+  cpuS.timer -= dt;
+  if (cpuS.timer <= 0){
+    cpuS.timer = CPU.think;
+    plan(px, py, pvx, pvy);
+  }
+  MC.tx = cpuS.tx; MC.ty = cpuS.ty;
+}
+
+function plan(px, py, pvx, pvy){
+  const CX = K.TW/2, HG = K.GOAL_W/2, R = RUN.rnd;
+  const spd = Math.hypot(pvx, pvy);
+  const incoming = pvy < -4;
+  const mine = py < K.TH/2;
+
+  // ---- threat assessment: where does it cross my defensive line, and my line?
+  let cross = null, atGoal = null;
+  if (incoming){
+    cross  = tracePuck(px, py, pvx, pvy, CPU.defY, 2.0);
+    atGoal = tracePuck(px, py, pvx, pvy, K.PUCK_R+0.5, 2.2);
+  }
+
+  // ---- 1. urgent block: something is on its way in
+  if (atGoal && atGoal.hit && Math.abs(atGoal.x-CX) < HG+10 && atGoal.t < 1.5){
+    // meet it where it will be, biased toward the goal line by how little time is left
+    const urgency = clamp(1 - atGoal.t/0.85, 0, 1);
+    const iy = lerp(CPU.defY, K.MALLET_R+2.5, urgency);
+    const meet = tracePuck(px, py, pvx, pvy, iy, 2.0);
+    let tx = meet.hit ? meet.x : atGoal.x;
+    // A bank shot is the ONLY thing that beats a keeper with bounded speed:
+    // straight shots are always within reach of a centred mallet, so if the
+    // robot reads reflections perfectly nothing ever goes in. It mis-reads
+    // them by drifting toward where the puck was heading before the rail —
+    // "I thought that was going wide" — scaled by CPU.bank.
+    if (meet.b > 0 && CPU.bank > 0.01){
+      const naive = clamp(px + pvx*meet.t, 0, K.TW);
+      tx = lerp(tx, naive, clamp(CPU.bank*(1 - Math.pow(0.55, meet.b)) * 1.6, 0, 0.92));
+    }
+    // sit between the puck and the middle of the net rather than dead on it —
+    // covering the near post and letting the rebound go up-table
+    tx = lerp(tx, CX, 0.16);
+    tx += (R()*2-1)*CPU.err*0.35;
+    cpuS.tx = clamp(tx, MC.minX, MC.maxX);
+    cpuS.ty = clamp(iy, MC.minY, MC.maxY);
+    cpuS.mode = 'block';
+    return;
+  }
+
+  // ---- 2. attack: the puck is settled or slow in my half, go through it
+  const reachable = mine && py < K.TH/2 - 2;
+  const slowEnough = spd < 118;
+  if (reachable && (slowEnough || (incoming && spd < 190))){
+    if (cpuS.atkT <= 0){ cpuS.atk = (R() < CPU.aggr) || spd < 30; cpuS.atkT = 0.55; }
+    if (cpuS.atk){
+      const shot = pickShot(px, py, MP.x, MP.y);
+      if (shot){
+        // aim error lands on the goal line, then is walked back to a direction
+        const err = (R()*2-1)*CPU.err;
+        const ang = Math.atan2(shot.dx, shot.dy) + err*0.010;
+        const dx = Math.sin(ang), dy = Math.cos(ang);
+        const RR = K.MALLET_R + K.PUCK_R;
+        const ax = px - dx*RR*1.02, ay = py - dy*RR*1.02;
+        const behind = (MC.x-px)*dx + (MC.y-py)*dy;   // negative = correctly behind
+        const wx = px - dx*(RR+13), wy = py - dy*(RR+13);
+        if (behind > -(RR+5) || Math.hypot(MC.x-wx, MC.y-wy) > RR*0.9){
+          // route around the puck rather than shoving it aside on the way to
+          // the wind-up spot — otherwise the robot's own setup ruins its shot
+          let gx = wx, gy = wy;
+          if (segDist(MC.x, MC.y, wx, wy, px, py) < RR+2){
+            const ux = -dy, uy = dx;
+            const sgn = ((MC.x-px)*ux + (MC.y-py)*uy) >= 0 ? 1 : -1;
+            gx = px + ux*sgn*(RR+9); gy = py + uy*sgn*(RR+9);
+          }
+          cpuS.tx = clamp(gx, MC.minX, MC.maxX);
+          cpuS.ty = clamp(gy, MC.minY, MC.maxY);
+          cpuS.mode = 'wind';
+        } else {
+          cpuS.tx = clamp(px + dx*40, MC.minX, MC.maxX);
+          cpuS.ty = clamp(py + dy*40, MC.minY, MC.maxY);
+          cpuS.mode = 'strike';
+        }
+        cpuS.dirx = dx; cpuS.diry = dy;
+        return;
+      }
+    }
+  }
+
+  // ---- 3. hold the line: shadow the puck's x, sit at defensive depth
+  //  Never sit ON the puck. Hovering over a puck it has decided not to play
+  //  pins it and stalls the match — cover the angle instead and let the shot
+  //  clock hand it over.
+  let hx = lerp(CX, px, 0.55);
+  if (!mine){
+    // up-table: cover the angle from the puck to the middle of the net
+    const f = clamp(CPU.reach, 0, 1);
+    hx = lerp(CX, px, 0.62*f);
+  }
+  const depth = lerp(CPU.defY, CPU.defY*0.62, clamp((K.TH/2-py)/(K.TH/2), 0, 1));
+  cpuS.tx = clamp(hx + (R()*2-1)*CPU.err*0.18, MC.minX, MC.maxX);
+  cpuS.ty = clamp(depth, MC.minY, MC.maxY);
+  cpuS.mode = 'home';
+}
+
+/* ================================================================= FLOW */
+function startMatch(seed){
+  RUN.seed = seed>>>0; RUN.rnd = mulberry32(RUN.seed);
+  RUN.you=0; RUN.cpu=0; RUN.left=K.MATCH_TIME; RUN.t=0; RUN.tick=0;
+  RUN.ot=false; RUN.otTime=0; RUN.freeze=0; RUN.scorer=0;
+  RUN.idle=0; RUN.idleSide=0; RUN.saves=0; RUN.hits=0; RUN.topShot=0;
+  RUN.streak=0; RUN.bestStreak=0; RUN.coinGain=0; RUN.coinShown=0; RUN.result=0;
+  RUN.overT=0; RUN.banner=null; RUN.bannerT=0; RUN.touched=false; RUN.log=[];
+  RUN._lastN = 99;
+  K.CPU_LEVEL = LEVELS[clamp(SAVE.level,0,2)].v; cpuTune();
+  setBounds();
+  // the opening drop is yours — the first two seconds teach the verb
+  dropPuck(1);
+  MP.x = MP.tx = K.TW/2; MP.y = MP.ty = K.TH - 30; MP.vx = MP.vy = 0;
+  MC.x = MC.tx = K.TW/2; MC.y = MC.ty = CPU.defY;  MC.vx = MC.vy = 0;
+  // Every field that survives a match has to be cleared here or the same seed
+  // does not replay. cpuS.atk/atkT and the contact cooldowns were leaking, and
+  // lastTouch in particular went NEGATIVE against a reset clock, which silently
+  // swallowed the first contact of every match.
+  MP.lastTouch = MC.lastTouch = -9;
+  cpuS.hist.length = 0; cpuS.timer = 0; cpuS.mode = 'home';
+  cpuS.atk = false; cpuS.atkT = 0; cpuS.dirx = 0; cpuS.diry = 1;
+  cpuS.tx = K.TW/2; cpuS.ty = CPU.defY;
+  P.trail.length = 0; P._post = 0;
+  for (const p of FX.parts) p.live=false;
+  for (const g of FX.rings) g.live=false;
+  for (const f of FX.floats) f.live=false;
+  FX.trauma=0; FX.hitstop=0; FX.flash=0; FX.heat=0;
+  RUN.countT = K.COUNT_IN; RUN.state = 'countdown';
+}
+
+/* =================================================================== STAGE */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha:false });
+const STAGE = { w:0, h:0, dpr:1, S:1, TX:0, TY:0, hudY:0, hudH:0, top:0, u:1 };
+let tableCan = null, bgCan = null;
+
+function sx(x){ return STAGE.TX + x*STAGE.S; }
+function sy(y){ return STAGE.TY + y*STAGE.S; }
+function su(u){ return u*STAGE.S; }
+/* screen -> sim */
+function ux(x){ return (x - STAGE.TX)/STAGE.S; }
+function uy(y){ return (y - STAGE.TY)/STAGE.S; }
+
+function resize(){
+  const vw = Math.max(120, window.innerWidth), vh = Math.max(220, window.innerHeight);
+  const dpr = Math.min(window.devicePixelRatio||1, 2.75);
+  // portrait stage, pillarboxed on anything wide
+  const w = Math.min(vw, vh*0.66), h = vh;
+  STAGE.w = w; STAGE.h = h; STAGE.dpr = dpr;
+  cv.style.width = w+'px'; cv.style.height = h+'px';
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  const safeTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sat')) || 0;
+  STAGE.top = Math.max(h*0.018, safeTop);
+  STAGE.hudY = STAGE.top;
+  // one layout unit, driven by the SMALLER axis. Scaling chrome off width
+  // alone made the HUD eat 20% of the height on a wide-but-short viewport
+  // and pushed the table off the bottom of the screen.
+  STAGE.u = Math.min(w/390, h/844);
+  STAGE.hudH = 128*STAGE.u;
+
+  const availTop = STAGE.hudY + STAGE.hudH + h*0.012;
+  const availH = h - availTop - h*0.022;
+  const availW = w*0.955;
+  const OW = K.TW + K.RAIL*2, OH = K.TH + K.RAIL*2;
+  const S1 = availW/OW, S2 = availH/OH;
+  const S = Math.min(S1, S2);
+  STAGE.S = S;
+  const outW = OW*S, outH = OH*S;
+  const ox = (w-outW)/2, oy = availTop + (availH-outH)/2;
+  STAGE.TX = ox + K.RAIL*S; STAGE.TY = oy + K.RAIL*S;
+
+  buildBg(); buildTable();
+}
+
+/* ================================================================ ART: BG */
+function buildBg(){
+  const w = STAGE.w, h = STAGE.h, dpr = STAGE.dpr;
+  const c = bgCan || (bgCan = document.createElement('canvas'));
+  c.width = Math.round(w*dpr); c.height = Math.round(h*dpr);
+  const g = c.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  const rad = g.createRadialGradient(w*0.5, h*0.40, 0, w*0.5, h*0.44, h*0.78);
+  rad.addColorStop(0, C.bgHi); rad.addColorStop(0.42, C.bgMid);
+  rad.addColorStop(0.78, C.bgLo); rad.addColorStop(1, C.bgEdge);
+  g.fillStyle = rad; g.fillRect(0,0,w,h);
+  // faint diagonal weave
+  g.globalAlpha = 0.05; g.strokeStyle = '#FFFFFF'; g.lineWidth = 1;
+  for (let i=-h; i<w+h; i+=13){ g.beginPath(); g.moveTo(i,0); g.lineTo(i+h,h); g.stroke(); }
+  g.globalAlpha = 1;
+  // vignette
+  const v = g.createRadialGradient(w*0.5,h*0.5,h*0.30, w*0.5,h*0.5,h*0.78);
+  v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(0,0,0,0.55)');
+  g.fillStyle = v; g.fillRect(0,0,w,h);
+}
+
+/* ============================================================= ART: TABLE */
+function rr(g,x,y,w,h,r){
+  // a zero-height viewport during first paint drives every derived size
+  // negative; a rounded rect must degrade, not throw
+  w = Math.max(0, w); h = Math.max(0, h);
+  r = Math.max(0, Math.min(r, w/2, h/2));
+  g.beginPath();
+  g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath();
+}
+function capsule(g,x,y,w,h){ rr(g,x,y,w,h,Math.min(w,h)/2); }
+
+function buildTable(){
+  const S = STAGE.S, dpr = STAGE.dpr;
+  const OW = (K.TW + K.RAIL*2)*S, OH = (K.TH + K.RAIL*2)*S;
+  const pad = 26*dpr/dpr;                       // room for the outer glow
+  const c = tableCan || (tableCan = document.createElement('canvas'));
+  c.width = Math.round((OW+pad*2)*dpr); c.height = Math.round((OH+pad*2)*dpr);
+  const g = c.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  g.translate(pad, pad);
+  tableCan._pad = pad;
+
+  const R = K.RAIL*S, CX = OW/2, MID = OH/2;
+  const rOut = 15.5*S, rIn = K.CORNER*S;
+
+  /* ---- drop shadow under the whole cabinet */
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,0.55)'; g.shadowBlur = 26; g.shadowOffsetY = 12;
+  g.fillStyle = '#000'; rr(g, 0, 0, OW, OH, rOut); g.fill();
+  g.restore();
+
+  /* ---- rail body: red on the far half, blue on yours */
+  g.save(); rr(g, 0, 0, OW, OH, rOut); g.clip();
+  const gr = g.createLinearGradient(0,0,0,MID);
+  gr.addColorStop(0, C.redHi); gr.addColorStop(0.14, C.red);
+  gr.addColorStop(0.80, C.red); gr.addColorStop(1, C.redLo);
+  g.fillStyle = gr; g.fillRect(0,0,OW,MID+1);
+  const gb = g.createLinearGradient(0,MID,0,OH);
+  gb.addColorStop(0, C.bluLo); gb.addColorStop(0.20, C.blu);
+  gb.addColorStop(0.86, C.blu); gb.addColorStop(1, C.bluHi);
+  g.fillStyle = gb; g.fillRect(0,MID,OW,OH-MID);
+  // the seam where the colours meet
+  g.fillStyle = 'rgba(0,0,0,0.22)'; g.fillRect(0, MID-1.2*S*0.5, OW, 1.2*S*0.5*2);
+
+  // horizontal sheen across the rails
+  const sh = g.createLinearGradient(0,0,OW,0);
+  sh.addColorStop(0,'rgba(0,0,0,0.24)'); sh.addColorStop(0.14,'rgba(255,255,255,0.14)');
+  sh.addColorStop(0.5,'rgba(255,255,255,0.03)'); sh.addColorStop(0.86,'rgba(255,255,255,0.10)');
+  sh.addColorStop(1,'rgba(0,0,0,0.26)');
+  g.fillStyle = sh; g.fillRect(0,0,OW,OH);
+
+  // top bevel highlight + bottom shade
+  const bv = g.createLinearGradient(0,0,0,OH);
+  bv.addColorStop(0,'rgba(255,255,255,0.34)'); bv.addColorStop(0.04,'rgba(255,255,255,0.0)');
+  bv.addColorStop(0.96,'rgba(0,0,0,0.0)'); bv.addColorStop(1,'rgba(0,0,0,0.34)');
+  g.fillStyle = bv; g.fillRect(0,0,OW,OH);
+  g.restore();
+
+  /* ---- rail segment seams — the cabinet reads as assembled parts */
+  g.save(); rr(g, 0, 0, OW, OH, rOut); g.clip();
+  g.strokeStyle = 'rgba(0,0,0,0.20)'; g.lineWidth = Math.max(1, 0.7*S);
+  const segY = [rOut*1.25, OH-rOut*1.25], segX = [rOut*1.25, OW-rOut*1.25];
+  segY.forEach(y=>{ g.beginPath(); g.moveTo(0,y); g.lineTo(R,y); g.moveTo(OW-R,y); g.lineTo(OW,y); g.stroke(); });
+  segX.forEach(x=>{ g.beginPath(); g.moveTo(x,0); g.lineTo(x,R); g.moveTo(x,OH-R); g.lineTo(x,OH); g.stroke(); });
+  const mw = K.GOAL_W*S*0.5 + 9*S;
+  [0, OH-R].forEach(y=>{ g.beginPath();
+    g.moveTo(CX-mw, y); g.lineTo(CX-mw, y+R); g.moveTo(CX+mw, y); g.lineTo(CX+mw, y+R); g.stroke(); });
+  g.restore();
+
+  /* ---- glossy light bars inset in the rails */
+  function bar(x,y,w,h,glow){
+    g.save();
+    g.shadowColor = glow; g.shadowBlur = 12*S*0.4;
+    g.fillStyle = 'rgba(255,255,255,0.94)';
+    capsule(g,x,y,w,h); g.fill();
+    g.restore();
+    g.fillStyle = 'rgba(255,255,255,0.55)';
+    capsule(g,x+w*0.18,y+h*0.14,w*0.64,h*0.34); g.fill();
+  }
+  const bw = 2.6*S, inset = 3.2*S;
+  const vTop = rOut*1.35, vBot = OH-rOut*1.35;
+  // side rails, split at the colour change
+  [inset, OW-inset-bw].forEach(x=>{
+    bar(x, vTop, bw, MID-vTop-2.6*S, 'rgba(255,120,110,0.9)');
+    bar(x, MID+2.6*S, bw, vBot-MID-2.6*S, 'rgba(110,180,255,0.9)');
+  });
+  // end rails, flanking the goal mouth
+  const halfMouth = K.GOAL_W*S*0.5 + 7*S;
+  [[inset, 'rgba(255,120,110,0.9)'], [OH-inset-bw, 'rgba(110,180,255,0.9)']].forEach(([y,gl])=>{
+    bar(rOut*1.45, y, CX-halfMouth-rOut*1.45, bw, gl);
+    bar(CX+halfMouth, y, OW-rOut*1.45-(CX+halfMouth), bw, gl);
+  });
+
+  /* ---- corner screws */
+  function screw(x,y){
+    g.fillStyle = 'rgba(0,0,0,0.34)'; g.beginPath(); g.arc(x,y,2.5*S,0,TAU); g.fill();
+    const rg2 = g.createRadialGradient(x-0.7*S,y-0.7*S,0,x,y,2.0*S);
+    rg2.addColorStop(0,'#3A4358'); rg2.addColorStop(1,'#0D1424');
+    g.fillStyle = rg2; g.beginPath(); g.arc(x,y,2.0*S,0,TAU); g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.30)'; g.beginPath(); g.arc(x-0.55*S,y-0.6*S,0.75*S,0,TAU); g.fill();
+  }
+  const ci = rOut*0.60;
+  screw(ci,ci); screw(OW-ci,ci); screw(ci,OH-ci); screw(OW-ci,OH-ci);
+
+  /* ---- the playing surface */
+  const ix = R, iy = R, iw = K.TW*S, ih = K.TH*S;
+  g.save();
+  rr(g, ix, iy, iw, ih, rIn); g.clip();
+  const ig = g.createLinearGradient(0,iy,0,iy+ih);
+  ig.addColorStop(0, C.iceLo); ig.addColorStop(0.18, C.ice);
+  ig.addColorStop(0.82, C.ice); ig.addColorStop(1, C.iceLo);
+  g.fillStyle = ig; g.fillRect(ix,iy,iw,ih);
+
+  // dot grid
+  g.fillStyle = rgba(C.iceDot, 0.55);
+  const sp = 4.6*S, dr = Math.max(0.7, 0.44*S);
+  for (let y=iy+sp*0.5; y<iy+ih; y+=sp)
+    for (let x=ix+sp*0.5; x<ix+iw; x+=sp){ g.beginPath(); g.arc(x,y,dr,0,TAU); g.fill(); }
+
+  // gentle corner shading so the surface isn't flat
+  const cs = g.createRadialGradient(ix+iw/2, iy+ih/2, ih*0.22, ix+iw/2, iy+ih/2, ih*0.62);
+  cs.addColorStop(0,'rgba(0,0,0,0)'); cs.addColorStop(1,'rgba(60,80,130,0.16)');
+  g.fillStyle = cs; g.fillRect(ix,iy,iw,ih);
+
+  /* ---- markings */
+  const U = v => v*S, mx = ix + iw/2, my = iy + ih/2;
+  g.lineCap = 'round';
+
+  // centre line, dashed
+  g.strokeStyle = rgba(C.red, 0.85); g.lineWidth = U(1.15);
+  g.setLineDash([U(5.2), U(4.4)]);
+  g.beginPath(); g.moveTo(ix, my); g.lineTo(ix+iw, my); g.stroke();
+  g.setLineDash([]);
+
+  // centre circle
+  g.strokeStyle = rgba(C.red, 0.90); g.lineWidth = U(1.3);
+  g.beginPath(); g.arc(mx, my, U(17), 0, TAU); g.stroke();
+  g.strokeStyle = rgba(C.redHi, 0.55); g.lineWidth = U(0.7);
+  g.beginPath(); g.arc(mx, my, U(14.4), 0, TAU); g.stroke();
+  g.fillStyle = rgba(C.red, 0.92); g.beginPath(); g.arc(mx, my, U(6.2), 0, TAU); g.fill();
+  g.fillStyle = rgba(C.redHi, 0.45); g.beginPath(); g.arc(mx-U(1.4), my-U(1.6), U(2.4), 0, TAU); g.fill();
+
+  // creases + spots
+  function crease(y0, dir, col){
+    g.strokeStyle = rgba(col, 0.85); g.lineWidth = U(1.3);
+    g.beginPath(); g.arc(mx, y0, U(31), dir>0?0:Math.PI, dir>0?Math.PI:TAU); g.stroke();
+    g.strokeStyle = rgba(col, 0.40); g.lineWidth = U(0.7);
+    g.beginPath(); g.arc(mx, y0, U(27.4), dir>0?0:Math.PI, dir>0?Math.PI:TAU); g.stroke();
+    g.fillStyle = rgba(col, 0.80);
+    g.beginPath(); g.arc(mx, y0 + dir*U(53), U(2.1), 0, TAU); g.fill();
+  }
+  crease(iy, 1, C.red);
+  crease(iy+ih, -1, C.blu);
+
+  // inner shadow around the boards
+  g.strokeStyle = 'rgba(40,60,110,0.30)'; g.lineWidth = U(2.2);
+  rr(g, ix+U(1.1), iy+U(1.1), iw-U(2.2), ih-U(2.2), rIn); g.stroke();
+  g.strokeStyle = 'rgba(40,60,110,0.14)'; g.lineWidth = U(4.4);
+  rr(g, ix+U(3.0), iy+U(3.0), iw-U(6.0), ih-U(6.0), rIn); g.stroke();
+  g.restore();
+
+  /* ---- goal mouths */
+  function mouth(topSide){
+    const gw = K.GOAL_W*S, gh = R;
+    const x0 = CX - gw/2, y0 = topSide ? 0 : OH-gh;
+    g.save();
+    rr(g, x0-2.2*S, topSide? y0-2*S : y0, gw+4.4*S, gh+2*S, 3.4*S); g.clip();
+    g.fillStyle = '#0A1330'; g.fillRect(x0-4*S, y0-4*S, gw+8*S, gh+8*S);
+    // honeycomb
+    g.strokeStyle = 'rgba(120,160,240,0.20)'; g.lineWidth = Math.max(1,0.5*S);
+    const hr = 2.3*S, hx = hr*1.732, hy = hr*1.5;
+    for (let row=-1, ry=y0-hy; ry<y0+gh+hy; ry+=hy, row++){
+      for (let cxx = x0 - hx + (row%2?hx/2:0); cxx < x0+gw+hx; cxx += hx){
+        g.beginPath();
+        for (let k=0;k<6;k++){ const a=Math.PI/6 + k*Math.PI/3;
+          const px2 = cxx+Math.cos(a)*hr, py2 = ry+Math.sin(a)*hr;
+          k? g.lineTo(px2,py2) : g.moveTo(px2,py2); }
+        g.closePath(); g.stroke();
+      }
+    }
+    // depth
+    const dg = g.createLinearGradient(0, topSide?y0:y0+gh, 0, topSide?y0+gh:y0);
+    dg.addColorStop(0,'rgba(0,0,0,0.72)'); dg.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle = dg; g.fillRect(x0-4*S, y0-4*S, gw+8*S, gh+8*S);
+    g.restore();
+    // bright lip on the surface side
+    g.strokeStyle = 'rgba(255,255,255,0.92)'; g.lineWidth = 1.5*S; g.lineCap='round';
+    const ly = topSide ? R : OH-R;
+    g.beginPath(); g.moveTo(x0+1.2*S, ly); g.lineTo(x0+gw-1.2*S, ly); g.stroke();
+    // posts
+    g.fillStyle = topSide ? C.redLo : C.bluLo;
+    [x0, x0+gw].forEach(x=>{ g.beginPath(); g.arc(x, ly, K.POST_R*S*1.25, 0, TAU); g.fill(); });
+  }
+  mouth(true); mouth(false);
+
+  /* ---- outer rim line */
+  g.strokeStyle = 'rgba(0,0,0,0.42)'; g.lineWidth = Math.max(1, 1.0*S);
+  rr(g, 0.5, 0.5, OW-1, OH-1, rOut); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.14)'; g.lineWidth = Math.max(1, 0.7*S);
+  rr(g, 1.8, 1.8, OW-3.6, OH-3.6, rOut-1.2); g.stroke();
+}
+
+/* ================================================================ RENDER */
+function drawTable(){
+  const pad = tableCan._pad, S = STAGE.S;
+  const OW = (K.TW+K.RAIL*2)*S, OH = (K.TH+K.RAIL*2)*S;
+  ctx.drawImage(tableCan, STAGE.TX - K.RAIL*S - pad, STAGE.TY - K.RAIL*S - pad,
+                OW + pad*2, OH + pad*2);
+}
+
+function drawPuck(){
+  const S = STAGE.S, r = su(K.PUCK_R);
+  const spd = Math.hypot(P.vx, P.vy), f = clamp(spd/230, 0, 1);
+  // trail
+  const n = P.trail.length/2;
+  if (n > 3 && f > 0.06){
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (let i=1;i<n;i++){
+      const t = i/n;
+      const x = sx(P.trail[i*2]), y = sy(P.trail[i*2+1]);
+      const a = t*t*0.55*f;
+      const rad = r*(0.30+0.72*t);
+      const gg = ctx.createRadialGradient(x,y,0,x,y,rad*1.9);
+      gg.addColorStop(0, rgba(C.goldHi, a));
+      gg.addColorStop(0.45, rgba(C.gold, a*0.65));
+      gg.addColorStop(1, rgba(C.hot, 0));
+      ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(x,y,rad*1.9,0,TAU); ctx.fill();
+    }
+    ctx.restore();
+  }
+  const x = sx(P.x), y = sy(P.y);
+  // shadow
+  ctx.fillStyle = 'rgba(30,50,95,0.30)';
+  ctx.beginPath(); ctx.ellipse(x+r*0.14, y+r*0.30, r*1.02, r*0.86, 0, 0, TAU); ctx.fill();
+  // body
+  const bg = ctx.createRadialGradient(x-r*0.36, y-r*0.42, r*0.06, x, y, r*1.12);
+  bg.addColorStop(0, '#4B5468'); bg.addColorStop(0.42, '#232833');
+  bg.addColorStop(0.86, C.puck); bg.addColorStop(1, '#070A11');
+  ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+  // rim
+  ctx.strokeStyle = rgba(C.puckRim, 0.45); ctx.lineWidth = Math.max(1, r*0.10);
+  ctx.beginPath(); ctx.arc(x,y,r*0.94,0,TAU); ctx.stroke();
+  // inner disc
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = Math.max(1, r*0.07);
+  ctx.beginPath(); ctx.arc(x,y,r*0.62,0,TAU); ctx.stroke();
+  // specular
+  ctx.save(); ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.clip();
+  const sg = ctx.createLinearGradient(x-r, y-r, x+r*0.3, y+r*0.4);
+  sg.addColorStop(0,'rgba(255,255,255,0.42)'); sg.addColorStop(0.5,'rgba(255,255,255,0.06)');
+  sg.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle = sg; ctx.fillRect(x-r,y-r,r*2,r*2);
+  ctx.restore();
+  // possession clock ring
+  if (RUN.idle > K.IDLE_WARN && RUN.state==='play'){
+    const k = clamp((RUN.idle-K.IDLE_WARN)/(K.IDLE_MAX-K.IDLE_WARN), 0, 1);
+    ctx.strokeStyle = rgba(C.gold, 0.35+0.5*Math.abs(Math.sin(RUN.t*9)));
+    ctx.lineWidth = Math.max(2, r*0.24); ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(x, y, r*1.75, -Math.PI/2, -Math.PI/2 + TAU*(1-k)); ctx.stroke();
+  }
+}
+
+function drawMallet(m, isPlayer){
+  const r = su(K.MALLET_R), x = sx(m.x), y = sy(m.y);
+  const sk = isPlayer ? SKINS[clamp(SAVE.skin,0,SKINS.length-1)] : { a:C.red, b:C.redHi, c:C.redLo };
+  const glow = isPlayer ? FX.glowP : FX.glowC;
+
+  // shadow
+  ctx.fillStyle = 'rgba(20,40,90,0.32)';
+  ctx.beginPath(); ctx.ellipse(x+r*0.10, y+r*0.24, r*1.03, r*0.90, 0, 0, TAU); ctx.fill();
+
+  if (glow > 0.01){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    const gg = ctx.createRadialGradient(x,y,r*0.5,x,y,r*2.1);
+    gg.addColorStop(0, rgba(sk.b, 0.30*glow)); gg.addColorStop(1, rgba(sk.b, 0));
+    ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(x,y,r*2.1,0,TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  // base skirt
+  const bg = ctx.createRadialGradient(x-r*0.30, y-r*0.34, r*0.10, x, y, r*1.06);
+  bg.addColorStop(0, sk.b); bg.addColorStop(0.34, sk.a);
+  bg.addColorStop(0.82, sk.c); bg.addColorStop(1, tone(sk.c, 0.55));
+  ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+  // skirt rim
+  ctx.strokeStyle = rgba(tone(sk.c,0.5), 0.85); ctx.lineWidth = Math.max(1, r*0.075);
+  ctx.beginPath(); ctx.arc(x,y,r*0.96,0,TAU); ctx.stroke();
+  ctx.strokeStyle = rgba(sk.b, 0.55); ctx.lineWidth = Math.max(1, r*0.055);
+  ctx.beginPath(); ctx.arc(x,y,r*0.80,0,TAU); ctx.stroke();
+
+  // dome
+  const dr = r*0.66, dy = y - r*0.10;
+  const dg = ctx.createRadialGradient(x-dr*0.42, dy-dr*0.50, dr*0.06, x, dy, dr*1.20);
+  dg.addColorStop(0, '#FFFFFF'); dg.addColorStop(0.18, sk.b);
+  dg.addColorStop(0.58, sk.a); dg.addColorStop(1, sk.c);
+  ctx.fillStyle = dg; ctx.beginPath(); ctx.arc(x,dy,dr,0,TAU); ctx.fill();
+  // dome shade at the base
+  ctx.save(); ctx.beginPath(); ctx.arc(x,dy,dr,0,TAU); ctx.clip();
+  const sg = ctx.createLinearGradient(0, dy, 0, dy+dr);
+  sg.addColorStop(0,'rgba(0,0,0,0)'); sg.addColorStop(1, rgba(tone(sk.c,0.4), 0.55));
+  ctx.fillStyle = sg; ctx.fillRect(x-dr,dy-dr,dr*2,dr*2);
+  ctx.restore();
+  // specular
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath(); ctx.ellipse(x-dr*0.34, dy-dr*0.44, dr*0.30, dr*0.20, -0.6, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath(); ctx.ellipse(x+dr*0.28, dy+dr*0.30, dr*0.20, dr*0.11, 0.5, 0, TAU); ctx.fill();
+}
+
+function drawFX(){
+  const S = STAGE.S;
+  for (let i=0;i<FX.rings.length;i++){ const g=FX.rings[i]; if (!g.live) continue;
+    const t = 1-g.life/g.max, k = eOut(t);
+    ctx.strokeStyle = rgba(g.c, (1-t)*0.75);
+    ctx.lineWidth = Math.max(1, su(g.w)*(1-t*0.5));
+    ctx.beginPath(); ctx.arc(sx(g.x), sy(g.y), su(lerp(g.r,g.r1,k)), 0, TAU); ctx.stroke(); }
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i=0;i<FX.parts.length;i++){ const p=FX.parts[i]; if (!p.live) continue;
+    const t = p.life/p.max;
+    ctx.globalAlpha = clamp(t*1.3,0,1);
+    ctx.fillStyle = p.sh ? C.white : p.c;
+    const r = su(p.r*(0.4+0.6*t));
+    ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), r, 0, TAU); ctx.fill(); }
+  ctx.restore(); ctx.globalAlpha = 1;
+  for (let i=0;i<FX.floats.length;i++){ const f=FX.floats[i]; if (!f.live) continue;
+    const t = 1-f.life/f.max;
+    ctx.save(); ctx.globalAlpha = clamp((1-t)*1.6,0,1);
+    txt(f.txt, sx(f.x), sy(f.y)-t*su(12), su(6)*f.sz, f.c, 'center', su(1.3));
+    ctx.restore(); }
+  ctx.globalAlpha = 1;
+}
+
+/* the heat wash over the surface in the closing seconds */
+function drawHeat(){
+  if (FX.heat <= 0.02) return;
+  const S = STAGE.S, ix = sx(0), iy = sy(0), iw = su(K.TW), ih = su(K.TH);
+  const pulse = 0.5 + 0.5*Math.sin(RUN.t*(RUN.ot?7:4.5));
+  ctx.save();
+  rr(ctx, ix, iy, iw, ih, su(K.CORNER)); ctx.clip();
+  ctx.globalCompositeOperation = 'multiply';
+  const gg = ctx.createLinearGradient(0, iy, 0, iy+ih);
+  const a = FX.heat*(0.10+0.09*pulse);
+  gg.addColorStop(0, rgba(C.hot, a)); gg.addColorStop(0.5, rgba(C.gold, a*0.35));
+  gg.addColorStop(1, rgba(C.hot, a));
+  ctx.fillStyle = gg; ctx.fillRect(ix,iy,iw,ih);
+  ctx.restore();
+  ctx.save();
+  rr(ctx, ix, iy, iw, ih, su(7.5)); ctx.clip();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = rgba(C.hot, FX.heat*(0.20+0.28*pulse));
+  ctx.lineWidth = su(2.4);
+  rr(ctx, ix+su(1.4), iy+su(1.4), iw-su(2.8), ih-su(2.8), su(K.CORNER-1.4)); ctx.stroke();
+  ctx.restore();
+}
+
+/* ---------------------------------------------------------------- TEXT */
+function txt(s, x, y, size, col, align, stroke, weight){
+  ctx.font = (weight||900)+' '+size+'px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  ctx.textAlign = align||'center'; ctx.textBaseline = 'middle';
+  if (stroke){ ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.lineWidth = stroke*2; ctx.strokeStyle = rgba(C.ink, 0.92); ctx.strokeText(s,x,y); }
+  ctx.fillStyle = col; ctx.fillText(s,x,y);
+}
+
+/* ------------------------------------------------------------------ HUD */
+const HITS = [];
+function hit(id, x, y, w, h, data){ HITS.push({id,x,y,w,h,data}); }
+
+/* Layout follows the reference chrome: a top row of chrome (settings on the
+   left, wallet on the right), the score plaques centred below it, then the
+   first-to-three pips wrapped around the clock. Sizes are in `u` = STAGE.u so
+   the whole bar scales with the stage and nothing ever collides. */
+function drawHud(){
+  const w = STAGE.w, y0 = STAGE.hudY;
+  const u = STAGE.u;
+  const pad = 12*u;
+
+  // ---- coins (drawn first, but placed clear of the plaques)
+  const cw = 88*u, ch = 34*u, cx = w-pad-cw, cy = y0 + 3*u;
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.4)'; ctx.shadowBlur=8*u; ctx.shadowOffsetY=3*u;
+  ctx.fillStyle = rgba(C.ink2, 0.96); capsule(ctx, cx, cy, cw, ch); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = rgba(C.bluHi, 0.32); ctx.lineWidth = Math.max(1,1.5*u);
+  capsule(ctx, cx, cy, cw, ch); ctx.stroke();
+  coinIcon(cx+ch*0.50, cy+ch/2, ch*0.34);
+  const pr = ch*0.36, pxx = cx+cw-ch*0.46;
+  // shrink to fit — the wallet reaches five digits and used to run under the +
+  const slotL = cx+ch*0.90, slotR = pxx-pr*1.05;
+  const purse = commas(SAVE.coins);
+  let fs = 16*u;
+  ctx.font = '900 '+fs+'px system-ui,sans-serif';
+  const wNeed = ctx.measureText(purse).width;
+  if (wNeed > slotR-slotL) fs *= (slotR-slotL)/wNeed;
+  txt(purse, (slotL+slotR)/2, cy+ch/2+0.5*u, fs, C.white, 'center', Math.max(1, fs*0.09));
+  hit('shop', pxx-pr*1.5, cy, pr*3, ch);
+  const pg = ctx.createRadialGradient(pxx-pr*0.3, cy+ch/2-pr*0.4, pr*0.1, pxx, cy+ch/2, pr*1.2);
+  pg.addColorStop(0, '#7BF39E'); pg.addColorStop(0.5, C.grn); pg.addColorStop(1, C.grnLo);
+  ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(pxx, cy+ch/2, pr, 0, TAU); ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,0.30)'; ctx.lineWidth=Math.max(1,1.4*u);
+  ctx.beginPath(); ctx.arc(pxx, cy+ch/2, pr, 0, TAU); ctx.stroke();
+  ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=Math.max(2,2.6*u); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(pxx-pr*0.42, cy+ch/2); ctx.lineTo(pxx+pr*0.42, cy+ch/2);
+  ctx.moveTo(pxx, cy+ch/2-pr*0.42); ctx.lineTo(pxx, cy+ch/2+pr*0.42); ctx.stroke();
+
+  // ---- gear
+  const gs = 42*u, gx = pad, gy = y0 + 1*u;
+  hit('gear', gx-4*u, gy-4*u, gs+8*u, gs+8*u);
+  plaque(gx, gy, gs, gs, C.blu, C.bluHi, C.bluLo, 12*u);
+  gear(gx+gs/2, gy+gs/2 - gs*0.02, gs*0.27, C.bluInk);
+
+  // ---- score plaques
+  const pw = 66*u, ph = 50*u, py = y0 + 44*u;
+  const vsX = w/2, gap = 27*u;
+  const lx = vsX - gap - pw, rx = vsX + gap;
+
+  txt('YOU', lx+pw/2, py-11*u, 12*u, C.white, 'center', 2.0*u);
+  txt('OPPONENT', rx+pw/2, py-11*u, 12*u, C.white, 'center', 2.0*u);
+
+  const popY = RUN.scorer===1 && RUN.state==='goal' ? 1 : 0;
+  const popC = RUN.scorer===-1 && RUN.state==='goal' ? 1 : 0;
+  const bump = t => 1 + (t ? 0.10*Math.sin(clamp(1-RUN.freeze/K.GOAL_FREEZE,0,1)*Math.PI) : 0);
+
+  ctx.save(); ctx.translate(lx+pw/2, py+ph/2); ctx.scale(bump(popY),bump(popY)); ctx.translate(-(lx+pw/2),-(py+ph/2));
+  plaque(lx, py, pw, ph, C.blu, C.bluHi, C.bluLo, 14*u);
+  txt(String(RUN.you), lx+pw/2, py+ph/2+1*u, 32*u, C.white, 'center', 2.4*u);
+  ctx.restore();
+
+  ctx.save(); ctx.translate(rx+pw/2, py+ph/2); ctx.scale(bump(popC),bump(popC)); ctx.translate(-(rx+pw/2),-(py+ph/2));
+  plaque(rx, py, pw, ph, C.red, C.redHi, C.redLo, 14*u);
+  txt(String(RUN.cpu), rx+pw/2, py+ph/2+1*u, 32*u, C.white, 'center', 2.4*u);
+  ctx.restore();
+
+  vsBadge(vsX, py+ph/2, 21*u);
+
+  // ---- pips + clock
+  const bw = 168*u, bh = 24*u, bx = w/2-bw/2, by = py+ph+7*u;
+  ctx.fillStyle = rgba(C.ink2, 0.92); capsule(ctx, bx, by, bw, bh); ctx.fill();
+  ctx.strokeStyle = rgba(C.bluHi, 0.22); ctx.lineWidth = Math.max(1,1.3*u);
+  capsule(ctx, bx, by, bw, bh); ctx.stroke();
+  const pipR = 4.4*u;
+  for (let i=0;i<K.GOALS_TO_WIN;i++){
+    pip(bx+14*u+i*12.5*u, by+bh/2, pipR, i<RUN.you, C.blu, C.bluHi);
+    pip(bx+bw-14*u-i*12.5*u, by+bh/2, pipR, i<RUN.cpu, C.red, C.redHi);
+  }
+  const secs = Math.ceil(RUN.left);
+  const hot = !RUN.ot && secs <= 10;
+  const label = RUN.ot ? 'OT ' + Math.max(0, Math.ceil(K.OT_MAX-RUN.otTime))
+                       : (secs>=60 ? '1:00' : '0:'+String(Math.max(0,secs)).padStart(2,'0'));
+  const pulseS = hot ? 1+0.10*Math.abs(Math.sin(RUN.t*Math.PI*2)) : 1;
+  ctx.save(); ctx.translate(w/2, by+bh/2); ctx.scale(pulseS,pulseS);
+  txt(label, 0, 0.5*u, 16*u, RUN.ot ? C.gold : (hot ? C.hot : C.white), 'center', 1.8*u);
+  ctx.restore();
+}
+
+function plaque(x,y,w,h,base,hi,lo,r){
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.42)'; ctx.shadowBlur=10*STAGE.u; ctx.shadowOffsetY=4*STAGE.u;
+  ctx.fillStyle = tone(lo, 0.55); rr(ctx,x,y,w,h,r); ctx.fill();
+  ctx.restore();
+  const g = ctx.createLinearGradient(0,y,0,y+h);
+  g.addColorStop(0, hi); g.addColorStop(0.16, base);
+  g.addColorStop(0.80, base); g.addColorStop(1, lo);
+  ctx.fillStyle = g; rr(ctx, x+w*0.028, y+h*0.03, w*0.944, h*0.90, r*0.9); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.30)';
+  rr(ctx, x+w*0.10, y+h*0.09, w*0.80, h*0.26, r*0.55); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = Math.max(1, 1.4*STAGE.u);
+  rr(ctx, x+w*0.028, y+h*0.03, w*0.944, h*0.90, r*0.9); ctx.stroke();
+}
+function pip(x,y,r,on,base,hi){
+  if (on){
+    ctx.save(); ctx.shadowColor = rgba(hi,0.9); ctx.shadowBlur = r*2.2;
+    const g = ctx.createRadialGradient(x-r*0.3,y-r*0.35,r*0.1,x,y,r);
+    g.addColorStop(0,'#FFFFFF'); g.addColorStop(0.4,hi); g.addColorStop(1,base);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill(); ctx.restore();
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.13)'; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = Math.max(1, r*0.24);
+    ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.stroke();
+  }
+}
+function vsBadge(x,y,r){
+  // lightning behind
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.fillStyle = rgba('#8FE9FF', 0.95);
+  ctx.shadowColor = 'rgba(120,220,255,0.9)'; ctx.shadowBlur = r*0.9;
+  ctx.beginPath();
+  ctx.moveTo(-r*0.30,-r*1.75); ctx.lineTo(r*0.34,-r*0.55); ctx.lineTo(-r*0.02,-r*0.45);
+  ctx.lineTo(r*0.30, r*1.75); ctx.lineTo(-r*0.36, r*0.50); ctx.lineTo(r*0.00, r*0.40);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(x,y); ctx.rotate(-0.10);
+  txt('VS', 0, 0, r*1.42, C.gold, 'center', r*0.20);
+  ctx.restore();
+}
+/* teeth as rounded spokes + a hub, with the bore painted in rather than
+   punched out — destination-out would erase the plaque underneath it too */
+function gear(x,y,r,hole){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = '#FFFFFF';
+  const teeth = 7;
+  for (let i=0;i<teeth;i++){
+    ctx.save(); ctx.rotate(i*TAU/teeth);
+    rr(ctx, -r*0.26, -r*1.44, r*0.52, r*0.70, r*0.15); ctx.fill();
+    ctx.restore();
+  }
+  ctx.beginPath(); ctx.arc(0,0,r*1.02,0,TAU); ctx.fill();
+  ctx.fillStyle = hole || C.bluInk;
+  ctx.beginPath(); ctx.arc(0,0,r*0.40,0,TAU); ctx.fill();
+  ctx.restore();
+}
+function coinIcon(x,y,r){
+  ctx.save();
+  ctx.shadowColor='rgba(255,190,60,0.65)'; ctx.shadowBlur=r*0.9;
+  const g = ctx.createRadialGradient(x-r*0.32,y-r*0.36,r*0.08,x,y,r*1.05);
+  g.addColorStop(0,C.goldHi); g.addColorStop(0.5,C.gold); g.addColorStop(1,C.goldLo);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle=rgba(C.goldLo,0.85); ctx.lineWidth=Math.max(1,r*0.13);
+  ctx.beginPath(); ctx.arc(x,y,r*0.99,0,TAU); ctx.stroke();
+  ctx.fillStyle=rgba(C.goldLo,0.55);
+  txt('$', x, y+r*0.06, r*1.15, rgba(C.goldLo,0.9), 'center', 0);
+}
+
+/* ------------------------------------------------------------- OVERLAYS */
+function drawCountdown(){
+  const w = STAGE.w, u = STAGE.u;
+  const n = Math.ceil(RUN.countT/0.8);
+  const cx = w/2, cy = sy(K.TH/2);
+  // a soft scrim so white type stays legible over the white surface
+  const scrim = clamp(RUN.countT/K.COUNT_IN, 0, 1);
+  ctx.save();
+  const sg = ctx.createRadialGradient(cx, cy, 0, cx, cy, su(K.TW*0.9));
+  sg.addColorStop(0, rgba(C.ink, 0.46*scrim)); sg.addColorStop(0.6, rgba(C.ink, 0.22*scrim));
+  sg.addColorStop(1, rgba(C.ink, 0));
+  ctx.fillStyle = sg; ctx.fillRect(0,0,w,STAGE.h);
+  ctx.restore();
+  if (n > 3){
+    const t = clamp((K.COUNT_IN-RUN.countT)/0.5, 0, 1);
+    ctx.save(); ctx.globalAlpha = t;
+    txt('RINK', cx, cy - su(14), 58*u, C.white, 'center', 4.5*u);
+    txt('FIRST TO 3  ·  60 SECONDS', cx, cy + su(16), 13*u, C.goldHi, 'center', 2.4*u);
+    ctx.restore();
+    return;
+  }
+  const f = (RUN.countT/0.8) % 1;
+  const k = 1 - f;                       // 0 at the start of the digit
+  const sc = 0.6 + 0.5*eOut(clamp(k*2.4,0,1));
+  ctx.save(); ctx.globalAlpha = clamp(f*2.2, 0, 1);
+  ctx.translate(cx, cy); ctx.scale(sc, sc);
+  txt(n<=0?'GO':String(n), 0, 0, 96*u, n===1?C.gold:C.white, 'center', 6*u);
+  ctx.restore();
+  // thumb hint
+  if (!RUN.touched){
+    const t = (RUN.t*1.0 + performance.now()/1000)%1.6;
+    const hx = sx(MP.x), hy = sy(MP.y);
+    ctx.save();
+    ctx.strokeStyle = rgba(C.white, 0.55*(1-Math.abs(Math.sin(t*2))));
+    ctx.lineWidth = 2.5*u;
+    ctx.beginPath(); ctx.arc(hx, hy, su(K.MALLET_R)*(1.2+0.35*Math.sin(t*4)), 0, TAU); ctx.stroke();
+    ctx.restore();
+    finger(hx + su(9), hy + su(10), u*1.4, 0.15);
+    txt('DRAG TO MOVE', clamp(hx, sx(30), sx(K.TW-30)), hy + su(K.MALLET_R) + 34*u,
+        14*u, rgba(C.white,0.9), 'center', 2*u);
+  }
+}
+function finger(x,y,s,rot){
+  ctx.save(); ctx.translate(x,y); ctx.rotate(rot); ctx.scale(s,s);
+  ctx.fillStyle='#FFF7E6'; ctx.strokeStyle=rgba(C.ink,0.85); ctx.lineWidth=1.6;
+  ctx.beginPath();
+  ctx.moveTo(0,-11); ctx.quadraticCurveTo(4,-11,4,-6); ctx.lineTo(4,0);
+  ctx.quadraticCurveTo(11,1,11,7); ctx.quadraticCurveTo(11,17,3,17);
+  ctx.quadraticCurveTo(-5,17,-5,9); ctx.lineTo(-5,-6);
+  ctx.quadraticCurveTo(-5,-11,0,-11); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+function drawBanner(){
+  if (!RUN.banner) return;
+  const w = STAGE.w, u = STAGE.u, cy = sy(K.TH*0.34);
+  const life = RUN.bannerT;
+  const inT = clamp((1.4-life)*5, 0, 1), outT = clamp(life*4, 0, 1);
+  const sc = 0.75 + 0.25*eBack(clamp(inT,0,1));
+  ctx.save(); ctx.globalAlpha = Math.min(1, outT);
+  ctx.translate(w/2, cy); ctx.scale(sc, sc);
+  const t = RUN.banner.txt;
+  const col = t==='GOAL!' ? C.bluHi : t==='CONCEDED' ? C.redHi : C.gold;
+  txt(t, 0, 0, 46*u, col, 'center', 5*u);
+  if (RUN.banner.sub) txt(RUN.banner.sub, 0, 30*u, 15*u, rgba(C.white,0.9), 'center', 2.4*u);
+  ctx.restore();
+}
+
+function drawResult(){
+  const w = STAGE.w, h = STAGE.h, u = STAGE.u;
+  const t = RUN.overT;
+  const fade = clamp(t/0.30, 0, 1);
+  ctx.fillStyle = rgba(C.bgEdge, 0.72*fade); ctx.fillRect(0,0,w,h);
+
+  const panelT = clamp((t-0.34)/0.42, 0, 1);
+  if (panelT <= 0) return;
+  const ph = h*0.44, py = lerp(h, h-ph-h*0.10, eOut(panelT));
+  const pw = w*0.88, px = (w-pw)/2;
+
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=26*u; ctx.shadowOffsetY=8*u;
+  ctx.fillStyle = C.ink2; rr(ctx, px, py, pw, ph, 26*u); ctx.fill();
+  ctx.restore();
+  const win = RUN.result===1;
+  ctx.strokeStyle = rgba(win?C.bluHi:C.redHi, 0.55); ctx.lineWidth = 2.4*u;
+  rr(ctx, px, py, pw, ph, 26*u); ctx.stroke();
+  ctx.save(); rr(ctx, px, py, pw, ph, 26*u); ctx.clip();
+  const gg = ctx.createLinearGradient(0,py,0,py+ph*0.5);
+  gg.addColorStop(0, rgba(win?C.blu:C.red, 0.42)); gg.addColorStop(1, rgba(C.ink2,0));
+  ctx.fillStyle = gg; ctx.fillRect(px,py,pw,ph*0.6);
+  ctx.restore();
+
+  const title = RUN.result===1 ? 'YOU WIN' : RUN.result===-1 ? 'YOU LOSE' : 'DRAW';
+  txt(title, w/2, py+ph*0.155, 38*u, win?C.white:rgba(C.white,0.9), 'center', 4*u);
+  txt(RUN.you+' — '+RUN.cpu, w/2, py+ph*0.325, 44*u, win?C.bluHi:C.redHi, 'center', 4*u);
+
+  // stat strip
+  const sy0 = py+ph*0.475;
+  const stats = [['SAVES', RUN.saves], ['TOP SHOT', Math.round(RUN.topShot*0.36)+' km/h'], ['STREAK', RUN.bestStreak]];
+  stats.forEach((s,i)=>{
+    const x = px + pw*(0.20+0.30*i);
+    txt(String(s[1]), x, sy0, 17*u, C.white, 'center', 2*u);
+    txt(s[0], x, sy0+16*u, 10*u, rgba(C.bluHi,0.75), 'center', 1.4*u);
+  });
+
+  // coin tally
+  const cy2 = py+ph*0.655;
+  coinIcon(w/2-30*u, cy2, 11*u);
+  txt('+'+commas(RUN.coinShown), w/2-12*u, cy2+0.5*u, 22*u, C.gold, 'left', 2.2*u);
+
+  // rematch
+  const bw = pw*0.62, bh = 56*u, bx = (w-bw)/2, by = py+ph-bh-20*u;
+  if (t > 0.75){
+    hit('rematch', bx, by, bw, bh);
+    const sc = 0.85 + 0.15*eBack(clamp((t-0.75)/0.3,0,1));
+    ctx.save(); ctx.translate(bx+bw/2, by+bh/2); ctx.scale(sc,sc); ctx.translate(-(bx+bw/2),-(by+bh/2));
+    plaque(bx, by, bw, bh, C.grn, '#8CF7AC', C.grnLo, 18*u);
+    txt('REMATCH', bx+bw/2, by+bh/2+1*u, 22*u, C.white, 'center', 2.6*u);
+    ctx.restore();
+  }
+}
+
+/* ---------------------------------------------------------------- PANELS */
+let PANEL = null;   // null | 'settings' | 'shop'
+function drawPanel(){
+  const w = STAGE.w, h = STAGE.h, u = STAGE.u;
+  ctx.fillStyle = rgba(C.bgEdge, 0.78); ctx.fillRect(0,0,w,h);
+  hit('closebg', 0, 0, w, h);
+  // both panels size themselves to their content rather than to a guessed
+  // fraction of the screen, so neither ends up with a lake of dead space
+  const pw = w*0.88;
+  const cols = 3, rows = Math.ceil(SKINS.length/cols);
+  const cw2 = (pw-44*u-16*u*(cols-1))/cols, chh = cw2*1.16;
+  const ph = PANEL==='shop' ? 66*u + rows*(chh+14*u) + 10*u
+                            : 72*u + 4*54*u + 34*u;
+  const px = (w-pw)/2, py = (h-ph)/2;
+  ctx.save(); ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=26*u; ctx.shadowOffsetY=8*u;
+  ctx.fillStyle = C.ink2; rr(ctx,px,py,pw,ph,26*u); ctx.fill(); ctx.restore();
+  ctx.strokeStyle = rgba(C.bluHi,0.35); ctx.lineWidth=2*u; rr(ctx,px,py,pw,ph,26*u); ctx.stroke();
+  hit('panelbg', px, py, pw, ph);
+
+  const cs = 32*u, cx2 = px+pw-cs-12*u, cy3 = py+13*u;
+  hit('close', cx2, cy3, cs, cs);
+  ctx.fillStyle = rgba(C.white,0.10); rr(ctx,cx2,cy3,cs,cs,11*u); ctx.fill();
+  ctx.strokeStyle=C.white; ctx.lineWidth=3*u; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(cx2+cs*0.32,cy3+cs*0.32); ctx.lineTo(cx2+cs*0.68,cy3+cs*0.68);
+  ctx.moveTo(cx2+cs*0.68,cy3+cs*0.32); ctx.lineTo(cx2+cs*0.32,cy3+cs*0.68); ctx.stroke();
+
+  if (PANEL==='settings'){
+    txt('SETTINGS', w/2, py+30*u, 22*u, C.white, 'center', 2.6*u);
+    const rows = [
+      ['DIFFICULTY', 'level', LEVELS.map(l=>l.name)],
+      ['SOUND', 'sound', ['OFF','ON']],
+      ['HAPTICS', 'haptic', ['OFF','ON']],
+      ['REDUCED MOTION', 'reduced', ['OFF','ON']],
+    ];
+    rows.forEach((r,i)=>{
+      const ry = py+64*u+i*54*u;
+      txt(r[0], px+22*u, ry+18*u, 14*u, rgba(C.white,0.8), 'left', 1.6*u);
+      const opts = r[2], n = opts.length;
+      const bwid = 40*u*n + 8*u*(n-1), bx0 = px+pw-22*u-bwid;
+      for (let k=0;k<n;k++){
+        const bx = bx0+k*(40*u+8*u), on = SAVE[r[1]]===k;
+        hit('set:'+r[1]+':'+k, bx, ry+2*u, 40*u, 32*u);
+        ctx.fillStyle = on ? rgba(C.blu,0.95) : rgba(C.white,0.08);
+        rr(ctx,bx,ry+2*u,40*u,32*u,10*u); ctx.fill();
+        if (on){ ctx.strokeStyle=rgba(C.bluHi,0.9); ctx.lineWidth=1.6*u; rr(ctx,bx,ry+2*u,40*u,32*u,10*u); ctx.stroke(); }
+        txt(opts[k], bx+20*u, ry+18*u, 10.5*u, on?C.white:rgba(C.white,0.5), 'center', 1.2*u);
+      }
+    });
+    txt('changing difficulty starts a new match', w/2, py+ph-24*u, 11*u, rgba(C.bluHi,0.55), 'center', 0);
+  } else {
+    // wallet on the left, title centred, close on the right — no overlap
+    coinIcon(px+30*u, py+30*u, 10*u);
+    txt(commas(SAVE.coins), px+44*u, py+30*u, 14*u, C.gold, 'left', 1.6*u);
+    txt('MALLETS', w/2, py+30*u, 22*u, C.white, 'center', 2.6*u);
+    SKINS.forEach((s,i)=>{
+      const r0 = (i/cols)|0, c0 = i%cols;
+      const bx = px+22*u+c0*(cw2+16*u), by2 = py+58*u+r0*(chh+14*u);
+      const owned = !!SAVE.owned[i], sel = SAVE.skin===i;
+      hit('skin:'+i, bx, by2, cw2, chh);
+      ctx.fillStyle = sel ? rgba(C.blu,0.30) : rgba(C.white,0.06);
+      rr(ctx,bx,by2,cw2,chh,14*u); ctx.fill();
+      ctx.strokeStyle = sel ? C.bluHi : rgba(C.white,0.14); ctx.lineWidth = sel?2.4*u:1.4*u;
+      rr(ctx,bx,by2,cw2,chh,14*u); ctx.stroke();
+      // mini mallet
+      const mx2 = bx+cw2/2, my2 = by2+chh*0.40, mr = cw2*0.28;
+      const g2 = ctx.createRadialGradient(mx2-mr*0.3,my2-mr*0.35,mr*0.08,mx2,my2,mr);
+      g2.addColorStop(0,s.b); g2.addColorStop(0.4,s.a); g2.addColorStop(1,s.c);
+      ctx.fillStyle=g2; ctx.beginPath(); ctx.arc(mx2,my2,mr,0,TAU); ctx.fill();
+      const g3 = ctx.createRadialGradient(mx2-mr*0.28,my2-mr*0.36,mr*0.05,mx2,my2-mr*0.08,mr*0.70);
+      g3.addColorStop(0,'#fff'); g3.addColorStop(0.3,s.b); g3.addColorStop(1,s.a);
+      ctx.fillStyle=g3; ctx.beginPath(); ctx.arc(mx2,my2-mr*0.10,mr*0.62,0,TAU); ctx.fill();
+      if (!owned) { ctx.fillStyle='rgba(5,15,40,0.55)'; rr(ctx,bx,by2,cw2,chh,14*u); ctx.fill(); }
+      txt(s.name, mx2, by2+chh*0.76, 10*u, owned?C.white:rgba(C.white,0.7), 'center', 1.2*u);
+      if (owned) txt(sel?'EQUIPPED':'TAP TO USE', mx2, by2+chh*0.90, 8*u, sel?C.bluHi:rgba(C.white,0.45),'center',0);
+      else { coinIcon(mx2-13*u, by2+chh*0.90, 6*u);
+             txt(String(s.cost), mx2-4*u, by2+chh*0.90, 11*u, C.gold, 'left', 1.2*u); }
+    });
+  }
+}
+
+/* ================================================================= INPUT */
+let ptr = { down:false, id:-1, sx:0, sy:0, gx:0, gy:0, gt:0 };
+
+function localPt(e){
+  const r = cv.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function testHits(x, y){
+  for (let i=HITS.length-1; i>=0; i--){ const h=HITS[i];
+    if (x>=h.x && x<=h.x+h.w && y>=h.y && y<=h.y+h.h) return h; }
+  return null;
+}
+function onUi(h){
+  if (!h) return false;
+  if (h.id==='gear'){ S.ui(1); PANEL='settings'; return true; }
+  if (h.id==='shop'){ S.ui(1); PANEL='shop'; return true; }
+  if (h.id==='close'||h.id==='closebg'){ S.ui(0); PANEL=null; return true; }
+  if (h.id==='panelbg') return true;
+  if (h.id==='rematch'){ S.ui(1); startMatch((RUN.seed*1664525+1013904223)>>>0); return true; }
+  if (h.id.startsWith('set:')){
+    const [,key,val] = h.id.split(':');
+    SAVE[key] = +val; SAVE.save(); S.ui(1);
+    if (key==='sound'){ S.on = !!SAVE.sound; S.humLevel(SAVE.sound?0.16:0); }
+    if (key==='level'){ PANEL=null; startMatch((RUN.seed*1664525+1013904223)>>>0); }
+    return true;
+  }
+  if (h.id.startsWith('skin:')){
+    const i = +h.id.split(':')[1];
+    if (SAVE.owned[i]){ SAVE.skin = i; S.ui(1); }
+    else if (SAVE.coins >= SKINS[i].cost){ SAVE.coins -= SKINS[i].cost; SAVE.owned[i]=1; SAVE.skin=i; S.coin(3); }
+    else S.ui(0);
+    SAVE.save(); return true;
+  }
+  return false;
+}
+
+function pointerDown(e){
+  S.init(); S.on = !!SAVE.sound; S.humLevel(SAVE.sound?0.16:0);
+  const p = localPt(e);
+  const h = testHits(p.x, p.y);
+  if (PANEL){ if (onUi(h)) { e.preventDefault(); return; } return; }
+  if (h && onUi(h)){ e.preventDefault(); return; }
+  if (RUN.state==='over') return;
+  ptr.down = true; ptr.id = e.pointerId;
+  ptr.sx = p.x; ptr.sy = p.y;
+  // grab offset so the mallet never teleports under your thumb; it melts away
+  ptr.gx = MP.x - ux(p.x); ptr.gy = MP.y - uy(p.y);
+  const gl = Math.hypot(ptr.gx, ptr.gy), lim = K.MALLET_R*1.6;
+  if (gl > lim){ ptr.gx *= lim/gl; ptr.gy *= lim/gl; }
+  ptr.gt = K.GRAB_DECAY;
+  RUN.touched = true;
+  applyPointer(p);
+  e.preventDefault();
+}
+function pointerMove(e){
+  if (!ptr.down || e.pointerId !== ptr.id) return;
+  applyPointer(localPt(e));
+  e.preventDefault();
+}
+function pointerUp(e){
+  if (e.pointerId !== ptr.id) return;
+  ptr.down = false; ptr.id = -1;
+  e.preventDefault();
+}
+function applyPointer(p){
+  MP.tx = ux(p.x) + ptr.gx;
+  MP.ty = uy(p.y) + ptr.gy;
+  ptr.sx = p.x; ptr.sy = p.y;
+}
+cv.addEventListener('pointerdown', pointerDown, {passive:false});
+cv.addEventListener('pointermove', pointerMove, {passive:false});
+window.addEventListener('pointerup', pointerUp, {passive:false});
+window.addEventListener('pointercancel', pointerUp, {passive:false});
+cv.addEventListener('contextmenu', e=>e.preventDefault());
+
+/* ================================================================== LOOP */
+let acc = 0, last = 0, running = true;
+const FIXED = 1/60;
+
+function frame(now){
+  requestAnimationFrame(frame);
+  if (!running) return;
+  if (!last) last = now;
+  let dt = (now-last)/1000; last = now;
+  if (dt > 0.25) dt = 0.25;
+
+  // hitstop is presentation-only; it never pauses the match clock
+  let simDt = dt;
+  if (FX.hitstop > 0){ FX.hitstop -= dt; simDt = 0; }
+
+  acc += simDt;
+  let guard = 0;
+  while (acc >= FIXED && guard++ < 5){ simStep(FIXED); acc -= FIXED; }
+
+  if (ptr.gt > 0){ ptr.gt -= dt;
+    const k = clamp(ptr.gt/K.GRAB_DECAY, 0, 1);
+    ptr.gx *= k; ptr.gy *= k;
+    if (ptr.down) applyPointer({x:ptr.sx, y:ptr.sy});
+  }
+  stepFX(dt);
+  draw();
+}
+
+function draw(){
+  const w = STAGE.w, h = STAGE.h;
+  HITS.length = 0;
+  ctx.drawImage(bgCan, 0, 0, w, h);
+
+  // shake
+  const sh = Math.pow(FX.trauma, 3);
+  ctx.save();
+  if (sh > 0.001){
+    const t = performance.now()/1000*25;
+    ctx.translate(w/2, h/2);
+    ctx.rotate(2.0*Math.PI/180 * sh * noise1(t, 3.1));
+    ctx.translate(-w/2 + 14*sh*noise1(t,1.1)*STAGE.u*3,
+                  -h/2 + 14*sh*noise1(t,2.2)*STAGE.u*3);
+  }
+
+  drawTable();
+  // everything on the surface, clipped so nothing spills onto the rails
+  ctx.save();
+  rr(ctx, sx(0), sy(0), su(K.TW), su(K.TH), su(K.CORNER)); ctx.clip();
+  drawHeat();
+  drawFX();
+  drawPuck();
+  drawMallet(MC, false);
+  drawMallet(MP, true);
+  ctx.restore();
+  // the puck is drawn again unclipped while it's in the net
+  if (RUN.state==='goal'){ drawPuckInNet(); }
+  drawBanner();
+  ctx.restore();
+
+  drawHud();
+
+  if (RUN.state==='countdown') drawCountdown();
+  if (RUN.state==='over') drawResult();
+  if (PANEL) drawPanel();
+
+  if (FX.flash > 0.002){
+    ctx.fillStyle = rgba(FX.flashCol, FX.flash*0.55);
+    ctx.fillRect(0,0,w,h);
+  }
+}
+function drawPuckInNet(){
+  const r = su(K.PUCK_R), x = sx(P.x), y = sy(P.y);
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = '#0E1424'; ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+  ctx.strokeStyle = rgba(C.puckRim,0.3); ctx.lineWidth=Math.max(1,r*0.1);
+  ctx.beginPath(); ctx.arc(x,y,r*0.92,0,TAU); ctx.stroke();
+  ctx.restore();
+}
+
+/* ================================================================ HARNESS
+   The bot fleet drives the sim through here. Nothing below touches the DOM.
+   __AH.pump(sec, fn) runs a whole match headless at a fixed tick.          */
+window.__AH = {
+  K, C, P, MP, MC, RUN, FX, CPU, STAGE, SAVE, LEVELS,
+  cpuTune, tracePuck, pickShot,
+  start(seed){ RENDER = false; startMatch(seed||1); RUN.state='play'; RUN.countT=0; },
+  startFull(seed){ startMatch(seed||1); },
+  render(on){ RENDER = !!on; },
+  step(dt){ simStep(dt||FIXED); },
+  setTarget(x,y){ MP.tx = x; MP.ty = y; },
+  /* run a full match headless; fn(state) is called once per tick */
+  pump(sec, fn, dt){
+    dt = dt || FIXED;
+    const n = Math.ceil((sec||90)/dt);
+    for (let i=0;i<n;i++){
+      if (RUN.state==='over') break;
+      if (fn) fn(this.state());
+      simStep(dt);
+    }
+    return this.result();
+  },
+  state(){ return { px:P.x, py:P.y, pvx:P.vx, pvy:P.vy,
+    mx:MP.x, my:MP.y, cx:MC.x, cy:MC.y, t:RUN.t, left:RUN.left,
+    you:RUN.you, cpu:RUN.cpu, state:RUN.state, ot:RUN.ot }; },
+  result(){ return { you:RUN.you, cpu:RUN.cpu, win:RUN.you>RUN.cpu?1:0,
+    draw:RUN.you===RUN.cpu?1:0, saves:RUN.saves, hits:RUN.hits,
+    top:Math.round(RUN.topShot), t:Math.round(RUN.t*10)/10,
+    coins:RUN.you*60+Math.min(RUN.saves*2,60)+(RUN.you>RUN.cpu?150+Math.max(0,Math.round(RUN.left))*3:RUN.you===RUN.cpu?25:15),
+    log:RUN.log.slice() }; },
+  freeze(v){ running = !v; },
+  /* step the sim and force one frame — lets a screenshot pass drive the game
+     without rAF, which a backgrounded tab never delivers */
+  draw(){ draw(); },
+  advance(sec, fn, dt){
+    dt = dt || FIXED;
+    const n = Math.ceil((sec||0)/dt);
+    for (let i=0;i<n;i++){ if (fn) fn(this.state()); simStep(dt); stepFX(dt); }
+    draw();
+  },
+};
+
+/* ================================================================== BOOT */
+window.addEventListener('resize', ()=>{ resize(); });
+window.addEventListener('orientationchange', ()=>setTimeout(resize, 120));
+document.documentElement.style.setProperty('--sat','env(safe-area-inset-top)');
+resize();
+startMatch((Math.random()*1e9)|0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
