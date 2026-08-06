@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#12081f">
-<title>HIGHWAY PURSUIT ‚Äî Outrun the Law</title>
+<title>HIGHWAY PURSUIT — Outrun the Law</title>
 <style>
   :root{
     --ink:#0d0a16; --paper:#fff8f0;
@@ -89,7 +89,7 @@
   /* warning strip */
   /* The warning strip is INFORMATION, not an alarm. It used to sit in a big
      pink slab that scaled itself 6% larger and back five times a second, which
-     is motion right where the road vanishes to its horizon ‚Äî the exact part of
+     is motion right where the road vanishes to its horizon — the exact part of
      the screen you are reading to drive. Players end up watching the warning
      instead of the thing it is warning them about.
      Now: a calm, small, translucent pill. It changes COLOUR as the threat
@@ -136,7 +136,7 @@
      divs covering the left and right thirds swallowed every swipe that began
      there, so two thirds of the screen could only tap and swiping worked in a
      narrow strip up the middle. Tap-to-steer is detected on the canvas itself
-     instead ‚Äî see _initInput. */
+     instead — see _initInput. */
   .abtn{position:absolute;bottom:20px;width:74px;height:74px;border-radius:50%;
         background:rgba(255,255,255,.13);border:3px solid rgba(255,255,255,.38);
         backdrop-filter:blur(8px);pointer-events:auto;display:flex;flex-direction:column;
@@ -259,16 +259,16 @@
       <div id="score">0</div>
       <div id="scoreSub">
         <span id="dist">0 m</span>
-        <span>ü™ô <b id="coins">0</b></span>
+        <span>🪙 <b id="coins">0</b></span>
         <span id="mult"></span>
       </div>
     </div>
 
     <div class="pill" id="tierBox">
       <div id="tier">CRUISING</div>
-      <div id="wanted"><i>‚òÖ</i><i>‚òÖ</i><i>‚òÖ</i><i>‚òÖ</i><i>‚òÖ</i></div>
+      <div id="wanted"><i>★</i><i>★</i><i>★</i><i>★</i><i>★</i></div>
     </div>
-    <div id="mute">üîä</div>
+    <div id="mute">🔊</div>
 
     <div id="powers"></div>
     <div id="combo"></div>
@@ -298,12 +298,12 @@
     </div>
 
     <div id="mirror">
-      <div id="mirrorIcon">üö®</div>
+      <div id="mirrorIcon">🚨</div>
       <div id="mirrorTrack"><div id="mirrorDot"></div></div>
     </div>
 
-    <div class="abtn" id="btnBrake"><span>‚åÑ</span>DRIFT</div>
-    <div class="abtn" id="btnNitro"><span>‚åÉ</span>NITRO</div>
+    <div class="abtn" id="btnBrake"><span>⌄</span>DRIFT</div>
+    <div class="abtn" id="btnNitro"><span>⌃</span>NITRO</div>
 
     <div id="toasts"></div>
     <div id="damage"></div>
@@ -321,8 +321,8 @@
     <div id="cashLine"></div>
     <div id="bestLine"></div>
     <div class="howto">
-      <b>Swipe left / right</b> ‚Äî change lane ¬∑ <b>tap the sides</b> works too<br>
-      <b>Swipe up</b> ‚Äî nitro burst ¬∑ <b>swipe down</b> ‚Äî brake &amp; drift<br>
+      <b>Swipe left / right</b> — change lane · <b>tap the sides</b> works too<br>
+      <b>Swipe up</b> — nitro burst · <b>swipe down</b> — brake &amp; drift<br>
       Shave past traffic for <b>near misses</b>, drift for combo.<br>
       Keyboard: <b>A D</b> or arrows, <b>W</b> boost, <b>S</b> drift.
     </div>
@@ -332,7 +332,7 @@
   <div id="garage" class="screen hide">
     <div id="garageHead">
       <h2>GARAGE</h2>
-      <div id="gCash">ü™ô 0</div>
+      <div id="gCash">🪙 0</div>
     </div>
     <div id="tabs">
       <button class="tab on" data-tab="upgrades">UPGRADES</button>
@@ -388,12 +388,12 @@ window.HP = window.HP || {};
 /* ===== config.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî config.js
+   HIGHWAY PURSUIT — config.js
    Every tuning number lives here. Nothing in this file touches the DOM or
    three.js, so the whole balance model can be driven headlessly under node.
 
    UNITS: metres and seconds throughout. Speeds look large because they are
-   real motorway speeds ‚Äî 40 m/s is 144 km/h. Keeping them honest means the
+   real motorway speeds — 40 m/s is 144 km/h. Keeping them honest means the
    lane geometry, car sizes and reaction windows all reason about each other
    in the same space instead of needing fudge factors.
    ===========================================================================*/
@@ -429,7 +429,7 @@ HP.CFG = {
                         // crash on its own, large enough that a hard weave
                         // grazes traffic and earns near misses. That overshoot
                         // IS the near-miss economy: at 0.91 (the first pass)
-                        // the overshoot was 0.09% ‚Äî a tenth of a millimetre ‚Äî
+                        // the overshoot was 0.09% — a tenth of a millimetre —
                         // so a player holding a lane could never score one and
                         // "reward aggressive skill" had no mechanism at all.
   STEER_MAX_V: 26,      // lateral speed cap, m/s
@@ -464,7 +464,7 @@ HP.CFG = {
   /* --- nitro: ONE PRESS, ONE BURST, FIXED LENGTH -------------------------
      The first design was a draining tank, and it stuttered. A press only
      armed 0.25s of boost and relied on the input repeating to sustain it, so
-     a single swipe fired, died, and fired again ‚Äî the burst visibly hitched a
+     a single swipe fired, died, and fired again — the burst visibly hitched a
      fraction of a second in. Worse, whether it hitched depended on how your
      thumb happened to move, which is the kind of inconsistency that makes a
      control feel broken rather than difficult.
@@ -498,7 +498,7 @@ HP.CFG = {
   REGEN_DELAY: 6.0,     // seconds clean before it starts
   REGEN_RATE: 0.11,     // integrity per second
 
-  /* Every impact also scrubs speed and shoves you sideways ‚Äî the crash has to
+  /* Every impact also scrubs speed and shoves you sideways — the crash has to
      cost you position and momentum, not just a number on a bar. */
   HIT_SPEED_LOSS: 0.42, // fraction of current speed removed by a heavy hit
   HIT_SPIN: 9.0,        // lateral impulse, m/s
@@ -506,7 +506,7 @@ HP.CFG = {
   /* --- near misses --------------------------------------------------------
      Clearance between the two car BODIES, not centre distance, so a semi is
      genuinely scarier to shave than a motorcycle. Sitting in the next lane
-     over from a sedan leaves 1.75m of clearance, comfortably outside this ‚Äî
+     over from a sedan leaves 1.75m of clearance, comfortably outside this —
      you have to actually lean or drift toward traffic to earn one. */
   NEAR_MISS_GAP: 1.20,
   NEAR_MISS_WINDOW: 14, // metres of z-separation within which we watch a pass
@@ -522,7 +522,7 @@ HP.CFG = {
   /* --- THE CHASE IS A LEDGER, AND CRASHES ARE THE ONLY DEBITS -------------
      A cruiser joins this far back and then simply drives at your cruise
      speed. It does not creep in on a timer, and it does not rubber-band. Left
-     alone, the gap you have is the gap you keep ‚Äî indefinitely.
+     alone, the gap you have is the gap you keep — indefinitely.
 
      What closes it is CRASHING. Every impact scrubs your speed, so they gain
      on you for free, and on top of that each one hands them an outright chunk
@@ -532,7 +532,7 @@ HP.CFG = {
      is what makes every impact frightening rather than merely expensive.
 
      The consequence that makes it a game rather than a rule: when the road
-     forces you to slow ‚Äî and it will ‚Äî you are handing them the distance with
+     forces you to slow — and it will — you are handing them the distance with
      your own foot, and the car behind does not slow with you. */
   POLICE_JOIN_BACK: 118,   // metres behind where a unit joins the pursuit
   POLICE_HOLD: 16,         // closest they will sit without being invited
@@ -542,17 +542,17 @@ HP.CFG = {
      Police drive at a fixed speed, which is what makes nitro and the brake
      both matter. But taken literally it punished the wrong thing hardest: the
      game DEMANDS you slow for an obstacle course, and slowing to 55% handed
-     them 25 m/s of closing ‚Äî so a 1.7-second drift through two lanes cost 43
+     them 25 m/s of closing — so a 1.7-second drift through two lanes cost 43
      metres, more than an actual crash. Driving well was more expensive than
      driving badly, which is the worst incentive a chase can have.
 
      So there is a ceiling on how fast they may gain, and only on gaining.
-     Hold your speed and they hold theirs. Boost and they cannot follow ‚Äî the
+     Hold your speed and they hold theirs. Boost and they cannot follow — the
      cap does not apply in that direction at all. Slow down and they come, but
      at a rate that makes an evasive manoeuvre cost you a dozen metres rather
      than the whole chase. Sustained crawling still ends with a cruiser in
      your boot; it just takes committing to it. */
-  POLICE_MAX_CLOSE: 7,     // m/s ‚Äî the fastest they may ever reel you in
+  POLICE_MAX_CLOSE: 7,     // m/s — the fastest they may ever reel you in
   CRASH_GAIN_MIN: 7,       // metres a crash gives away, at the least
   CRASH_GAIN_MAX: 34,      // ...and at the most. The spread IS the mechanic.
   CRASH_GAIN_HEAVY: 1.7,   // multiplier for a heavy impact
@@ -572,7 +572,7 @@ HP.CFG = {
      anything on this list, which is the whole point of the design pillar. */
   SCORE_PER_METRE: 1.0,
   SCORE_NEAR_MISS: 250,
-  /* Per METRE drifted, not per second ‚Äî see the note in game.js _scoreTick.
+  /* Per METRE drifted, not per second — see the note in game.js _scoreTick.
      At the game's top speed this pays roughly twice the base distance rate,
      which makes a drift through traffic clearly worth taking; at a crawl it
      pays almost nothing, which is what makes wiggling on the spot pointless. */
@@ -602,7 +602,7 @@ HP.CFG = {
 
      THE BRAKE buys time. Scrubbing speed is the only way to lengthen the
      approach to something you cannot get around, and SCORE_THREAD pays for
-     using it that way ‚Äî squeezing past at low speed rather than praying at
+     using it that way — squeezing past at low speed rather than praying at
      high speed. Without a payout nobody ever touches it, and the game loses
      half its vocabulary. */
   SCORE_NITRO_MULT: 2.2,   // distance-score multiplier while boosting
@@ -675,7 +675,7 @@ HP.TIERS = [
 
 /* --- highway themes -------------------------------------------------------
    Each is a full palette plus the scenery and weather it biases toward.
-   Gameplay is identical across all of them on purpose ‚Äî a theme is a reward
+   Gameplay is identical across all of them on purpose — a theme is a reward
    you look at, never a difficulty setting you accidentally buy. */
 HP.THEMES = {
   california: {
@@ -723,7 +723,7 @@ HP.CARS = {
   wagon:   { name: 'Armoured Wagon',cost: 2400, body: 0x8a8f9c, roof: 0x3a3f4a, top: 0.94, grip: 0.95, armour: 1.55, shape: 'wagon' },
   super:   { name: 'Phantom GT',    cost: 4000, body: 0x1a1c24, roof: 0x0d0e13, top: 1.16, grip: 1.10, armour: 0.80, shape: 'super' },
   /* The legendary is the fastest and grippiest car in the game and the most
-     fragile ‚Äî deliberately. A car that is better at everything is not a
+     fragile — deliberately. A car that is better at everything is not a
      reward, it is the moment the game stops being about driving, and every
      hour spent earning it would be spent making the rest of the content
      irrelevant. */
@@ -733,7 +733,7 @@ HP.CAR_ORDER = ['hatch', 'muscle', 'tuner', 'wagon', 'super', 'legend'];
 
 /* --- permanent upgrades ---------------------------------------------------
    Costs grow geometrically so late levels are a genuine goal, and every
-   effect is a small percentage ‚Äî the run must still be won by driving. */
+   effect is a small percentage — the run must still be won by driving. */
 HP.UPGRADES = {
   engine:   { name: 'Engine',          max: 6, base: 120, step: 1.55, per: 0.035, blurb: 'Higher top speed' },
   handling: { name: 'Handling',        max: 6, base: 110, step: 1.55, per: 0.070, blurb: 'Faster lane changes' },
@@ -812,7 +812,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== lanes.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî lanes.js
+   HIGHWAY PURSUIT — lanes.js
    Lane maths, and the one rule the whole game rests on:
 
      THE ROAD AHEAD IS ALWAYS SOLVABLE.
@@ -823,7 +823,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
    a slow semi in lane 0 is overtaken by a van in lane 1 exactly as a cone
    sits in lane 2. No single spawn was wrong. The road still closed.
 
-   WHAT "SOLVABLE" MEANS. Not "one lane is empty all the way to the horizon" ‚Äî
+   WHAT "SOLVABLE" MEANS. Not "one lane is empty all the way to the horizon" —
    that would be a game with no weaving in it, and at LOCKDOWN density it is
    almost never true. It means: there is a PATH. At every point ahead some
    lane is open, and consecutive open lanes are close enough together in z
@@ -843,7 +843,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
    Defence 2 is the one that matters. Without it the game is unfair a few
    times an hour and the player has no way to know it was not their fault.
 
-   No DOM, no three.js ‚Äî pure geometry, so it can be fuzzed under node against
+   No DOM, no three.js — pure geometry, so it can be fuzzed under node against
    thousands of simulated seconds. See test/fairness.test.js.
    ===========================================================================*/
 var HP = (typeof HP !== 'undefined') ? HP : {};
@@ -855,7 +855,7 @@ if (typeof require !== 'undefined' && typeof HP.CFG === 'undefined') {
    NEGATION is what makes that true.
 
    The chase camera sits behind the car looking down +Z, and for a camera
-   facing +Z the world's +X axis projects to the LEFT of the screen ‚Äî its
+   facing +Z the world's +X axis projects to the LEFT of the screen — its
    right-hand vector is -X. So the naive mapping, lane index increasing with
    x, puts lane 0 on the right and sends `steer(+1)` leftwards: swipe right,
    car goes left. Every direction in the game was mirrored, including the
@@ -883,12 +883,12 @@ HP.roadHalfWidth = function () {
 
    Purely random lane choice produces a road that mostly is not in your way.
    Sitting in lane 1 while obstacle after obstacle lands in lane 0 is not a
-   game, it is scenery, and the density has to be cranked to compensate ‚Äî which
+   game, it is scenery, and the density has to be cranked to compensate — which
    makes the road cluttered without making it demanding.
 
    So the lane you are IN is offered first, most of the time. Every obstacle is
    then a question addressed to you personally: move, or take it. The two
-   halves of this are inseparable ‚Äî aiming at the player is only playable
+   halves of this are inseparable — aiming at the player is only playable
    because `canSpawn` refuses anything that would leave no path, so the game
    can be as pointed as it likes and still never close the road.
 
@@ -901,7 +901,7 @@ HP.aimedLanes = function (player) {
   var lanes = [];
   for (var i = 0; i < HP.CFG.LANES; i++) lanes.push(i);
   /* Fisher-Yates, not sort(() => Math.random() - 0.5). The sort trick is not a
-     shuffle ‚Äî an inconsistent comparator gives whatever permutation the engine's
+     shuffle — an inconsistent comparator gives whatever permutation the engine's
      sort happens to produce, and measured here it left the middle lane picked
      first barely half as often as the edges. On a three-lane road that is a
      visible bias in where the traffic goes. */
@@ -918,12 +918,12 @@ HP.aimedLanes = function (player) {
 
 /* How long a lane change takes, for planning purposes. Measured off the
    steering spring in player.js: k=46, d=12.4 gives a damping ratio of 0.91
-   and a 10-90% rise of roughly 0.25s, so this is deliberately pessimistic ‚Äî
+   and a 10-90% rise of roughly 0.25s, so this is deliberately pessimistic —
    the planner should under-promise what the car can do, never over. */
 HP.LANE_CHANGE_T = 0.30;
 
 /* ===========================================================================
-   Occupancy ‚Äî the shared register of everything solid on the road.
+   Occupancy — the shared register of everything solid on the road.
 
    Traffic, hazards, roadblock barricades, spike strips and police cruisers all
    add themselves here. Nothing needs to know about anything else; the
@@ -940,7 +940,7 @@ HP.Occupancy = function () {
 
    Needed because two STATIONARY objects never converge, yet the danger
    between them still grows. A roadblock and a cone are both bolted to the
-   tarmac, so the gap between them is fixed in metres forever ‚Äî but the time
+   tarmac, so the gap between them is fixed in metres forever — but the time
    the gap represents is metres/speed, and the player accelerates from 22 m/s
    to 96 over a run. Sixteen metres of clearance is half a second at the start
    of a run and a sixth of a second at the end. A cone dropped legitimately
@@ -958,7 +958,7 @@ HP.Occupancy.prototype.unreserve = function (r) {
 
 /* Items are held by reference, not copied, so positions stay live as they
    move. Copying was the first version and it made the guard reason about
-   where cars were one frame ago ‚Äî which is exactly when a lane closes. */
+   where cars were one frame ago — which is exactly when a lane closes. */
 HP.Occupancy.prototype.add = function (obj) { this.items.push(obj); return obj; };
 
 HP.Occupancy.prototype.remove = function (obj) {
@@ -975,7 +975,7 @@ HP.Occupancy.prototype.clear = function () {
 HP.Occupancy.prototype.setPlayer = function (p) { this.player = p; this.add(p); };
 
 /* Does this item stand in this lane, at this z?
-   A semi is 2.5m wide in a 3.7m lane so it only ever blocks one ‚Äî but a car
+   A semi is 2.5m wide in a 3.7m lane so it only ever blocks one — but a car
    halfway through a lane change blocks two, and that is precisely the case
    that closes a road. */
 HP.Occupancy.prototype._blocks = function (it, lane, z, zPad) {
@@ -1004,7 +1004,7 @@ HP.Occupancy.prototype.openAt = function (z, ignore) {
 };
 
 /* Lanes clear across an ENTIRE span. Stricter than `openAt` and only correct
-   for short spans ‚Äî used where something must be clear for a whole stretch,
+   for short spans — used where something must be clear for a whole stretch,
    like the slice a roadblock's gap lane occupies. */
 HP.Occupancy.prototype.openLanes = function (zFrom, zTo, ignore) {
   var step = 2.0;
@@ -1028,15 +1028,15 @@ HP.Occupancy.prototype.openLanes = function (zFrom, zTo, ignore) {
    is some lane clear?". It is wrong, and wrong in a way that looks right: it
    compares every object's position at ONE instant, but every object on this
    road is moving at a different speed. A sedan at 153m, another at 160m and a
-   lorry at 167m form a perfect wall in a snapshot ‚Äî and by the time you get
+   lorry at 167m form a perfect wall in a snapshot — and by the time you get
    there, three seconds later, they have sheared 60 metres apart and there was
    never anything to avoid. Measured live, that false alarm fired on 17% of
    frames and had civilians swerving out of the way of nothing, constantly.
 
    So the sweep is in TIME. Each obstacle blocks its lane over an INTERVAL:
-   solve o.z + (o.speed - v)t = ¬±(o.halfL + carHalf) for t and you get the
+   solve o.z + (o.speed - v)t = ±(o.halfL + carHalf) for t and you get the
    window during which that object is alongside you. Objects that never meet
-   you inside the horizon simply have no interval and drop out ‚Äî which is the
+   you inside the horizon simply have no interval and drop out — which is the
    correct answer for almost everything on a 200-metre road.
 
    With the intervals in hand it is a shortest-path problem: carry, for each
@@ -1065,7 +1065,7 @@ HP.Occupancy.prototype._intervals = function (speed, horizonT, ignore) {
        It then has civilians swerving aside because someone is in your MIRROR. */
     if (it.z < -R) continue;
 
-    /* A pursuer is the threat, not the terrain ‚Äî it has its own fairness
+    /* A pursuer is the threat, not the terrain — it has its own fairness
        contract, which is a telegraphed and dodgeable PIT. So it only counts
        as road once it is genuinely AHEAD of you. A cruiser drawn level is the
        worst case for the interval maths: matching your speed exactly, it
@@ -1095,7 +1095,7 @@ HP.Occupancy.prototype._intervals = function (speed, horizonT, ignore) {
 };
 
 /* fromT is the slice of the future you are already committed to and cannot
-   replan ‚Äî see pathExists. Lanes all start reachable because by fromT the car
+   replan — see pathExists. Lanes all start reachable because by fromT the car
    has had time to be anywhere. */
 HP.Occupancy.prototype.solve = function (speed, fromT, horizonT, ignore, laneTime) {
   var L = HP.CFG.LANES, T = laneTime || HP.LANE_CHANGE_T, INF = 1e9;
@@ -1105,7 +1105,7 @@ HP.Occupancy.prototype.solve = function (speed, fromT, horizonT, ignore, laneTim
 
      A fixed time step silently misses narrow obstacles. At 96 m/s a roadblock
      barricade occupies its lane for 0.07 seconds and a piece of debris for
-     0.057 ‚Äî so the moment when a barricade and a hazard overlap can be barely
+     0.057 — so the moment when a barricade and a hazard overlap can be barely
      0.02s wide, and a 0.05s grid steps clean over it perhaps half the time.
      The result was an unbeatable roadblock roughly once every ten minutes,
      appearing and disappearing depending on where the sampling phase happened
@@ -1114,7 +1114,7 @@ HP.Occupancy.prototype.solve = function (speed, fromT, horizonT, ignore, laneTim
 
      Blocking is piecewise-constant in time, so it changes only at interval
      boundaries. If every lane is ever blocked at once, that state begins at
-     the LATEST of the three intervals' start times ‚Äî which means sampling
+     the LATEST of the three intervals' start times — which means sampling
      every interval start is not an approximation, it is exact. The coarse
      grid stays only to keep the reachability DP advancing through long empty
      stretches. */
@@ -1165,18 +1165,18 @@ HP.Occupancy.prototype.solve = function (speed, fromT, horizonT, ignore, laneTim
 
    Those are different questions and only one of them is the game's problem.
    If you tuck in behind a lorry at 200 km/h and a cone appears eight metres
-   ahead, there is no escape ‚Äî and there should not be. You had four seconds
+   ahead, there is no escape — and there should not be. You had four seconds
    of clear sight to not be there. Making the world rescue you from that would
    mean civilian cars leaping aside every time you tailgated, which reads as
    the game apologising and destroys the tension it exists to protect.
 
    What the world DOES owe you is that a path exists while you still have time
-   to take it. So the check plans from 0.8s out ‚Äî past what you are already
+   to take it. So the check plans from 0.8s out — past what you are already
    committed to.
 
    HOW FAR AHEAD: further than feels necessary, and deliberately so. Because
    the model is in time and civilian speeds are constant, a projection seven
-   seconds out is just as accurate as one second out ‚Äî there is no drift to
+   seconds out is just as accurate as one second out — there is no drift to
    accumulate. So a wall that three converging cars WILL form can be seen
    while they are still hundreds of metres apart and refused at spawn, which
    costs nothing and is invisible. A short horizon only sees the same wall
@@ -1190,7 +1190,7 @@ HP.PLAN_HORIZON = 7.0;
 
 /* The guard plans with a lane change that takes half again as long as it
    really does. That margin is the whole reason it succeeds: acting only when
-   the road has ALREADY shut leaves no time for the fix ‚Äî a car needs about a
+   the road has ALREADY shut leaves no time for the fix — a car needs about a
    third of a second to move, and in that third of a second the wall closes
    the rest of the way in. Judging by a pessimistic standard means the guard
    moves while the road is merely getting tight, and by the time the real
@@ -1209,7 +1209,7 @@ HP.Occupancy.prototype.pathExists = function (speed, ignore, margin) {
 
    Checking only the DESTINATION is the trap, and it is the one that made the
    guard cause the very walls it was built to prevent. A car changing lanes
-   spends a third of a second STRADDLING both lanes ‚Äî for that moment it
+   spends a third of a second STRADDLING both lanes — for that moment it
    blocks two, not one. So the guard would tell a car blocking lane 0 to move
    to lane 1, and for the duration of the move lanes 0 and 1 were both shut;
    if lane 2 was already busy, the guard had just built a wall out of nothing.
@@ -1273,7 +1273,7 @@ HP.Occupancy.prototype.canSpawn = function (box, minGapZ) {
 
    If the road has closed inside the player's reaction window, open it by
    making one civilian get out of the way. Returns the object it moved so
-   callers can animate it honestly ‚Äî a car that yields indicates and swerves,
+   callers can animate it honestly — a car that yields indicates and swerves,
    it does not teleport.
 
    Which object yields is chosen by cost: only things that can actually drive
@@ -1285,7 +1285,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
   /* ONE REPAIR AT A TIME.
 
      A yield takes about a third of a second to execute, and for that whole
-     time the road is still shut ‚Äî so without a cooldown the guard re-fires
+     time the road is still shut — so without a cooldown the guard re-fires
      every frame and drags a fresh car out of position on each one. Measured,
      that was three hundred civilians swerving per ninety seconds to fix a
      couple of dozen actual problems, which on screen is a motorway where
@@ -1301,7 +1301,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
   if (this._fixCd > 0) return null;
 
   /* Candidates are the things actually blocking a lane AT the moment the road
-     closes ‚Äî found from the solver's own intervals, so we never move a car
+     closes — found from the solver's own intervals, so we never move a car
      that had nothing to do with it. */
   var iv = this._intervals(playerSpeed, HP.PLAN_HORIZON);
   var guilty = [];
@@ -1317,7 +1317,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
      lane is physically clear at the failing moment, but the one you could
      have used was shut a moment earlier and there is no longer time to cross
      to the others. The things to blame for that are not standing at the point
-     of failure ‚Äî they were in the way BEFORE it, which is why they forced the
+     of failure — they were in the way BEFORE it, which is why they forced the
      detour. Looking only at the instant of failure finds nobody to move and
      the guard silently does nothing, which is how a squeeze survives all the
      way in. So widen the search to everything that was in the way on the run
@@ -1336,7 +1336,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
   /* A yield already in flight may be a fix already in flight. Without this
      check the guard re-fires every frame for the third of a second the car
      takes to complete its move, dragging a different vehicle out of position
-     each time ‚Äî four cars scattering to solve a one-car problem.
+     each time — four cars scattering to solve a one-car problem.
 
      But only if finishing that move actually SOLVES it. A yield that will not
      be enough must not block a second one, or a two-car wall stalls forever
@@ -1359,7 +1359,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
   /* Pick the destination by TRYING it, not by looking at a snapshot. The lane
      that is empty next to the car right now may be the gap in a roadblock, or
      may close by the time the car is in it, or may be unreachable without
-     shutting a second lane in transit ‚Äî moving there would trade one wall for
+     shutting a second lane in transit — moving there would trade one wall for
      another. Simulating each candidate move, transit included, and re-solving
      is the only answer that is right by construction. */
   var here = HP.laneAt(mover.x);
@@ -1377,7 +1377,7 @@ HP.Occupancy.prototype.enforce = function (playerZ, playerSpeed, dt) {
 };
 
 /* Axis-aligned overlap between two boxes. Used for every collision in the
-   game ‚Äî lane INDEX is intent, but contact is always geometry, which is what
+   game — lane INDEX is intent, but contact is always geometry, which is what
    makes half-committed lane changes genuinely dangerous. */
 HP.overlaps = function (a, b, shrink) {
   var s = shrink || 0;
@@ -1397,7 +1397,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== save.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî save.js
+   HIGHWAY PURSUIT — save.js
    Persistent progression: cash, upgrade levels, unlocked cars and themes.
 
    The upgrade maths lives here rather than in player.js so it can be tested
@@ -1462,7 +1462,7 @@ HP.Save.prototype._load = function () {
 HP.Save.prototype.flush = function () {
   if (!this.storage) return false;
   try { this.storage.setItem(KEY, JSON.stringify(this.data)); return true; }
-  catch (e) { return false; }     // quota or private mode ‚Äî keep playing
+  catch (e) { return false; }     // quota or private mode — keep playing
 };
 
 /* --- upgrades ------------------------------------------------------------- */
@@ -1536,7 +1536,7 @@ HP.Save.prototype.mods = function () {
     handling:   (1 + this.level('handling') * U.handling.per) * car.grip,
     nitro:       1 + this.level('nitro')    * U.nitro.per,
     coinValue:   1 + this.level('coins')    * U.coins.per,
-    /* Police resistance slows the heat clock. It cannot go to zero ‚Äî at level
+    /* Police resistance slows the heat clock. It cannot go to zero — at level
        6 the chase still escalates, just 54% slower, because a build that
        switches off the antagonist switches off the game. */
     heat:        1 - this.level('police')   * U.police.per,
@@ -1569,19 +1569,19 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== vehicles.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî vehicles.js
+   HIGHWAY PURSUIT — vehicles.js
    Every car, truck, bus and cruiser in the game, built from primitives.
 
    ART DIRECTION, made concrete:
-     * Exaggerated proportions ‚Äî wheels are ~30% of body height, cabins are
+     * Exaggerated proportions — wheels are ~30% of body height, cabins are
        tall and short, overhangs are stubby. Nothing is measured off a real
        car.
-     * Rounded geometry ‚Äî bodies are chamfered by stacking a wide-flat slab
+     * Rounded geometry — bodies are chamfered by stacking a wide-flat slab
        under a narrower-taller one rather than by smoothing, which keeps the
        silhouette faceted and readable at distance.
-     * Flat shading and saturated colour ‚Äî no textures anywhere, so the whole
+     * Flat shading and saturated colour — no textures anywhere, so the whole
        game stays a single file and every vehicle reads as a shape first.
-     * Large readable silhouettes ‚Äî a semi must be identifiable as a semi from
+     * Large readable silhouettes — a semi must be identifiable as a semi from
        180 metres, because that is when you have to decide which lane to be
        in.
 
@@ -1649,7 +1649,7 @@ function addWheels(g, len, wid, radius, inset) {
 
 /* A painted-on contact shadow. Real shadow maps are the single most expensive
    thing you can switch on in this renderer, and at this camera angle they buy
-   almost nothing ‚Äî but WITHOUT any shadow the cars visibly float above the
+   almost nothing — but WITHOUT any shadow the cars visibly float above the
    tarmac at speed, which breaks the whole scene. A dark ellipse under each
    vehicle costs two triangles and fixes it completely. */
 function addBlobShadow(g, len, wid) {
@@ -1812,7 +1812,7 @@ function buildMoto(spec) {
    the slowest thing on the tarmac and a decision you can make now. Rolling a
    random speed inside a band per spawn meant two identical vans closed at
    noticeably different rates, so the only way to judge a gap was to watch it
-   for a second ‚Äî which at 250 km/h is a second you do not have.
+   for a second — which at 250 km/h is a second you do not have.
 
    It also makes the fairness planner exact. It projects every vehicle forward
    in time; with fixed speeds those projections stay true for as long as the
@@ -1830,7 +1830,7 @@ HP.VEHICLE_TYPES = {
 };
 HP.HEAVY_TYPES = { semi: true, bus: true };
 
-/* Bright, saturated, and never the police palette ‚Äî a blue-and-white civilian
+/* Bright, saturated, and never the police palette — a blue-and-white civilian
    car that reads as a cruiser for half a second is a cheap unfair death. */
 HP.TRAFFIC_COLOURS = [
   0xe8453c, 0xf2a03d, 0xffd23f, 0x5ac36b, 0x36b3a8, 0x9b6ef3,
@@ -1839,7 +1839,7 @@ HP.TRAFFIC_COLOURS = [
 
 /* --- police ---------------------------------------------------------------
    Cartoon cruisers: black-and-white two-tone, oversized light bar, push bar
-   on the nose. The light bar is the read ‚Äî you should know a cruiser is in
+   on the nose. The light bar is the read — you should know a cruiser is in
    your mirror from colour alone, before you can make out the shape. */
 HP.POLICE_TYPES = {
   cruiser: { length: 4.9, width: 2.00, bodyH: 0.72, cabH: 0.60, cabFrac: 0.44, wheelR: 0.44, speedMult: 1.10, ram: 1.0, empProof: false },
@@ -1865,7 +1865,7 @@ function buildPolice(kind) {
     g.add(d);
   });
 
-  /* Light bar ‚Äî deliberately too big, and the two halves are separate meshes
+  /* Light bar — deliberately too big, and the two halves are separate meshes
      so they can alternate. A single flashing bar reads as a glitch; two
      alternating halves read unmistakably as police. */
   var barY = t.wheelR * 0.78 + t.bodyH + t.cabH + 0.06;
@@ -2048,7 +2048,7 @@ HP.VehiclePool.prototype.release = function (key, mesh) {
 };
 
 /* Civilians need a per-instance body material so a pooled sedan can come back
-   a different colour. Only the CHASSIS mesh gets one ‚Äî the cabin, glass and
+   a different colour. Only the CHASSIS mesh gets one — the cabin, glass and
    wheels stay shared, so this costs one material per live vehicle rather than
    per mesh. */
 HP.VehiclePool.prototype.acquireTraffic = function (type, colour) {
@@ -2082,13 +2082,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== player.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî player.js
+   HIGHWAY PURSUIT — player.js
    The getaway car: lateral spring, speed model, damage, nitro, power-up
-   timers. No three.js and no DOM ‚Äî the mesh is driven from this state by
+   timers. No three.js and no DOM — the mesh is driven from this state by
    game.js, so the entire handling model can be driven headlessly.
 
    THE CENTRAL IDEA: the car's x is a SPRING, never a lerp between lanes.
-   Everything interesting falls out of that one choice ‚Äî
+   Everything interesting falls out of that one choice —
 
      * lane changes carry momentum, so the car leans and overshoots
      * braking softens the spring, which IS the drift
@@ -2167,7 +2167,7 @@ HP.Player.prototype.brake = function () {
 };
 
 /* One press, one burst, fixed length. Returns true only when a burst actually
-   STARTS, so a held key or a repeating swipe cannot re-trigger it ‚Äî and so the
+   STARTS, so a held key or a repeating swipe cannot re-trigger it — and so the
    caller knows when to play the turbo spool.
 
    Re-pressing mid-burst does nothing at all, deliberately. The old version
@@ -2238,7 +2238,7 @@ HP.Player.prototype.damage = function (amount, cause, spin) {
   return 'hit';
 };
 
-/* A landed PIT does not just damage you ‚Äî it takes the car away for a moment.
+/* A landed PIT does not just damage you — it takes the car away for a moment.
    Without the lockout a PIT is a nudge you steer out of instantly, and the
    police stop being frightening. */
 HP.Player.prototype.spinOut = function (dir) {
@@ -2264,7 +2264,7 @@ HP.Player.prototype.update = function (dt, tier) {
   /* ---- nitro ----
      A burst runs its full length and then a cooldown runs its full length.
      `nitro` survives only as a 0..1 readiness figure for the HUD bar, so the
-     gauge answers the one question that matters ‚Äî can I press it yet ‚Äî rather
+     gauge answers the one question that matters — can I press it yet — rather
      than showing a reservoir the player is expected to ration.
 
      The power-up overrides both, which is what makes it the escape tool the
@@ -2285,7 +2285,7 @@ HP.Player.prototype.update = function (dt, tier) {
   this.maxSpeed = tier.speed * this.mods.speed;
   var target = this.maxSpeed;
   /* A car that is actually sliding keeps more speed than one standing on the
-     brakes in a straight line. `drifting` is last frame's value ‚Äî a frame of
+     brakes in a straight line. `drifting` is last frame's value — a frame of
      lag is imperceptible and avoids a circular dependency, since the drift
      itself is derived from the lateral velocity computed further down. */
   if (this.brakeT > 0) target *= this.drifting ? C.DRIFT_SPEED_MULT : C.BRAKE_MULT;
@@ -2373,25 +2373,25 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== hazards.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî hazards.js
+   HIGHWAY PURSUIT — hazards.js
    Everything on the tarmac that is not a vehicle.
 
    Each hazard is tuned around ONE question: what does it cost you? A pothole
    costs a little integrity, a cone costs almost nothing but breaks a combo, an
-   oil slick costs you your steering for two seconds ‚Äî which at 200 km/h is by
+   oil slick costs you your steering for two seconds — which at 200 km/h is by
    far the most expensive thing on this list even though it does no damage at
    all. Keeping those costs different is what stops the road becoming a single
    repeated "swerve" input.
 
      cone      light hit, very common, teaches the swerve
      debris    light hit, scattered so a lane is partly usable
-     pothole   light hit, no visual height ‚Äî you read it off the road surface
+     pothole   light hit, no visual height — you read it off the road surface
      barrel    light hit, ROLLS across lanes, so the safe lane changes
-     oil       no damage, wrecks grip ‚Äî the real killer
+     oil       no damage, wrecks grip — the real killer
      barrier   construction-zone wall, heavy
      cargo     fallen crate, heavy
      digger    parked construction plant, heavy
-     fuel      rare, telegraphed, and fatal ‚Äî the one thing you must not touch
+     fuel      rare, telegraphed, and fatal — the one thing you must not touch
 
    Also home to the barricade and spike-strip meshes, which the police own but
    which are physically road furniture like everything else here.
@@ -2414,7 +2414,7 @@ HP.HAZARD_SPECS = {
   fuel:    { w: 2.50, l: 9.00, dmg: 'DMG_FATAL',   weight: 0.25, lead: 2.4, label: 'FUEL TANKER' }
 };
 
-/* Construction zones bias hard toward their own furniture ‚Äî that is what
+/* Construction zones bias hard toward their own furniture — that is what
    makes a zone feel like a place rather than a difficulty number. */
 HP.ZONE_BIAS = {
   open:         { cone: 1, debris: 1, pothole: 1, barrel: 1, oil: 1, barrier: 1, cargo: 1, digger: 1, fuel: 1 },
@@ -2444,14 +2444,14 @@ function unlit(c, opacity) {
 /* ---------------------------------------------------------------------------
    HAZARD BEACONS: the reason you can see any of this at all.
 
-   Every hazard in the game sits on the tarmac ‚Äî the tallest is a barrel at
-   0.85m ‚Äî and the shortest vehicle is 1.3m, a bus 3.1m. So ANY obstacle with
+   Every hazard in the game sits on the tarmac — the tallest is a barrel at
+   0.85m — and the shortest vehicle is 1.3m, a bus 3.1m. So ANY obstacle with
    a car in front of it is completely invisible until that car moves, which at
    200 km/h is far too late. Worse, the flat ones (oil, potholes) are hard to
    pick out even on open road, because from a chase camera a decal on grey
    tarmac has almost no silhouette.
 
-   A light column fixes both at once. It rises to 4.2m ‚Äî clear of a bus ‚Äî so
+   A light column fixes both at once. It rises to 4.2m — clear of a bus — so
    the hazard announces itself over the traffic hiding it, and the colour says
    what KIND of trouble it is before the shape is readable at all:
 
@@ -2551,7 +2551,7 @@ function makeOil() {
   o.rotation.x = -Math.PI / 2;
   o.position.y = 0.014;
   o.scale.set(0.95, 1.2, 1);
-  /* A purple sheen ring so it reads as OIL and not as a shadow ‚Äî a black
+  /* A purple sheen ring so it reads as OIL and not as a shadow — a black
      puddle on grey tarmac is invisible at speed, which made the most
      dangerous hazard in the game also the least visible. */
   var sheen = new THREE.Mesh(G('oilSheen', function () { return new THREE.RingGeometry(0.9, 1.55, 16); }), unlit(0x6f43c9, 0.55));
@@ -2748,7 +2748,7 @@ HP.Hazards.prototype._bag = function (zone) {
      * consecutive gaps are always ADJACENT lanes, never opposite ones, so a
        single lane change is enough at every step;
      * the spacing is derived from the player's actual speed, so there is
-       always time to make that change ‚Äî a slalom laid out in fixed metres
+       always time to make that change — a slalom laid out in fixed metres
        becomes impossible the moment the player is going faster than whoever
        chose the number.
 
@@ -2800,7 +2800,7 @@ HP.Hazards.prototype._spawnCourse = function (tier, zone, playerSpeed, playerLan
   for (var r = 0; r < probes.length; r++) this.occ.remove(probes[r]);
 
   /* Place it, and RESERVE the line through it. Without this, traffic spawned a
-     moment later can drop straight into the gap the course was built around ‚Äî
+     moment later can drop straight into the gap the course was built around —
      the course does not own its own solution, so the one lane that made it
      fair quietly stops being open. Same defence the roadblock uses for its
      gap; the corridor rides along with the gate and is released with it. */
@@ -2821,7 +2821,7 @@ HP.Hazards.prototype.spawn = function (tier, zone, timeScale) {
   while (this.acc >= 1 && guard++ < 3) {
     this.acc -= 1;
     /* Occasionally the whole allowance goes on a COURSE instead of a single
-       hazard ‚Äî a run of gates with one line through them. Construction zones
+       hazard — a run of gates with one line through them. Construction zones
        are where they belong most, and where the cones already are. */
     this.courseCd -= 1;
     if (this.courseCd <= 0 && this.occ.player) {
@@ -2831,14 +2831,14 @@ HP.Hazards.prototype.spawn = function (tier, zone, timeScale) {
         /* A course IS the road's obstacle budget for a while, not a bonus on
            top of it. Eight pieces went down; letting the ordinary drip carry
            on regardless stacked scattered cones through a slalom that was
-           already using two lanes of three, and construction zones ‚Äî where
-           courses fire most and cones are already biased up ‚Äî turned into a
+           already using two lanes of three, and construction zones — where
+           courses fire most and cones are already biased up — turned into a
            wall of orange. */
         this.acc = Math.max(0, this.acc - 2);
         continue;
       }
       /* Failed, so try again almost immediately rather than serving the whole
-         interval. A course is all-or-nothing ‚Äî eight pieces have to fit ‚Äî and
+         interval. A course is all-or-nothing — eight pieces have to fit — and
          with twenty cars on the road most attempts lose the toss. Resetting
          the long cooldown on FAILURE meant each miss cost another half minute,
          and courses effectively never appeared at all. */
@@ -2847,22 +2847,22 @@ HP.Hazards.prototype.spawn = function (tier, zone, timeScale) {
 
     var type = HP.pick(this._bag(zone));
     var spec = HP.HAZARD_SPECS[type];
-    /* Fuel tankers are a rare EVENT, not a hazard type ‚Äî gate them hard so
+    /* Fuel tankers are a rare EVENT, not a hazard type — gate them hard so
        they stay shocking. */
     if (type === 'fuel' && Math.random() > 0.35) continue;
 
     var z = SPAWN_Z + Math.random() * 40;
-    /* Aimed at the lane the player is actually in ‚Äî see aimedLanes. Safe to be
+    /* Aimed at the lane the player is actually in — see aimedLanes. Safe to be
        this pointed only because canSpawn refuses anything that closes the road. */
     var lanes = HP.aimedLanes(this.occ.player);
     for (var i = 0; i < lanes.length; i++) {
-      /* Small lateral jitter so a cone is not always dead centre ‚Äî you have
+      /* Small lateral jitter so a cone is not always dead centre — you have
          to actually look at where it is, and part of a lane stays usable. */
       var jitter = (type === 'cone' || type === 'debris' || type === 'barrel')
                  ? (Math.random() - 0.5) * 1.5 : 0;
       var x = HP.laneX(lanes[i]) + jitter;
       /* speed 0: road furniture is bolted to the tarmac and closes on you at
-         exactly your own speed. The solver needs that explicitly ‚Äî without it
+         exactly your own speed. The solver needs that explicitly — without it
          a cone would be planned around as if it were keeping pace with you. */
       if (!this.occ.canSpawn({ x: x, z: z, speed: 0,
                                halfL: spec.l / 2, halfW: spec.w / 2 }, 12)) continue;
@@ -2887,7 +2887,7 @@ HP.Hazards.prototype._make = function (type, x, lane, z) {
        lane left open by a roadblock or a wall of traffic, and the guard would
        cheerfully report the road as passable. The player then dodged the
        thing they could see straight into the thing the game had decided did
-       not count ‚Äî a pothole for damage, or an oil slick that takes the
+       not count — a pothole for damage, or an oil slick that takes the
        steering away and feeds you into the next barrier.
 
        "Survivable" and "safe to be forced into" are different questions, and
@@ -2930,7 +2930,7 @@ HP.Hazards.prototype.update = function (ctx) {
       /* A barrel is the only hazard that MOVES after it spawns, so it is the
          only one that can roll the road shut behind the spawn-time check.
          If the next centimetre would do that, it bounces off the invisible
-         wall instead ‚Äî which looks exactly like it caught a rut, and is far
+         wall instead — which looks exactly like it caught a rut, and is far
          better than the alternative of a lane closing under the player. */
       else if (!this.occ.pathExists(p.speed).solvable) {
         h.x = wasX;
@@ -3010,17 +3010,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== pickups.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî pickups.js
+   HIGHWAY PURSUIT — pickups.js
    Coins and the eight power-ups.
 
    PLACEMENT IS THE DESIGN. A coin in the middle of an empty lane is worth
-   nothing to the game ‚Äî it is only interesting when taking it costs you
+   nothing to the game — it is only interesting when taking it costs you
    something. So coin trails are laid THROUGH the road as it is at that
    moment: a trail will happily run down the side of a lorry or curve across
    two lanes, because that is what turns "collect the shiny things" into the
    same skill as everything else here.
 
-   Power-ups spawn one at a time and are always reachable ‚Äî an escape tool you
+   Power-ups spawn one at a time and are always reachable — an escape tool you
    can see and cannot get to is worse than no escape tool.
    ===========================================================================*/
 var HP = (typeof HP !== 'undefined') ? HP : {};
@@ -3030,14 +3030,14 @@ if (typeof require !== 'undefined' && typeof HP.CFG === 'undefined') {
 }
 
 HP.POWERUPS = {
-  invis:  { label: 'GHOST PROTOCOL', colour: 0xa88cff, icon: 'üëª', weight: 1.0, rare: true },
-  nitro:  { label: 'NITRO BOOST',    colour: 0xff8a1f, icon: 'üî•', weight: 1.8, rare: false },
-  magnet: { label: 'COIN MAGNET',    colour: 0xffd23f, icon: 'üß≤', weight: 1.6, rare: false },
-  emp:    { label: 'EMP PULSE',      colour: 0x63f7ff, icon: '‚ö°', weight: 1.1, rare: true },
-  ghost:  { label: 'PHASE DRIVE',    colour: 0x7ee3b0, icon: 'üåÄ', weight: 1.0, rare: true },
-  shield: { label: 'SHIELD',         colour: 0x4fa9ff, icon: 'üõ°', weight: 1.5, rare: false },
-  slowmo: { label: 'TIME SLOW',      colour: 0xff6fd0, icon: '‚è±', weight: 1.0, rare: true },
-  repair: { label: 'REPAIR KIT',     colour: 0x6ee7b7, icon: 'üîß', weight: 1.3, rare: false }
+  invis:  { label: 'GHOST PROTOCOL', colour: 0xa88cff, icon: '👻', weight: 1.0, rare: true },
+  nitro:  { label: 'NITRO BOOST',    colour: 0xff8a1f, icon: '🔥', weight: 1.8, rare: false },
+  magnet: { label: 'COIN MAGNET',    colour: 0xffd23f, icon: '🧲', weight: 1.6, rare: false },
+  emp:    { label: 'EMP PULSE',      colour: 0x63f7ff, icon: '⚡', weight: 1.1, rare: true },
+  ghost:  { label: 'PHASE DRIVE',    colour: 0x7ee3b0, icon: '🌀', weight: 1.0, rare: true },
+  shield: { label: 'SHIELD',         colour: 0x4fa9ff, icon: '🛡', weight: 1.5, rare: false },
+  slowmo: { label: 'TIME SLOW',      colour: 0xff6fd0, icon: '⏱', weight: 1.0, rare: true },
+  repair: { label: 'REPAIR KIT',     colour: 0x6ee7b7, icon: '🔧', weight: 1.3, rare: false }
 };
 HP.POWERUP_ORDER = ['nitro', 'shield', 'magnet', 'repair', 'emp', 'invis', 'ghost', 'slowmo'];
 
@@ -3062,7 +3062,7 @@ function makeCoin() {
     new THREE.MeshLambertMaterial({ color: 0xffcc33, emissive: 0x6b4a00, flatShading: true }));
   /* Faces the player: the disc's axis runs along Z, and the PARENT spins
      about Y so it flips edge-to-face. Spinning the disc about its own axis
-     would be invisible ‚Äî a cylinder is symmetric about it. */
+     would be invisible — a cylinder is symmetric about it. */
   c.rotation.x = Math.PI / 2;
   g.add(c);
   return g;
@@ -3130,7 +3130,7 @@ HP.Pickups.prototype._spawnTrail = function (player) {
   var gapZ = 6 + Math.random() * 4;
   for (var i = 0; i < n; i++) {
     var t = n > 1 ? i / (n - 1) : 0;
-    /* Smoothstep so the trail curves rather than ramping ‚Äî a straight
+    /* Smoothstep so the trail curves rather than ramping — a straight
        diagonal reads as a UI element, a curve reads as a driving line. */
     var e = t * t * (3 - 2 * t);
     var x = HP.lerp(HP.laneX(startLane), HP.laneX(endLane), e);
@@ -3268,18 +3268,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== traffic.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî traffic.js
+   HIGHWAY PURSUIT — traffic.js
    Civilian traffic: who spawns, how fast, and when they do something stupid.
 
    The design brief is "traffic should feel alive rather than scripted", and
-   the thing that actually delivers that is not variety of models ‚Äî it is that
+   the thing that actually delivers that is not variety of models — it is that
    drivers make DECISIONS you can read and respond to. So every civilian:
 
      * holds a speed of its own, so lanes are permanently re-sorting
        themselves and the fast lane is a different lane every few seconds
      * indicates before changing lane, with a real lead time, so a lane change
        is information rather than an ambush
-     * will yield if the road is about to close (see lanes.js) ‚Äî and yields by
+     * will yield if the road is about to close (see lanes.js) — and yields by
        indicating and moving, never by vanishing
 
    All positions are relative to the player, who is permanently at z = 0. The
@@ -3299,8 +3299,8 @@ var DESPAWN_Z = -70;
 /* A civilian may only start a lane change while it is comfortably AHEAD of
    the player. Never alongside: a car sliding sideways into the space you are
    already occupying is unavoidable by definition, and no amount of indicator
-   makes it fair. This margin is large enough that the whole manoeuvre ‚Äî the
-   indicator, then the move ‚Äî is over long before the car is level with you,
+   makes it fair. This margin is large enough that the whole manoeuvre — the
+   indicator, then the move — is over long before the car is level with you,
    so every lane change is something you watch happen up the road and plan
    around, rather than something that happens TO you. */
 var CHANGE_MIN_Z = 55;
@@ -3367,7 +3367,7 @@ HP.Traffic.prototype._make = function (type, lane, z, tier, speed) {
   var self = this;
   v.yieldTo = function (lane) {
     if (lane === null || lane === undefined) {
-      /* No lane to move into, so it gets out of the way in z instead ‚Äî by
+      /* No lane to move into, so it gets out of the way in z instead — by
          ACCELERATING. Braking is the intuitive-looking answer and it is
          exactly backwards: z closes at (v.speed - player.speed), so a car
          that slows down arrives at your bumper sooner. Only outrunning the
@@ -3375,7 +3375,7 @@ HP.Traffic.prototype._make = function (type, lane, z, tier, speed) {
 
          Capped at half again its own pace, because the fixed-speed rule still
          applies here. Uncapped it took the player's speed, and a bus was
-         observed doing 65 m/s to clear a lane ‚Äî a lorry outrunning a supercar
+         observed doing 65 m/s to clear a lane — a lorry outrunning a supercar
          reads as the game cheating, and undoes the readability that fixed
          speeds exist to provide. If half again is not enough to open the road,
          the guard simply picks a different car next cycle. */
@@ -3400,7 +3400,7 @@ HP.Traffic.prototype._make = function (type, lane, z, tier, speed) {
     v.changeCd = 4;
     /* pendingMove is what actually drives x toward targetX in update(). Without
        it the car indicates, the guard reports the road as fixed, and nothing
-       moves an inch ‚Äî the guard then re-fires every frame forever while the
+       moves an inch — the guard then re-fires every frame forever while the
        wall sits there. Setting the target is not the same as making the move. */
     v.pendingMove = true;
     v.yielding = true;
@@ -3417,7 +3417,7 @@ HP.Traffic.prototype._make = function (type, lane, z, tier, speed) {
 
 /* --- spawning ------------------------------------------------------------
    Rate is vehicles per second; the fairness filter decides how many actually
-   land. Refused attempts are dropped rather than queued ‚Äî banking them means
+   land. Refused attempts are dropped rather than queued — banking them means
    the road erupts the moment a gap appears, which is the exact unfairness the
    filter exists to prevent. */
 HP.Traffic.prototype.spawn = function (tier, playerSpeed, timeScale) {
@@ -3439,8 +3439,8 @@ HP.Traffic.prototype.spawn = function (tier, playerSpeed, timeScale) {
       /* NEVER PUT A FAST CAR BEHIND A SLOW ONE.
 
          With fixed per-type speeds a sedan doing 34 placed behind a lorry
-         doing 22 WILL catch it, and car-following then parks the pair ‚Äî and
-         everything arriving behind them ‚Äî into a queue. Five cars nose to tail
+         doing 22 WILL catch it, and car-following then parks the pair — and
+         everything arriving behind them — into a queue. Five cars nose to tail
          is sixty metres of dead lane; three such queues at overlapping
          distances is a wall that no single car can step out of to fix, which
          is precisely the shape the fairness guard is worst at repairing.
@@ -3472,7 +3472,7 @@ HP.Traffic.prototype.update = function (ctx) {
   /* ONLY SO MANY CARS MAY BE CHANGING LANE AT ONCE.
 
      A car mid-change straddles two lanes, so it is the single most effective
-     way to close a road ‚Äî and once queue-busting overtakes were added, five or
+     way to close a road — and once queue-busting overtakes were added, five or
      six of them could be in flight across a 200m stretch simultaneously. Each
      one is individually validated, but they interact: three straddles is a
      wall nobody asked for, and the guard cannot undo them all at once.
@@ -3502,7 +3502,7 @@ HP.Traffic.prototype.update = function (ctx) {
       var gap = (ahead.z - ahead.halfL) - (v.z + v.halfL);
       if (gap < FOLLOW_GAP) {
         /* Time spent stuck behind something slower. Drivers do not queue
-           forever ‚Äî see the overtake rule below. Without it, one lorry doing
+           forever — see the overtake rule below. Without it, one lorry doing
            22 gathers a tail forty metres long, three such tails shut the whole
            road, and the fairness guard has nothing left to move. Letting
            traffic overtake is both what real traffic does and what keeps the
@@ -3522,7 +3522,7 @@ HP.Traffic.prototype.update = function (ctx) {
 
     /* ---- motion. Everything is expressed as closing speed against a player
        who never moves in z, so a vehicle slower than you drifts backwards and
-       one faster than you pulls away ‚Äî no special cases. */
+       one faster than you pulls away — no special cases. */
     v.z += (v.speed - p.speed) * wdt;
     v.wheelSpin += v.speed * wdt * 2.4;
 
@@ -3535,7 +3535,7 @@ HP.Traffic.prototype.update = function (ctx) {
       if (v.blink <= 0) { v.blink = 0; }
     } else if (v.changeCd <= 0 && !v.yielding) {
       v.changeCd = HP.rand(1.2, 3.4);
-      /* Invisibility means traffic ignores you ‚Äî so nobody drifts into your
+      /* Invisibility means traffic ignores you — so nobody drifts into your
          lane while you are a ghost, exactly as the concept specifies. */
       /* A driver stuck behind something slower wants out, and wants out much
          more than a driver on clear road wants to wander. That urge is what
@@ -3548,7 +3548,7 @@ HP.Traffic.prototype.update = function (ctx) {
          unavoidable by definition, and no indicator makes that fair. At 55m
          the indicator and the move are both finished long before the car is
          level with you, so a lane change is always something you watch
-         happening up the road ‚Äî information, not an ambush. */
+         happening up the road — information, not an ambush. */
       if (mayMove && v.z > CHANGE_MIN_Z) {
         var dir = Math.random() < 0.5 ? -1 : 1;
         var next = v.lane + dir;
@@ -3557,7 +3557,7 @@ HP.Traffic.prototype.update = function (ctx) {
         if (next < 0 || next >= HP.CFG.LANES) next = v.lane - dir;
         if (next >= 0 && next < HP.CFG.LANES && next !== v.lane) {
           /* Only if the target lane is clear around them AND the move keeps
-             the road passable ‚Äî transit included. A civilian straddling two
+             the road passable — transit included. A civilian straddling two
              lanes for a third of a second is the commonest way a road closes
              without anything having spawned. */
           var nx = HP.laneX(next);
@@ -3582,7 +3582,7 @@ HP.Traffic.prototype.update = function (ctx) {
     if (v.pendingMove && v.blink <= 0.45) {
       /* Keep checking that the move is still a good idea. It was cleared when
          the driver decided, but a lane change takes a third of a second and
-         the road moves underneath it ‚Äî the car it was tucking in behind
+         the road moves underneath it — the car it was tucking in behind
          brakes, a lorry drifts across. Validating once at the decision was the
          last remaining source of walls appearing right in front of the player.
          Re-checked a few times a second rather than every frame: this is a
@@ -3602,7 +3602,7 @@ HP.Traffic.prototype.update = function (ctx) {
       /* Finish FASTER the closer it gets. A move begun legally at 55m can
          still be halfway across when the player arrives if the player is
          boosting, and a car straddling two lanes beside you is the exact
-         thing the 55m rule exists to prevent ‚Äî the rule is about where the
+         thing the 55m rule exists to prevent — the rule is about where the
          manoeuvre ENDS, not where it starts. Urgency scales the easing so the
          car is always committed to one lane by the time you are level. */
       var urgency = 1 + Math.max(0, 45 - v.z) / 11;
@@ -3629,7 +3629,7 @@ HP.Traffic.prototype.update = function (ctx) {
          as a collision (suppressed), and the near-miss branch explicitly
          excluded ghosting. So the power-up whose whole purpose is to let you
          take impossible lines quietly switched off the reward for taking
-         them ‚Äî picking it up made you score less. */
+         them — picking it up made you score less. */
       var phased = p.has('ghost') && v.minGap <= 0;
       if (phased || (v.minGap > 0 && v.minGap < C.NEAR_MISS_GAP)) {
         ctx.emit('nearMiss', { gap: v.minGap, heavy: v.heavy, x: v.x,
@@ -3649,7 +3649,7 @@ HP.Traffic.prototype.update = function (ctx) {
       if (res !== 'ghost') {
         v.hitDone = true;
         ctx.emit('crash', { kind: res, heavy: v.heavy, source: 'traffic', x: v.x, z: v.z });
-        /* Shunt the civilian too ‚Äî it should visibly be knocked about, not
+        /* Shunt the civilian too — it should visibly be knocked about, not
            act as an immovable wall you bounced off. */
         v.speed *= 0.72;
         v.x += (v.x - p.x) > 0 ? 0.5 : -0.5;
@@ -3670,7 +3670,7 @@ HP.Traffic.prototype.update = function (ctx) {
 
     if (v.mesh) {
       v.mesh.position.set(v.x, 0, v.z);
-      /* Lean into a lane change ‚Äî small, but it is what makes them read as
+      /* Lean into a lane change — small, but it is what makes them read as
          driving rather than sliding on rails. */
       v.mesh.rotation.y = v.pendingMove ? -v.blinkDir * 0.06 : 0;
       for (var w = 0; w < v.mesh.wheels.length; w++) v.mesh.wheels[w].rotation.x = v.wheelSpin;
@@ -3702,7 +3702,7 @@ HP.Traffic.prototype._slowerAhead = function (x, z, speed) {
 
 /* Nearest vehicle ahead of `v` that laterally overlaps it. Overlap is measured
    in x rather than by lane index, so a car halfway through a lane change is
-   correctly seen by BOTH lanes it is straddling ‚Äî which is exactly when a
+   correctly seen by BOTH lanes it is straddling — which is exactly when a
    rear-end would otherwise happen. */
 HP.Traffic.prototype._nearestAhead = function (v) {
   var best = null;
@@ -3724,7 +3724,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== police.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî police.js
+   HIGHWAY PURSUIT — police.js
    The pursuit: cruisers, PIT manoeuvres, roadblocks, spike strips, the
    helicopter, and the heat clock that escalates all of it.
 
@@ -3740,7 +3740,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 
      2. A roadblock is only ever placed where it can be threaded. The gap lane
         is chosen by predicting where every civilian will be at the moment you
-        ARRIVE, not where they are when the block spawns ‚Äî those are different
+        ARRIVE, not where they are when the block spawns — those are different
         answers, because the block is stationary on the road and traffic drives
         past it at its own speed. Choosing on present positions puts a lorry in
         your only gap about a third of the time.
@@ -3808,7 +3808,7 @@ HP.Police.prototype._spawnUnit = function (tier) {
     speed: 0, halfL: t.length / 2, halfW: t.width / 2,
     state: 'chase', stateT: 0, pitCd: HP.rand(2, 6),
     strikeT: 0, locked: false, stunT: 0,
-    /* Solid, so a cruiser that has got ahead of you is a real obstacle ‚Äî but
+    /* Solid, so a cruiser that has got ahead of you is a real obstacle — but
        never yieldable. The fairness guard asks objects to get out of the way;
        a police car choosing to clear your path is the one thing in this game
        that would read as the game apologising. If a cruiser ahead helps close
@@ -3880,7 +3880,7 @@ HP.Police.prototype._clearBlock = function () {
 
    It must be fed EVERYTHING solid, not just traffic. Road furniture is the
    nastier case: a cone is stationary, so is the barricade, so a cone sitting
-   in the chosen gap stays in the chosen gap forever ‚Äî the one obstacle that
+   in the chosen gap stays in the chosen gap forever — the one obstacle that
    can never drift clear on its own. */
 HP.Police.chooseGapLane = function (obstacles, playerSpeed, arriveT, preferFar, playerLane) {
   var clearance = 22;
@@ -3920,14 +3920,14 @@ HP.Police.prototype._spawnBlock = function (player, traffic, tier) {
   var arriveT = C.ROADBLOCK_LEAD;
   var z = player.speed * arriveT;
 
-  /* Everything solid on the road, not just the traffic list ‚Äî see the note on
+  /* Everything solid on the road, not just the traffic list — see the note on
      chooseGapLane. Reading straight off the occupancy register means a hazard
      system added later is covered without anyone remembering to wire it in. */
   var obstacles = [];
   for (var i = 0; i < this.occ.items.length; i++) {
     var it = this.occ.items[i];
     if (!it.solid || it === this.occ.player) continue;
-    /* Pursuers are counted only when they are AHEAD of you ‚Äî a cruiser that
+    /* Pursuers are counted only when they are AHEAD of you — a cruiser that
        has overtaken to lay spikes can absolutely be parked in the gap, and
        since police never yield that block would be unbeatable. Cruisers
        sitting in your mirror are not in the gap and never will be; including
@@ -3939,7 +3939,7 @@ HP.Police.prototype._spawnBlock = function (player, traffic, tier) {
 
   var gap = HP.Police.chooseGapLane(obstacles, player.speed, arriveT,
                                     this.heliOn, player.lane);
-  if (gap < 0) return false;         // no safe placement ‚Äî try again shortly
+  if (gap < 0) return false;         // no safe placement — try again shortly
 
   var parts = [];
   for (var lane = 0; lane < C.LANES; lane++) {
@@ -3958,7 +3958,7 @@ HP.Police.prototype._spawnBlock = function (player, traffic, tier) {
     parts.push(p);
   }
   /* Claim the gap lane for a long stretch either side. `chooseGapLane` proved
-     the gap is clear at the moment of placement ‚Äî this keeps it clear
+     the gap is clear at the moment of placement — this keeps it clear
      afterwards, which is a different problem: hazards keep spawning at 200m
      and the block sweeps down through them.
 
@@ -4020,7 +4020,7 @@ HP.Police.prototype.update = function (ctx) {
   /* ONE PIT AT A TIME.
 
      Every unit rolls for a PIT independently, and with five cruisers at
-     LOCKDOWN that produced an attempt roughly once a second ‚Äî with two often
+     LOCKDOWN that produced an attempt roughly once a second — with two often
      live at once, from different lanes. Dodging one then puts you straight
      into the other, so the correct response gets you hit and the manoeuvre
      stops being a skill check at all. Measured, a driver reacting perfectly
@@ -4062,7 +4062,7 @@ HP.Police.prototype.update = function (ctx) {
 
     /* POLICE DRIVE AT A SET SPEED, NOT AT A MULTIPLE OF YOURS.
 
-       The reference is your CRUISE speed ‚Äî what you hold with your foot down
+       The reference is your CRUISE speed — what you hold with your foot down
        and no nitro. Deriving it from your INSTANTANEOUS speed instead is
        perfect rubber-banding: whatever you do they do a bit more of it, nitro
        buys nothing, and the chase has no dynamics left.
@@ -4077,8 +4077,8 @@ HP.Police.prototype.update = function (ctx) {
        Heat does NOT touch this. Letting it add even 5% meant a flawless run
        still lost 76 metres a minute to nothing but the passage of time, which
        is catching up without a crash by another name. Heat governs how MANY
-       cars are on you and how readily they commit to a PIT ‚Äî pressure you can
-       see ‚Äî not a speed advantage you cannot. The unit's class does not scale
+       cars are on you and how readily they commit to a PIT — pressure you can
+       see — not a speed advantage you cannot. The unit's class does not scale
        it either; that shows up in the lunge and the ram, where it is visible. */
     var cruise = Math.max(p.maxSpeed, 12);
 
@@ -4102,12 +4102,12 @@ HP.Police.prototype.update = function (ctx) {
         /* Cruise speed, capped by how fast they are allowed to GAIN. The cap
            bites only when you are slower than they are: at cruise it is
            inactive, and under boost `cruise` is the smaller term so it drops
-           out entirely and they simply cannot follow. Asymmetric on purpose ‚Äî
+           out entirely and they simply cannot follow. Asymmetric on purpose —
            see POLICE_MAX_CLOSE. */
         u.speed = Math.min(cruise, p.speed + C.POLICE_MAX_CLOSE);
         /* Ease off inside the standoff ONLY while you are up to speed. That
            courtesy is what stops a cruiser grinding on your bumper through a
-           clean run ‚Äî but applied unconditionally it also made the rear-end
+           clean run — but applied unconditionally it also made the rear-end
            impossible, because the moment you slowed they politely dropped back
            rather than running into you. If you are off the pace, they keep
            coming, and what happens next is your own doing. */
@@ -4117,7 +4117,7 @@ HP.Police.prototype.update = function (ctx) {
            whenever they fell past the join distance, which is a catch-up rule
            wearing a different hat: it quietly undid every metre nitro had
            bought, so the burst felt like it did nothing. If you out-drive
-           them, you have out-driven them ‚Äî the pursuit refreshes by sending
+           them, you have out-driven them — the pursuit refreshes by sending
            NEW cars, not by the old ones cheating. */
         if (u.z < -230) { this._retireUnit(u); this.units.splice(i, 1); continue; }
 
@@ -4125,7 +4125,7 @@ HP.Police.prototype.update = function (ctx) {
            in whichever lane it happened to join in. Two reasons, and both are
            about the chase being legible:
 
-           it is what a pursuit does ‚Äî the car following you follows YOU; and
+           it is what a pursuit does — the car following you follows YOU; and
            it is what makes slowing down actually cost something. A cruiser
            holding a random lane can only rear-end you by coincidence, so the
            consequence of braking arrived about a third of the time and read
@@ -4166,7 +4166,7 @@ HP.Police.prototype.update = function (ctx) {
 
            The first version just added 14 m/s and let it run. Over the 1.45s
            wind-up that carried the cruiser twenty-odd metres PAST the player,
-           and the strike still landed ‚Äî a PIT delivered from well in front,
+           and the strike still landed — a PIT delivered from well in front,
            which is both physically absurd and impossible to read as a threat.
            A proportional hold on the contact point fixes it. */
         u.strikeT -= dt;
@@ -4249,7 +4249,7 @@ HP.Police.prototype.update = function (ctx) {
        point nothing stopped them driving straight past: measured, a cruiser
        chasing a braking player ended up seventy-four metres UP THE ROAD,
        serenely overtaking the car it was supposed to be catching. Absurd to
-       look at, and it also quietly ends the chase ‚Äî once ahead, it can neither
+       look at, and it also quietly ends the chase — once ahead, it can neither
        PIT you nor ram you.
 
        So contact is a wall. They arrive at your bumper and stay there,
@@ -4259,7 +4259,7 @@ HP.Police.prototype.update = function (ctx) {
     if (u.state !== 'spikeRun') {
       /* Just INSIDE the overlap threshold, not outside it. Parked a fraction
          clear of contact they never registered a hit at all, which silently
-         removed the rear-end ‚Äî the wall has to be at the point where the
+         removed the rear-end — the wall has to be at the point where the
          bumpers actually meet, or it is a wall that stops the consequence
          instead of delivering it. */
       var contact = -(u.halfL + p.halfL - 0.4);
@@ -4285,8 +4285,8 @@ HP.Police.prototype.update = function (ctx) {
 
     /* ---- rear-ended ----
        The consequence of slowing down. They are driving at your CRUISE speed,
-       so the moment the road forces you off it ‚Äî a lorry you cannot get
-       around, an obstacle course that has to be taken slowly, a spike strip ‚Äî
+       so the moment the road forces you off it — a lorry you cannot get
+       around, an obstacle course that has to be taken slowly, a spike strip —
        the car behind keeps coming and goes into the back of you.
 
        This is not a punishment bolted on; it falls straight out of police
@@ -4299,7 +4299,7 @@ HP.Police.prototype.update = function (ctx) {
         u.ramCd = 1.0;
         var r2 = p.damage(C.DMG_PIT * 0.6 * u.ram, 'police',
                           (p.x - u.x) >= 0 ? C.HIT_SPIN * 0.6 : -C.HIT_SPIN * 0.6);
-        /* Shunted forward, and they back off ‚Äî a shunt should cost you health
+        /* Shunted forward, and they back off — a shunt should cost you health
            and position, not glue a cruiser to your bumper grinding away. */
         u.z -= 6;
         ctx.emit('ram', { kind: r2, unit: u, braking: p.brakeT > 0 });
@@ -4391,7 +4391,7 @@ HP.Police.prototype.update = function (ctx) {
    what makes an impact frightening rather than merely expensive.
 
    This is ON TOP of the speed the crash already scrubbed, so a bad one is
-   compounding ‚Äî which is why a run tends to end in a cascade rather than a
+   compounding — which is why a run tends to end in a cascade rather than a
    single mistake, and why that cascade feels like your own fault. */
 HP.Police.prototype.crashed = function (heavy) {
   var C = HP.CFG;
@@ -4400,7 +4400,7 @@ HP.Police.prototype.crashed = function (heavy) {
     var u = this.units[i];
     if (u.state === 'wrecked' || u.state === 'lost' || u.stunT > 0) continue;
     var gain = HP.rand(C.CRASH_GAIN_MIN, C.CRASH_GAIN_MAX) * (heavy ? C.CRASH_GAIN_HEAVY : 1);
-    /* Never past the standoff ‚Äî a crash brings them onto you, it does not
+    /* Never past the standoff — a crash brings them onto you, it does not
        teleport them into you. Landing a hit is still the PIT's job. */
     u.z = Math.min(u.z + gain, -u.standoff);
     total += gain;
@@ -4433,7 +4433,7 @@ HP.Police.prototype._pose = function (u, wdt) {
                     : HP.clamp((HP.laneX(u.lane) - u.x) * -0.05, -0.3, 0.3);
   u.mesh.rotation.z = u.state === 'wrecked' ? Math.sin(u.spin || 0) * 0.12 : 0;
   for (var w = 0; w < u.mesh.wheels.length; w++) u.mesh.wheels[w].rotation.x = u.wheelSpin;
-  /* Alternating light bar. Stunned units go dark ‚Äî the clearest possible read
+  /* Alternating light bar. Stunned units go dark — the clearest possible read
      that the EMP worked. */
   if (u.mesh.lights) {
     var on = u.stunT > 0 ? -1 : (Math.floor(u.flash) % 2);
@@ -4460,11 +4460,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== world.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî world.js
+   HIGHWAY PURSUIT — world.js
    The road, the scenery, the weather, and the zone the run is currently in.
 
    AXES: the road runs along +Z into the distance, lanes spread along X, the
-   tarmac is y = 0. The player never moves in z ‚Äî the world slides toward -Z
+   tarmac is y = 0. The player never moves in z — the world slides toward -Z
    at the player's speed. Everything here is therefore a recycler: objects
    past the camera are picked up and re-placed far ahead, so an endless run
    allocates nothing and z never grows without bound.
@@ -4477,7 +4477,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 
    LANE MARKINGS ARE MESHES, not a scrolling texture. A texture would be one
    draw call instead of one InstancedMesh, but the uv-to-world mapping of a
-   rotated plane is easy to get backwards ‚Äî and dashes crawling the wrong way
+   rotated plane is easy to get backwards — and dashes crawling the wrong way
    at 200 km/h is the single most obvious possible bug. Instances are
    unambiguous: a dash is at a z, and that z decreases.
    ===========================================================================*/
@@ -4582,7 +4582,7 @@ HP.World.prototype._buildSky = function () {
 HP.World.prototype._buildLights = function () {
   /* Bright and flat on purpose. The art brief is saturated cartoon, and with
      flat shading and no textures the ONLY thing separating a red car from a
-     dark road is how much light lands on it ‚Äî the first pass at 2.5/2.0 read
+     dark road is how much light lands on it — the first pass at 2.5/2.0 read
      as dusk in every theme and turned the whole palette to mud. The ground
      bounce is warm and strong so undersides never go black. */
   this.sun = new THREE.DirectionalLight(0xfff3d6, 3.1);
@@ -4639,7 +4639,7 @@ HP.World.prototype._buildRoad = function () {
 /* --- lane markings --------------------------------------------------------
    Two dashed dividers plus two solid edge lines, all instanced and recycled.
    The dash period is the game's only honest speed cue at the bottom of the
-   screen ‚Äî everything else is parallax you can talk yourself out of. */
+   screen — everything else is parallax you can talk yourself out of. */
 HP.World.prototype._buildMarkings = function () {
   var DASH = 3.2, PERIOD = 11.0;
   this.dashPeriod = PERIOD;
@@ -4660,10 +4660,10 @@ HP.World.prototype._buildMarkings = function () {
   var k = 0;
   for (var d = 0; d < dividers; d++) {
     /* MINUS half a lane, not plus. Lane index runs opposite to world x (see
-       laneX ‚Äî the camera faces +Z, so +X is screen-left), so "half a lane to
+       laneX — the camera faces +Z, so +X is screen-left), so "half a lane to
        the right of lane d" is a SMALLER x. Adding instead put divider 0 at
        x=5.55, exactly on top of the right-hand edge line, leaving only one
-       interior divider drawn ‚Äî a three-lane road that looked like two. */
+       interior divider drawn — a three-lane road that looked like two. */
     var x = HP.laneX(d) - HP.CFG.LANE_W / 2;
     for (var i = 0; i < perLine; i++) {
       this._dashX[k] = x;
@@ -4751,8 +4751,8 @@ HP.World.prototype._writePosts = function (inset) {
 
 /* --- roadside props -------------------------------------------------------
    One pooled group per slot, rebuilt when the theme changes. Recycled by z
-   like everything else. Themes swap the shape entirely ‚Äî palms, cacti,
-   pines, neon pylons, city blocks ‚Äî which is most of what makes an unlocked
+   like everything else. Themes swap the shape entirely — palms, cacti,
+   pines, neon pylons, city blocks — which is most of what makes an unlocked
    highway feel like a different place rather than a colour filter. */
 HP.World.prototype._buildProps = function () {
   this.propGroup = new THREE.Group();
@@ -4808,7 +4808,7 @@ HP.World.prototype._propMesh = function (kind, colour) {
       bar.position.set(0, 6 + n * 4.4, 0.42);
       g.add(bar);
     }
-  } else {   // 'block' ‚Äî a city slab that vanishes upward into the fog
+  } else {   // 'block' — a city slab that vanishes upward into the fog
     var h = 24 + Math.random() * 40;
     var blk = new THREE.Mesh(new THREE.BoxGeometry(9 + Math.random() * 8, h, 9 + Math.random() * 8),
       new THREE.MeshLambertMaterial({ color: colour, flatShading: true }));
@@ -4964,7 +4964,7 @@ HP.World.prototype._buildSpeedLines = function () {
 };
 
 /* Speed lines belong in the CORRIDOR the car is flying down, not in the sky.
-   Scattered through a dome they read as snow ‚Äî big soft blobs hanging over the
+   Scattered through a dome they read as snow — big soft blobs hanging over the
    horizon, which is the opposite of the intended effect and the first thing
    you notice. Kept low and out to the sides, they streak past in peripheral
    vision and sell speed without ever competing with the road for attention. */
@@ -4992,7 +4992,7 @@ HP.World.prototype._buildParticles = function () {
   this._pCol = col;
   /* A soft round sprite, NOT a bare point. An untextured PointsMaterial draws
      hard squares, and with size attenuation the near ones are big hard
-     squares ‚Äî so a crash sprayed the screen with amber confetti instead of
+     squares — so a crash sprayed the screen with amber confetti instead of
      sparks. One radial gradient turns the same particles into embers. */
   var spark = canvasTex(16, 16, function (c, w, h) {
     var grd = c.createRadialGradient(8, 8, 0, 8, 8, 8);
@@ -5048,7 +5048,7 @@ HP.World.prototype.applyTheme = function (key) {
   this.nightTarget = th.night;
   if (this._propKind !== th.prop) this._rebuildProps();
   else for (var i = 0; i < this.props.length; i++) {
-    /* Same silhouette, new palette ‚Äî recolour in place rather than rebuilding
+    /* Same silhouette, new palette — recolour in place rather than rebuilding
        geometry for what is only a hue change. */
     this.props[i].mesh.traverse(function (o) {
       if (o.material && o.material.color && o.material.type === 'MeshLambertMaterial') {
@@ -5082,7 +5082,7 @@ HP.World.prototype._advanceZone = function (emit) {
       zone: this.zone,
       label: this.zone === 'construction' ? 'ROADWORKS AHEAD'
            : this.zone === 'tunnel' ? 'TUNNEL AHEAD'
-           : 'BRIDGE ‚Äî CROSSWIND'
+           : 'BRIDGE — CROSSWIND'
     });
   }
 };
@@ -5191,7 +5191,7 @@ HP.World.prototype.update = function (ctx) {
 
   /* ---- speed lines ---- */
   var sn = ctx.speedNorm;
-  /* Only near the top of the band, and never fully opaque ‚Äî this is a hint of
+  /* Only near the top of the band, and never fully opaque — this is a hint of
      speed at the edge of vision, not weather. */
   this.speedLines.material.opacity = HP.clamp((sn - 0.88) * 1.9, 0, 0.42);
   if (this.speedLines.material.opacity > 0.01) {
@@ -5251,7 +5251,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== audio.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî audio.js
+   HIGHWAY PURSUIT — audio.js
    Entirely procedural: oscillators and filtered noise, no samples, so the
    whole game stays one file with nothing to fetch.
 
@@ -5259,7 +5259,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 
      ENGINE  pitch tracks speed, so you hear the boost land before the number
              on the HUD moves
-     WIND    a noise bed that opens up with speed ‚Äî the "rush"
+     WIND    a noise bed that opens up with speed — the "rush"
      SIREN   gain and pitch track the NEAREST pursuer's distance, so the
              mirror has a sound. This is the one that matters: it means you
              can feel a cruiser closing while you are looking at the road
@@ -5294,7 +5294,7 @@ HP.Audio.prototype.init = function () {
   this.master = ctx.createGain();
   this.master.gain.value = 0.5;
   /* A limiter on the bus. With an engine, wind, sirens, music and up to a
-     dozen one-shots all live, peaks clip audibly on phone speakers ‚Äî and
+     dozen one-shots all live, peaks clip audibly on phone speakers — and
      clipping in a game that is mostly sustained noise sounds like a fault
      rather than like loudness. */
   var comp = ctx.createDynamicsCompressor();
@@ -5356,7 +5356,7 @@ HP.Audio.prototype.init = function () {
   sirFilter.type = 'bandpass';
   sirFilter.frequency.value = 1400;
   sirFilter.Q.value = 3.5;
-  /* The wail is an LFO on the oscillator's own frequency ‚Äî a hand-stepped
+  /* The wail is an LFO on the oscillator's own frequency — a hand-stepped
      two-tone reads as a doorbell, a swept one reads as a police car. */
   this.sirLfo = ctx.createOscillator();
   this.sirLfo.type = 'triangle';
@@ -5418,7 +5418,7 @@ HP.Audio.prototype.update = function (dt, s) {
 
   var pitch = 58 + s.speedNorm * 118 + (s.boosting ? 34 : 0);
   /* Slow motion drops everything an octave and a half. Pitch is the most
-     immediate signal there is that time has changed ‚Äî far faster to read than
+     immediate signal there is that time has changed — far faster to read than
      watching the world decelerate. */
   if (s.slowmo) pitch *= 0.45;
   for (var i = 0; i < this.engOsc.length; i++) {
@@ -5523,7 +5523,7 @@ HP.Audio.prototype.slowmoOut = function () { this._blip(180, 0.5, 'sine', 0.2, 9
    Sixteen steps of an A-minor synthwave loop. Layers ARM by intensity, which
    is driven by the tier: bass from the start, arp once the chase is real,
    lead and hats at MANHUNT and beyond. Notes are scheduled a fifth of a
-   second ahead of the audio clock ‚Äî long enough that a dropped frame cannot
+   second ahead of the audio clock — long enough that a dropped frame cannot
    punch a hole in the bar, short enough that a change in intensity is audible
    within one step.
    --------------------------------------------------------------------------*/
@@ -5540,7 +5540,7 @@ HP.Audio.prototype._sequence = function (intensity) {
 
      The audio context's clock never stops, but this function is only called
      while a run is in progress. Sit on the title screen for half a minute, or
-     background the tab, and `_nextNote` ends up far in the past ‚Äî then the
+     background the tab, and `_nextNote` ends up far in the past — then the
      scheduler tries to catch up and dumps its entire sixteen-note allowance at
      timestamps that have already gone. Web Audio fires anything scheduled in
      the past immediately, so pressing DRIVE let off sixteen notes as a single
@@ -5564,7 +5564,7 @@ HP.Audio.prototype._sequence = function (intensity) {
       this._note(t, hz(24 + b), stepDur * 1.7, 'sawtooth', 0.16, 320);
     }
 
-    /* Hats from the first escalation ‚Äî the fastest way to raise perceived
+    /* Hats from the first escalation — the fastest way to raise perceived
        tempo without touching the actual tempo. */
     if (intensity > 0.2 && st % 2 === 1) {
       this._noise(0.045, 8000, 0.028 * intensity, 'highpass', 1);
@@ -5605,7 +5605,7 @@ HP.Audio.prototype._note = function (t, freq, dur, type, vol, cutoff) {
   o.start(t); o.stop(t + dur + 0.02);
 };
 
-/* Silence the beds without tearing down the graph ‚Äî used on game over so the
+/* Silence the beds without tearing down the graph — used on game over so the
    summary screen is not shouted over by an engine that no longer exists. */
 HP.Audio.prototype.hush = function () {
   if (!this.ready) return;
@@ -5623,14 +5623,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== ui.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî ui.js
+   HIGHWAY PURSUIT — ui.js
    HUD, screens and the garage.
 
    Two elements do most of the work and both are placed where peripheral
    vision can read them without leaving the road:
 
-     THE WARNING STRIP is shared by every threat in the game ‚Äî roadblock,
-     PIT, spike strip, hazard ‚Äî and only ever shows the SOONEST one. Two
+     THE WARNING STRIP is shared by every threat in the game — roadblock,
+     PIT, spike strip, hazard — and only ever shows the SOONEST one. Two
      competing warning widgets read as noise and players learn to ignore both.
      It shows a closing bar as well as a label, because a threat coming
      straight down the Z axis gives almost no depth cue: without the bar the
@@ -5715,7 +5715,7 @@ HP.UI.prototype.showTitle = function (save) {
   this.el.hud.classList.add('hide');
   this.el.over.classList.add('hide');
   this.el.garage.classList.add('hide');
-  this.el.cashLine.textContent = 'ü™ô ' + save.cash.toLocaleString();
+  this.el.cashLine.textContent = '🪙 ' + save.cash.toLocaleString();
   this.el.bestLine.textContent = save.best > 0 ? 'BEST  ' + save.best.toLocaleString() : '';
 };
 
@@ -5744,7 +5744,7 @@ HP.UI.prototype.showGameOver = function (s) {
   this.el.ovScore.textContent = s.score.toLocaleString();
   this.el.ovNew.style.display = s.newBest ? 'block' : 'none';
   this.el.ovReason.textContent = s.reason;
-  this.el.ovEarned.textContent = '+ ü™ô ' + s.earned.toLocaleString() + '  EARNED';
+  this.el.ovEarned.textContent = '+ 🪙 ' + s.earned.toLocaleString() + '  EARNED';
   this.el.ovDist.textContent = s.distance.toLocaleString() + ' m';
   this.el.ovBest.textContent = s.best.toLocaleString();
   this.el.ovSpeed.textContent = s.topSpeed + ' km/h';
@@ -5757,13 +5757,13 @@ HP.UI.prototype.showGameOver = function (s) {
   this.el.ovTier.textContent = s.tier;
 };
 
-HP.UI.prototype.setMuted = function (m) { this.el.mute.textContent = m ? 'üîá' : 'üîä'; };
+HP.UI.prototype.setMuted = function (m) { this.el.mute.textContent = m ? '🔇' : '🔊'; };
 
 /* --- feedback ------------------------------------------------------------- */
 HP.UI.prototype.toast = function (text, colour) {
   /* Cap the stack. During a long combo chain a dozen toasts can land inside
      one second, and the column grows off the top of the screen and covers the
-     road ‚Äî the exact moment the player most needs to see it. */
+     road — the exact moment the player most needs to see it. */
   if (this.el.toasts.childElementCount > 5) {
     this.el.toasts.removeChild(this.el.toasts.firstChild);
   }
@@ -5797,7 +5797,7 @@ HP.UI.prototype.update = function (s) {
   e.dist.textContent = s.distance.toLocaleString() + ' m';
   e.coins.textContent = s.coins;
   e.tier.textContent = s.tier;
-  e.mult.textContent = s.mult > 1 ? '√ó' + s.mult.toFixed(1) : '';
+  e.mult.textContent = s.mult > 1 ? '×' + s.mult.toFixed(1) : '';
   e.speed.innerHTML = s.kmh + '<b>KM/H</b>';
   e.speedBox.classList.toggle('top', s.topSpeed);
 
@@ -5819,7 +5819,7 @@ HP.UI.prototype.update = function (s) {
   var frac = HP.clamp(s.integrity / HP.CFG.INTEGRITY_MAX, 0, 1);
   e.intFill.style.width = (frac * 100) + '%';
   e.integrity.classList.toggle('low', frac < 0.34);
-  e.shieldPips.textContent = s.shields > 0 ? new Array(s.shields + 1).join('üõ°') : '';
+  e.shieldPips.textContent = s.shields > 0 ? new Array(s.shields + 1).join('🛡') : '';
   e.nitroFill.style.width = (HP.clamp(s.nitro, 0, 1) * 100) + '%';
   e.btnNitro.classList.toggle('ready', s.nitro >= 0.999);
   e.btnNitro.classList.toggle('empty', s.nitro < 0.999);
@@ -5898,7 +5898,7 @@ HP.UI.prototype._warn = function (w) {
 HP.UI.prototype.renderGarage = function (save, handlers) {
   var self = this;
   var list = this.el.gList;
-  this.el.gCash.textContent = 'ü™ô ' + save.data.cash.toLocaleString();
+  this.el.gCash.textContent = '🪙 ' + save.data.cash.toLocaleString();
   list.innerHTML = '';
 
   function card(opts) {
@@ -5943,7 +5943,7 @@ HP.UI.prototype.renderGarage = function (save, handlers) {
       card({
         name: u.name, blurb: u.blurb,
         pips: lv, pipMax: u.max,
-        buyLabel: cost === null ? 'MAX' : 'ü™ô ' + cost,
+        buyLabel: cost === null ? 'MAX' : '🪙 ' + cost,
         buyState: cost === null ? 'done' : (save.canAfford(cost) ? '' : 'no'),
         owned: cost === null,
         onTap: function () { handlers.buyUpgrade(key); }
@@ -5957,9 +5957,9 @@ HP.UI.prototype.renderGarage = function (save, handlers) {
       card({
         name: c.name,
         swatch: '#' + c.body.toString(16).padStart(6, '0'),
-        blurb: 'Speed ' + Math.round(c.top * 100) + '%  ¬∑  Grip ' + Math.round(c.grip * 100) +
-               '%  ¬∑  Armour ' + Math.round(c.armour * 100) + '%',
-        buyLabel: eq ? 'DRIVING' : (owned ? 'SELECT' : 'ü™ô ' + c.cost),
+        blurb: 'Speed ' + Math.round(c.top * 100) + '%  ·  Grip ' + Math.round(c.grip * 100) +
+               '%  ·  Armour ' + Math.round(c.armour * 100) + '%',
+        buyLabel: eq ? 'DRIVING' : (owned ? 'SELECT' : '🪙 ' + c.cost),
         buyState: eq ? 'done' : (owned ? '' : (save.data.cash >= c.cost ? '' : 'no')),
         owned: owned, equipped: eq, locked: !owned && save.data.cash < c.cost,
         onTap: function () { owned ? handlers.selectCar(key) : handlers.buyCar(key); }
@@ -5974,8 +5974,8 @@ HP.UI.prototype.renderGarage = function (save, handlers) {
         name: t.name,
         swatch: 'linear-gradient(135deg,#' + t.skyTop.toString(16).padStart(6, '0') +
                 ',#' + t.skyBot.toString(16).padStart(6, '0') + ')',
-        blurb: t.night ? 'Night driving ‚Äî headlights matter' : 'Daylight run',
-        buyLabel: eq ? 'ACTIVE' : (owned ? 'SELECT' : 'ü™ô ' + t.cost),
+        blurb: t.night ? 'Night driving — headlights matter' : 'Daylight run',
+        buyLabel: eq ? 'ACTIVE' : (owned ? 'SELECT' : '🪙 ' + t.cost),
         buyState: eq ? 'done' : (owned ? '' : (save.data.cash >= t.cost ? '' : 'no')),
         owned: owned, equipped: eq, locked: !owned && save.data.cash < t.cost,
         onTap: function () { owned ? handlers.selectTheme(key) : handlers.buyTheme(key); }
@@ -5991,7 +5991,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = HP;
 /* ===== game.js ===== */
 (function(HP){
 /* ===========================================================================
-   HIGHWAY PURSUIT ‚Äî game.js
+   HIGHWAY PURSUIT — game.js
    State machine, input, camera, scoring, and the frame order everything else
    depends on.
 
@@ -6085,7 +6085,7 @@ HP.Game.prototype._resize = function () {
 
 /* --- input ---------------------------------------------------------------
    Swipes are primary, tap zones are the fallback, keys are for desktop, and
-   all three feed the SAME three verbs ‚Äî steer / brake / boost ‚Äî so there is
+   all three feed the SAME three verbs — steer / brake / boost — so there is
    never a control path with its own behaviour to get out of sync.
 
    Touch is tracked by identifier, not by touches[0]: with a thumb on the
@@ -6127,7 +6127,7 @@ HP.Game.prototype._initInput = function () {
         self.player.steer(dx > 0 ? 1 : -1);
         self._touch.swiped = true;
         /* Re-anchor rather than ending the gesture, so one continuous drag
-           across two lanes works ‚Äî which is what a panicking player does. */
+           across two lanes works — which is what a panicking player does. */
         self._touch.x = t.clientX; self._touch.y = t.clientY;
       } else if (Math.abs(dy) > SWIPE && Math.abs(dy) > Math.abs(dx)) {
         if (dy < 0) self.doBoost(); else self.doBrake();
@@ -6144,7 +6144,7 @@ HP.Game.prototype._initInput = function () {
       if (t.identifier !== self._touch.id) continue;
       /* Tap-to-steer, handled HERE rather than by overlay divs. Two invisible
          tap zones over the outer thirds of the screen used to swallow every
-         swipe that started in them, which is most of them ‚Äî leaving swiping
+         swipe that started in them, which is most of them — leaving swiping
          working only in a narrow strip up the middle and making the controls
          feel arbitrary. Deciding tap-versus-swipe from the gesture itself
          means the whole screen accepts both. */
@@ -6322,7 +6322,7 @@ HP.Game.prototype._bumpCombo = function (n) {
 
 /* Every impact hands the pursuit ground, by an amount neither of us knows in
    advance. Routed through one place so no damage source can ever forget to
-   pay it ‚Äî and so the player gets one consistent read on what a crash costs:
+   pay it — and so the player gets one consistent read on what a crash costs:
    the mirror jumps, and the size of the jump is the news. */
 HP.Game.prototype._policeGained = function (heavy) {
   var m = this.police.crashed(heavy);
@@ -6356,7 +6356,7 @@ HP.Game.prototype._onEvent = function (kind, d) {
          well earns nothing then nobody ever touches the brake and the game is
          one input wide. */
       if (p.brakeT > 0) {
-        /* Points, but no second combo link. One event earns one link ‚Äî paying
+        /* Points, but no second combo link. One event earns one link — paying
            two for a single pass let a near miss taken on the brakes ramp the
            multiplier twice as fast as the same pass taken flat out, which is
            the wrong way round for a game about committing to speed. */
@@ -6445,7 +6445,7 @@ HP.Game.prototype._onEvent = function (kind, d) {
 
     case 'roadblockUp':
       /* No centre-screen banner. A roadblock already announces itself twice
-         over ‚Äî the warning strip names it and counts it down, and the thing
+         over — the warning strip names it and counts it down, and the thing
          itself is a wall of flashing barricades you can see coming. Throwing
          "ROADBLOCK" across the middle of the screen as well put large moving
          text directly over the vanishing point, hiding the gap at the exact
@@ -6616,13 +6616,13 @@ HP.Game.prototype._scoreTick = function (dt) {
      This is the single rule that keeps the scoring honest, and getting it
      wrong produced the worst exploit in the game. Drifting used to pay a flat
      420 a second regardless of speed, against about 118 a second for driving
-     flat out ‚Äî so the optimal play was to brake to a crawl and flick between
+     flat out — so the optimal play was to brake to a crawl and flick between
      lanes. Measured, sixty seconds of that scored 4.3x what sixty seconds of
      actually racing did, and because each 0.8s of drift also handed over a
      combo link it reached the x7 cap in half a minute and kept going. The
      best strategy in a game about outrunning the police was to stop.
 
-     A per-second reward is immune to slowing down, and slowing down is SAFE ‚Äî
+     A per-second reward is immune to slowing down, and slowing down is SAFE —
      obstacles arrive more slowly. So any per-second reward pays you to play
      badly. Paying per metre removes the incentive at the root rather than
      patching the numbers: cover no ground, earn nothing.
@@ -6632,7 +6632,7 @@ HP.Game.prototype._scoreTick = function (dt) {
      real seconds was worth 2.4x per metre for the duration. */
   var metres = p.speed * dt * this.timeScale;
 
-  /* Distance is the baseline, and it pays MORE the faster you are going ‚Äî
+  /* Distance is the baseline, and it pays MORE the faster you are going —
      "maintaining top speed gradually builds score, slowing down reduces score
      gain" is the only reason to ever stay flat out through heavy traffic.
      Nitro stacks on top, so a burst is the main way a confident player runs
@@ -6662,7 +6662,7 @@ HP.Game.prototype._scoreTick = function (dt) {
      multiplier the racer never got, and still came out 1.35x ahead. The design
      brief is specific and it is also the fix: "controlled drifts AROUND
      TRAFFIC". A slide with nothing near it is not a manoeuvre, it is a
-     joystick waggle, and it should be worth exactly what it risks ‚Äî nothing.
+     joystick waggle, and it should be worth exactly what it risks — nothing.
 
      With the risk requirement the exploit disappears without touching the
      numbers, because open road is where farming has to happen: you cannot
@@ -6714,7 +6714,7 @@ HP.Game.prototype._updateCar = function (dt) {
     m.flameInner.scale.set(1, f * 1.15, 1);
   }
 
-  /* Tyre smoke while sliding ‚Äî the visual half of the drift, and the only
+  /* Tyre smoke while sliding — the visual half of the drift, and the only
      confirmation that a drift is actually scoring. */
   if (p.grip < 0.7 && p.speed > 20) {
     this._smokeCd = (this._smokeCd || 0) - dt;
@@ -6778,7 +6778,7 @@ HP.Game.prototype._updateCamera = function (dt) {
   }
 
   this.camera.lookAt(p.x * 0.35, 1.5, 26 - this.zoom * 8);
-  /* Roll with the lateral velocity ‚Äî this is what makes a hard weave feel
+  /* Roll with the lateral velocity — this is what makes a hard weave feel
      like a weave rather than a slide. */
   this.camera.rotateZ(HP.clamp(p.xv * 0.011, -0.13, 0.13));
 
@@ -6928,7 +6928,7 @@ HP.DEATH_REASON = {
 
 HP.Game.prototype._updateDeath = function (dt) {
   var m = this.carMesh;
-  /* Spins out and settles rather than exploding on the spot ‚Äî the run ending
+  /* Spins out and settles rather than exploding on the spot — the run ending
      should read as losing control, which is what actually happened. */
   this._spinV *= (1 - dt * 0.7);
   m.rotation.y += this._spinV * dt;
