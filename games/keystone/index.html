@@ -15,7 +15,7 @@
   #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
     background:radial-gradient(ellipse at 50% 40%,#5A2E12 0%,#1B0D05 78%)}
   canvas{display:block;touch-action:none;
-    box-shadow:0 0 90px rgba(0,0,0,.92), 0 0 0 1px rgba(255,170,70,.10)}
+    box-shadow:0 0 34px rgba(0,0,0,.85), 0 0 0 1px rgba(255,170,70,.10)}
 </style>
 </head>
 <body>
@@ -663,13 +663,16 @@ const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d', { alpha: false });
 const VW = 540;
 let VH = 1188, DPR = 1;
+/* A 2D game does not need a 2.6x canvas — at 2.25 the painted art is still
+   sharp and there are 25% fewer pixels to fill every frame. */
+let dprCap = 2.25;
 const L = {};
 function layout() {
   const ww = window.innerWidth, wh = window.innerHeight;
   const ratio = VW * wh / ww;
   VH = clamp(Number.isFinite(ratio) ? Math.round(ratio) : 1188, 880, 1240);
   const s = Math.min(ww / VW, wh / VH);
-  DPR = clamp(window.devicePixelRatio || 1, 1, 2.6);
+  DPR = clamp(window.devicePixelRatio || 1, 1, dprCap);
   cv.width = Math.round(VW * s * DPR);
   cv.height = Math.round(VH * s * DPR);
   cv.style.width = Math.round(VW * s) + 'px';
@@ -793,17 +796,52 @@ function buildLog(idx, w, h) {
   g.drawImage(img, a.w - a.cap, 0, a.cap, a.h, W - capD, 0, capD, H);
   return c;
 }
-function logCanvas(o, w, h) {
-  const kw = Math.round(w), kh = Math.round(h);
-  if (!o._c || o._cw !== kw || o._ch !== kh || o._cs !== o.s) {
-    o._c = buildLog(o.s, kw, kh); o._cw = kw; o._ch = kh; o._cs = o.s;
+/* ONE shared, bounded cache for every log bitmap on screen — the stack, the log
+   on the chain, the one in the air and the offcuts all draw out of it.
+   Previously each object built and held its own, so a single drop allocated
+   four separate bitmaps of the SAME log at the SAME width. Measured: ~160
+   canvases and ~20 MB of backing store per 80-second run, none of it visible to
+   the JS heap because canvas pixels do not live there. On a phone that is a
+   slow crawl to a memory ceiling over the first few minutes, which is exactly
+   what it looked like.
+
+   Widths are continuous — a slice leaves `w - |dx|` — so the key is quantised.
+   Rounding to 3 dp collapses hundreds of distinct widths into a few dozen
+   buckets, and the bitmap is still DRAWN at the exact width: at 2x supersample
+   that is under a 1.5% rescale, which is invisible. */
+const LOG_CACHE = new Map();
+const LOG_CACHE_MAX = 64;
+const W_QUANT = 3;
+let cacheClock = 0;
+
+function evictLRU() {
+  let oldKey = null, oldUsed = Infinity;
+  for (const [k, v] of LOG_CACHE) if (v.used < oldUsed) { oldUsed = v.used; oldKey = k; }
+  if (oldKey === null) return;
+  const e = LOG_CACHE.get(oldKey);
+  /* Zeroing the dimensions hands the backing store back NOW. Dropping the
+     reference alone leaves it to a GC that has no idea how much it is holding,
+     because the bytes are not on the heap it is measuring. */
+  e.c.width = 0; e.c.height = 0;
+  LOG_CACHE.delete(oldKey);
+}
+function logCanvas(idx, w, h) {
+  const wq = Math.max(W_QUANT, Math.round(w / W_QUANT) * W_QUANT);
+  const hq = Math.round(h);
+  const key = idx + ':' + wq + ':' + hq;
+  let e = LOG_CACHE.get(key);
+  if (!e) {
+    if (LOG_CACHE.size >= LOG_CACHE_MAX) evictLRU();
+    e = { c: buildLog(idx, wq, hq), used: 0 };
+    LOG_CACHE.set(key, e);
   }
-  return o._c;
+  e.used = ++cacheClock;
+  return e.c;
 }
 /* sx/sy squash the DRAWN log, never the cached bitmap — the settle bounce
    would otherwise rebuild five canvases every frame. */
-function drawLog(o, cx, cy, w, h, rot, sx, sy) {
-  const c = logCanvas(o, w, h);
+function drawLog(idx, cx, cy, w, h, rot, sx, sy) {
+  const c = logCanvas(idx, w, h);
   ctx.save();
   ctx.translate(cx, cy);
   if (rot) ctx.rotate(rot);
@@ -834,7 +872,21 @@ function txt(t, x, y, size, fill, stroke, sw, align, weight) {
   if (stroke && sw) { ctx.lineWidth = sw; ctx.strokeStyle = stroke; ctx.strokeText(t, x, y); }
   ctx.fillStyle = fill; ctx.fillText(t, x, y);
 }
-function measure(t, size, weight) { font(size, weight); return ctx.measureText(t).width; }
+/* measureText is not cheap, and the HUD asks for the same handful of strings
+   every single frame while the clock only changes once a second. Metrics depend
+   on the font string alone, so caching them is safe under save/restore. */
+const TEXT_W = new Map();
+function measure(t, size, weight) {
+  const k = (weight || 900) + '|' + size + '|' + t;
+  let w = TEXT_W.get(k);
+  if (w === undefined) {
+    font(size, weight);
+    w = ctx.measureText(t).width;
+    if (TEXT_W.size > 400) TEXT_W.clear();
+    TEXT_W.set(k, w);
+  }
+  return w;
+}
 
 /* The supplied pill art, 3-sliced so it stretches to any label without
    distorting the rounded ends or the glow baked around them. */
@@ -846,22 +898,51 @@ function pillArt(img, meta, x, y, w, h) {
   ctx.drawImage(img, cap, 0, meta.w - cap * 2, meta.h, x + capD - .5, y, w - capD * 2 + 1, h);
   ctx.drawImage(img, meta.w - cap, 0, cap, meta.h, x + w - capD, y, capD, h);
 }
-function woodFill(x, y, w, h, scale) {
+function woodFill(g, x, y, w, h, scale) {
   const m = ART.wood;
-  if (!ok(IMG.wood)) { ctx.fillStyle = C.barkHi; ctx.fillRect(x, y, w, h); return; }
+  if (!ok(IMG.wood)) { g.fillStyle = C.barkHi; g.fillRect(x, y, w, h); return; }
   const sc = (h / m.h) * (scale || 1.25), tw = m.w * sc, th = m.h * sc;
-  for (let px = x; px < x + w; px += tw) ctx.drawImage(IMG.wood, px, y - (th - h) * .5, tw, th);
+  for (let px = x; px < x + w; px += tw) g.drawImage(IMG.wood, px, y - (th - h) * .5, tw, th);
+}
+function paintBand(g, w, h, edgeOnTop) {
+  g.save();
+  g.beginPath(); g.rect(0, 0, w, h); g.clip();
+  woodFill(g, 0, 0, w, h);
+  g.restore();
+  /* the carved plank edge that separates the frame from the playfield */
+  g.fillStyle = 'rgba(58,30,12,.55)'; g.fillRect(0, edgeOnTop ? 0 : h - 9, w, 9);
+  g.fillStyle = '#F2E4CE'; g.fillRect(0, edgeOnTop ? 1 : h - 6, w, 5);
+  g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(0, edgeOnTop ? 6 : h - 1, w, 2);
+}
+
+/* The two frame rails do not change between layouts, and each was costing a
+   clip, a tiled blit and three fills EVERY frame. Together that was 0.49 ms of
+   a 1.13 ms frame — more than the stack, the backdrop and the particles put
+   together, for two strips that never move. Bake once, then blit.
+
+   The bake key carries whether the wood texture had loaded yet, so the first
+   frames drawn before the image arrives are re-baked once it does. */
+const RAILS = { top: null, bot: null, key: '' };
+function bakeRails() {
+  const key = VW + ':' + L.hudH + ':' + L.railH + ':' + DPR.toFixed(2) + ':' + (ok(IMG.wood) ? 1 : 0);
+  if (RAILS.key === key) return;
+  RAILS.key = key;
+  const mk = (h, edgeOnTop) => {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(VW * DPR));
+    c.height = Math.max(1, Math.round(h * DPR));
+    const g = c.getContext('2d');
+    g.scale(DPR, DPR);
+    paintBand(g, VW, h, edgeOnTop);
+    return c;
+  };
+  for (const k of ['top', 'bot']) if (RAILS[k]) { RAILS[k].width = 0; RAILS[k].height = 0; }
+  RAILS.top = mk(L.hudH, false);
+  RAILS.bot = mk(L.railH, true);
 }
 function woodBand(y, h, edgeOnTop) {
-  ctx.save();
-  ctx.beginPath(); ctx.rect(0, y, VW, h); ctx.clip();
-  woodFill(0, y, VW, h);
-  ctx.restore();
-  /* the carved plank edge that separates the frame from the playfield */
-  const ey = edgeOnTop ? y : y + h - 9;
-  ctx.fillStyle = 'rgba(58,30,12,.55)'; ctx.fillRect(0, ey, VW, 9);
-  ctx.fillStyle = '#F2E4CE'; ctx.fillRect(0, edgeOnTop ? y + 1 : y + h - 6, VW, 5);
-  ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fillRect(0, edgeOnTop ? y + 6 : y + h - 1, VW, 2);
+  const c = edgeOnTop ? RAILS.bot : RAILS.top;
+  if (c && c.width) ctx.drawImage(c, 0, y, VW, h);
 }
 /* Parked, not dead: the HUD pills are text-only for now, but the reference art
    has a stopwatch and a star in them and these are what drew those. */
@@ -942,7 +1023,7 @@ function chips(x, y, n, wood, spread, up) {
   }
 }
 function debris(x, y, w, s, vx, vy, vr) {
-  G.debris.push({ x, y, w, h: DRAW_H, o: { s }, vx, vy, vr, rot: 0, t: 0, life: 1.5 });
+  G.debris.push({ x, y, w, h: DRAW_H, s, vx, vy, vr, rot: 0, t: 0, life: 1.5 });
 }
 
 function onEvent(ev) {
@@ -1061,13 +1142,13 @@ function drawStack() {
   for (let i = 0; i < n; i++) {
     const sy = screenY(worldY(i)) + T.LOG_H * .5;
     const c = sim.stack[i];
-    if (sy < L.playT - 90 || sy > L.playB + 110) { c._c = null; continue; }
+    if (sy < L.playT - 90 || sy > L.playB + 110) continue;
     /* the whole stack takes the impact, the top course hardest */
     let sq = 0;
     if (G.settleT > 0 && i > n - 5) {
       sq = G.settleT * (1 - (n - 1 - i) / 5) * 0.14 * Math.sin(G.settleT * 9);
     }
-    drawLog(c, VW * .5 + c.x + sim.sway(i), sy + sq * T.LOG_H * .5,
+    drawLog(c.s, VW * .5 + c.x + sim.sway(i), sy + sq * T.LOG_H * .5,
       c.w, DRAW_H, 0, 1 + sq * .26, 1 - sq * .5);
   }
   const g0 = screenY(0);
@@ -1117,7 +1198,7 @@ function drawHanging() {
      left its end hanging in the air above the log, because the log is tilted at
      a fraction of the chain's angle and the two lines diverge. */
   drawChain(px, py, -a, T.CHAIN);
-  drawLog(sim.log, lx, ly, sim.log.w, DRAW_H, a * .55);
+  drawLog(sim.log.s, lx, ly, sim.log.w, DRAW_H, a * .55);
   /* the shackle, on top of the timber where a real one would be bolted */
   ctx.save();
   ctx.translate(lx, ly); ctx.rotate(a * .55);
@@ -1137,7 +1218,7 @@ function drawFalling() {
   ctx.globalAlpha = .16; ctx.fillStyle = '#000';
   ctx.beginPath(); ctx.ellipse(VW * .5 + f.x, gy - 2, f.w * .42, 7, 0, 0, TAU); ctx.fill();
   ctx.restore();
-  drawLog(f, VW * .5 + f.x, y, f.w, DRAW_H, f.rot);
+  drawLog(f.s, VW * .5 + f.x, y, f.w, DRAW_H, f.rot);
 }
 
 /* The value badge — the supplied widget art, riding the chain, showing what a
@@ -1192,7 +1273,7 @@ function drawParticles(dt) {
     d.x += d.vx * dt; d.y += d.vy * dt; d.rot += d.vr * dt;
     ctx.save();
     ctx.globalAlpha = clamp(1 - (d.t / d.life - .62) / .38, 0, 1);
-    drawLog(d.o, d.x, d.y, Math.max(8, d.w), d.h, d.rot);
+    drawLog(d.s, d.x, d.y, Math.max(8, d.w), d.h, d.rot);
     ctx.restore();
   }
   for (let i = G.floats.length - 1; i >= 0; i--) {
@@ -1210,6 +1291,7 @@ function drawParticles(dt) {
 
 /* ==================================================================== HUD */
 function drawHUD() {
+  bakeRails();
   woodBand(0, L.hudH, false);
 
   const sim = G.sim;
@@ -1297,7 +1379,7 @@ function card(y, w, h, title) {
   rr(x, y, w, h, 26); ctx.fillStyle = C.bark; ctx.fill();
   ctx.lineWidth = 5; ctx.strokeStyle = C.ink; ctx.stroke();
   ctx.save(); rr(x + 10, y + 10, w - 20, h - 20, 18); ctx.clip();
-  woodFill(x + 10, y + 10, w - 20, h - 20, 1.6);
+  woodFill(ctx, x + 10, y + 10, w - 20, h - 20, 1.6);
   ctx.fillStyle = 'rgba(20,10,4,.26)'; ctx.fillRect(x + 10, y + 10, w - 20, h - 20);
   ctx.restore();
   ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(20,10,4,.5)';
@@ -1493,10 +1575,26 @@ function simTick() {
   onEvent(G.sim.step(down));
 }
 
+/* Quality guard. Rather than pick a low resolution for every device because
+   some phone somewhere cannot fill the canvas at 60 Hz, watch the real frame
+   time and step down when it is genuinely bad. It steps DOWN only: a guard that
+   can also step back up oscillates forever on a device sitting right on the
+   boundary, and a resolution that visibly pumps is worse than a lower one. */
+let slowFrames = 0, frameSamples = 0;
+function watchFrameRate(dt) {
+  if (dprCap <= 1.35) return;
+  frameSamples++;
+  if (dt > 1 / 34) slowFrames++;
+  if (frameSamples < 120) return;
+  if (slowFrames > 48) { dprCap = Math.max(1.35, dprCap - 0.5); layout(); }
+  frameSamples = slowFrames = 0;
+}
+
 function frame(now) {
   let dt = (now - last) / 1000; last = now;
   if (dt > .25) dt = .25;
   G.T += dt;
+  watchFrameRate(dt);
 
   if (G.state === 'play') {
     acc += dt * 60;
@@ -1557,6 +1655,13 @@ window.__LS = {
   /* Ticks WITHOUT touching the latch, so a test can press the glass through
      the real pointer handler and then watch what the latch does with it. */
   raw: () => simTick(),
+  stats: () => {
+    let bytes = 0;
+    for (const v of LOG_CACHE.values()) bytes += v.c.width * v.c.height * 4;
+    return { logCache: LOG_CACHE.size, cacheMax: LOG_CACHE_MAX,
+      cacheMB: +(bytes / 1048576).toFixed(2), textCache: TEXT_W.size,
+      dprCap, dpr: DPR, canvas: cv.width + 'x' + cv.height };
+  },
   pump(n, fn) {
     for (let i = 0; i < n && G.state === 'play'; i++) { G.pending = !!fn(G.sim, i); simTick(); }
     return { tick: G.sim.tick, state: G.state, score: G.sim.score, height: G.sim.height() };
