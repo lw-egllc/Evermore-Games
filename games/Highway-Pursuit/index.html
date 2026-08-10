@@ -553,6 +553,49 @@ HP.CFG = {
      than the whole chase. Sustained crawling still ends with a cruiser in
      your boot; it just takes committing to it. */
   POLICE_MAX_CLOSE: 7,     // m/s — the fastest they may ever reel you in
+
+  /* HOW HARD THEY PRESS INSIDE THE STANDOFF, and why it is a slope.
+
+     The standoff used to switch off at a threshold: they backed off only
+     while `speed >= cruise - 1`, and the instant you dipped below that every
+     unit went to full closing speed. Measured, that one line was most of the
+     "they came out of nowhere" complaint — at 97% of cruise a five-car pack
+     landed 0.9 rams a second, and at 90% it landed 3.7. A 7% change in your
+     speed was the difference between safe and dead, which no player can see
+     coming because nothing on screen marks the line.
+
+     So pressure is now a SLOPE, not a switch. At cruise they ease back out to
+     the standoff; as you fall off the pace the term crosses zero and they
+     come on, at a rate proportional to how much speed you gave away. Same
+     rule as before — slowing hands them the road behind you — but now it
+     arrives gradually and you can watch it happen. */
+  POLICE_EASE_BACK: 4,     // m/s they drift back at when you are at cruise
+  /* The band over which that pressure ramps, as a fraction of cruise. Measured
+     against the slope: with the pressure spread over the whole speed range the
+     crossover landed at 64% of cruise, and a player holding 75% was never
+     caught at all over twenty seconds — which deletes the consequence the
+     rear-end exists to deliver. Over a 35% band the crossover sits near 88%:
+     hold cruise and they ease back, drift a little and they hold station, lose
+     a quarter of your speed and they close at ~4 m/s. */
+  POLICE_PRESS_BAND: 0.35,
+
+  /* THE REAR-END IS A TELEGRAPHED THREAT LIKE EVERY OTHER ONE.
+     The PIT gets 1.45s, the spike 1.8s, the roadblock 3.1s — and the rear-end,
+     which is the single most frequent source of police damage in a run, got
+     nothing at all. Contract point 1 says every threat commits before it
+     lands; this is what makes that true of the car in your mirror. */
+  POLICE_TAIL_LEAD: 2.0,   // warning time before a pursuer reaches your bumper
+
+  /* A SHUNT COSTS YOU HEALTH AND POSITION, THEN GIVES YOU THE BEAT BACK.
+     The old shunt pushed a cruiser back 6m on a 1.0s cooldown, but they
+     re-close at up to POLICE_MAX_CLOSE — so 6m came back in 0.86s, less than
+     the cooldown, and contact was already re-established by the time the next
+     hit was allowed. The grind therefore never broke: one ram per second,
+     forever. Backing off further than they can recover inside the cooldown is
+     what turns it back into a series of hits you can respond to. */
+  RAM_BACKOFF: 14,         // metres a shunt throws them back
+  RAM_COOLDOWN: 2.0,       // seconds before that unit may shunt you again
+
   CRASH_GAIN_MIN: 7,       // metres a crash gives away, at the least
   CRASH_GAIN_MAX: 34,      // ...and at the most. The spread IS the mechanic.
   CRASH_GAIN_HEAVY: 1.7,   // multiplier for a heavy impact
@@ -3775,6 +3818,7 @@ HP.Police.prototype.reset = function () {
   this.blockCd = 9;
   this.spikeCd = 12;
   this.spawnCd = 1.2;
+  this.ramCd = 0;
   this.heliOn = false;
   this.heliT = 0;
   this.dodges = 0;
@@ -3982,6 +4026,7 @@ HP.Police.prototype._spawnBlock = function (player, traffic, tier) {
 HP.Police.prototype.update = function (ctx) {
   var C = HP.CFG, p = ctx.player, dt = ctx.dt, wdt = ctx.worldDt;
   this.warning = null;
+  this.ramCd = Math.max(0, this.ramCd - dt);
   var soonest = 1e9;
   var self = this;
 
@@ -4034,6 +4079,28 @@ HP.Police.prototype.update = function (ctx) {
     if (this.units[q].state === 'pit') pitLive = true;
   }
 
+  /* ONE CAR ON YOUR BUMPER, for exactly the reason there is only one PIT.
+
+     Every unit inside 55m used to steer into YOUR lane, and they all clamp to
+     the same contact point behind you, so the whole pack stacked into a single
+     spot — and each one then rammed on its own independent cooldown. Measured
+     at 90% of cruise: one cruiser landed 0.8 rams a second, five landed 3.7.
+     Against a 3.0 integrity pool that is death in under a second, delivered by
+     the one police threat with no telegraph on it.
+
+     A pursuit nominates one car to sit in your mirror and the rest flank. That
+     is both what a real chase looks like and what makes the rear-end a threat
+     you can answer: one car, one warning, one thing to do about it. */
+  var tail = null;
+  for (var q2 = 0; q2 < this.units.length; q2++) {
+    var uq = this.units[q2];
+    if (uq.stunT > 0) continue;
+    if (uq.state === 'wrecked' || uq.state === 'lost' || uq.state === 'spikeRun') continue;
+    if (!tail || uq.z > tail.z) tail = uq;
+  }
+  /* Held back and issued at the end of the frame — see the note there. */
+  var tailWarn = null;
+
   /* ---- units ---- */
   for (var i = this.units.length - 1; i >= 0; i--) {
     var u = this.units[i];
@@ -4082,6 +4149,27 @@ HP.Police.prototype.update = function (ctx) {
        it either; that shows up in the lunge and the ram, where it is visible. */
     var cruise = Math.max(p.maxSpeed, 12);
 
+    /* Where the bumpers actually meet. Hoisted out of the movement clamp below
+       because the PIT hold needs it too — see the note there. */
+    var contact = -(u.halfL + p.halfL - 0.4);
+
+    /* LANE DISCIPLINE, in every state rather than only in `chase`.
+       A unit that has just made a PIT is sitting in your lane and spends the
+       next few seconds in `recover`, where nothing moved it out again; kept
+       inside `chase` this correction never reached those cars and they piled
+       back into your lane and interpenetrated at the contact wall. Three
+       cruisers occupying the same metre of road is also what makes it
+       impossible to read which one is about to hit you.
+       The PIT is exempt: crossing into your lane IS the manoeuvre, and it is
+       the one that comes with a lock and a warning. */
+    if (u !== tail && u.state !== 'pit' && u.state !== 'spikeRun' && u.z > -55) {
+      var pLane = HP.laneAt(p.x);
+      if (u.lane === pLane) {
+        u.lane = HP.clamp(pLane + (u.x >= HP.laneX(pLane) ? 1 : -1), 0, C.LANES - 1);
+        if (u.lane === pLane) u.lane = pLane === 0 ? 1 : pLane - 1;
+      }
+    }
+
     switch (u.state) {
 
       case 'chase':
@@ -4105,13 +4193,28 @@ HP.Police.prototype.update = function (ctx) {
            out entirely and they simply cannot follow. Asymmetric on purpose —
            see POLICE_MAX_CLOSE. */
         u.speed = Math.min(cruise, p.speed + C.POLICE_MAX_CLOSE);
-        /* Ease off inside the standoff ONLY while you are up to speed. That
-           courtesy is what stops a cruiser grinding on your bumper through a
-           clean run — but applied unconditionally it also made the rear-end
-           impossible, because the moment you slowed they politely dropped back
-           rather than running into you. If you are off the pace, they keep
-           coming, and what happens next is your own doing. */
-        if (u.z > -u.standoff && p.speed >= cruise - 1) u.speed = cruise - 6;
+        /* Inside the standoff, how hard they press is exactly how much speed
+           you have given away — a slope, not a switch.
+
+           The old rule eased off only while `p.speed >= cruise - 1` and went to
+           full closing speed below it. Two things were wrong with that. It is
+           a cliff, so a 7% dip in your speed flipped the pack from backing off
+           to ramming with nothing on screen marking the edge. And the test is
+           almost never true in practice: you are under cruise after every cone,
+           every lift for an obstacle course, every corner — so the courtesy
+           that was supposed to protect clean driving essentially never applied.
+
+           Now: at cruise the term is negative and they drift back out to the
+           standoff, so a clean run is never rewarded with a cruiser grinding on
+           your bumper. As you come off the pace it crosses zero and they come
+           on, at a rate proportional to the speed you gave up. Crawl and they
+           still end up in your boot — it just takes committing to it, and you
+           get to watch it coming. */
+        if (u.z > -u.standoff) {
+          var press = HP.clamp((cruise - p.speed) / (cruise * C.POLICE_PRESS_BAND), 0, 1);
+          u.speed = Math.min(u.speed,
+            p.speed + (C.POLICE_MAX_CLOSE + C.POLICE_EASE_BACK) * press - C.POLICE_EASE_BACK);
+        }
 
         /* Nothing pulls them back in. An earlier version had them accelerate
            whenever they fell past the join distance, which is a catch-up rule
@@ -4129,8 +4232,14 @@ HP.Police.prototype.update = function (ctx) {
            it is what makes slowing down actually cost something. A cruiser
            holding a random lane can only rear-end you by coincidence, so the
            consequence of braking arrived about a third of the time and read
-           as bad luck instead of as a rule. */
-        if (u.z > -55) u.lane = HP.laneAt(p.x);
+           as bad luck instead of as a rule.
+
+           Only the nominated tail car does it, though. When every unit inside
+           55m took your lane they stacked on one point and rammed in parallel;
+           the rest are pushed out to flank (see the lane discipline above the
+           switch), which keeps the pack visible in the mirror and closing on
+           you without letting five cars deliver the same hit at once. */
+        if (u.z > -55 && u === tail) u.lane = HP.laneAt(p.x);
         u.x += (HP.laneX(u.lane) - u.x) * Math.min(1, wdt * 3);
         u.pitCd -= dt;
         if (!pitLive && u.pitCd <= 0 && u.z > -34 &&
@@ -4170,7 +4279,14 @@ HP.Police.prototype.update = function (ctx) {
            which is both physically absurd and impossible to read as a threat.
            A proportional hold on the contact point fixes it. */
         u.strikeT -= dt;
-        var holdZ = -C.PIT_RANGE * 0.45;
+        /* Hold just SHORT of the bumpers, not through them. The nominal rear-
+           quarter hold (-3.15m) sits inside the contact wall (-4.35m), so the
+           wind-up parked the cruiser permanently overlapping the player: it
+           took a shunt for free every cooldown and then landed the PIT as well,
+           charging twice for one approach. The PIT does its own damage on the
+           strike; the wind-up is supposed to be the telegraph, not a second
+           source of chip damage. */
+        var holdZ = Math.min(-C.PIT_RANGE * 0.45, contact - 0.35);
         u.speed = cruise + HP.clamp((holdZ - u.z) * 2.4, -10, 22);
         if (u.strikeT > 0.55) {
           var tx = p.x;
@@ -4262,8 +4378,33 @@ HP.Police.prototype.update = function (ctx) {
          removed the rear-end — the wall has to be at the point where the
          bumpers actually meet, or it is a wall that stops the consequence
          instead of delivering it. */
-      var contact = -(u.halfL + p.halfL - 0.4);
       if (u.z > contact) u.z = contact;
+    }
+
+    /* THE REAR-END ANNOUNCES ITSELF BEFORE IT LANDS.
+
+       Contract point 1 — every threat commits before it lands — was true of
+       the PIT (1.45s), the spike strip (1.8s) and the roadblock (3.1s), and
+       simply not true of the car about to hit you from behind, which is the
+       most frequent police hit in a run. The chase camera looks forward, so
+       without this the first news of a rear-end is the damage flash. That is
+       the "out of nowhere" the whole system was being judged on.
+
+       Only while APPROACHING. Once contact is made you are being shaken,
+       flashed and shoved, which is news enough; leaving the countdown up would
+       also peg the strip at zero and mask everything else. */
+    if (u === tail && u.state !== 'wrecked' && u.state !== 'lost' &&
+        u.state !== 'spikeRun' && u.z < contact) {
+      var closingRate = u.speed - p.speed;
+      if (closingRate > 0.4) {
+        var tte = (contact - u.z) / closingRate;
+        if (tte < C.POLICE_TAIL_LEAD &&
+            (!tailWarn || tte < tailWarn.eta)) {
+          tailWarn = { label: 'PURSUER ON YOUR TAIL', needs: 'SPEED UP',
+                       eta: Math.max(0, tte), leadTime: C.POLICE_TAIL_LEAD,
+                       kind: 'tail' };
+        }
+      }
     }
 
     /* ---- cruisers crash too ----
@@ -4294,14 +4435,30 @@ HP.Police.prototype.update = function (ctx) {
        a free answer to everything: the brake buys you time on the road ahead
        and costs you the road behind, and choosing which matters more, right
        now, is the game. */
-    if (u.state !== 'wrecked' && u.state !== 'lost' && HP.overlaps(u, p, 0.15)) {
-      if (!u.ramCd || u.ramCd <= 0) {
-        u.ramCd = 1.0;
+    /* Only the nominated tail car, and never mid-PIT: the PIT charges for its
+       own approach when it strikes, and the pack behind is not entitled to
+       deliver the same hit in parallel. */
+    if (u === tail && u.state !== 'wrecked' && u.state !== 'lost' &&
+        u.state !== 'pit' && HP.overlaps(u, p, 0.15)) {
+      /* The cooldown is on the PURSUIT, not just on the car.
+         Per-unit alone looked right and was not: a shunt throws the tail car
+         back 14m, which promotes whichever unit is next-closest to tail, and
+         that one arrives with a fresh cooldown and hits immediately. The pack
+         passed the job round and the measured interval fell to 1.5s against a
+         2.0s per-car cooldown — the stack was gone but the grind was not. */
+      if (this.ramCd <= 0 && (!u.ramCd || u.ramCd <= 0)) {
+        this.ramCd = C.RAM_COOLDOWN;
+        u.ramCd = C.RAM_COOLDOWN * 1.5;
         var r2 = p.damage(C.DMG_PIT * 0.6 * u.ram, 'police',
                           (p.x - u.x) >= 0 ? C.HIT_SPIN * 0.6 : -C.HIT_SPIN * 0.6);
-        /* Shunted forward, and they back off — a shunt should cost you health
-           and position, not glue a cruiser to your bumper grinding away. */
-        u.z -= 6;
+        /* Shunted forward, and they back off FURTHER than they can recover
+           inside the cooldown — 14m against a 7 m/s ceiling is 2.0s, which is
+           the cooldown. At the old 6m they were back in contact after 0.86s and
+           the next hit simply fired on schedule, so the "backing off" never
+           actually happened and a stuck player was ground down at a fixed rate
+           with nothing to do about it. Now each shunt genuinely resets the
+           approach, and the warning above runs again before the next one. */
+        u.z -= C.RAM_BACKOFF;
         ctx.emit('ram', { kind: r2, unit: u, braking: p.brakeT > 0 });
       }
     }
@@ -4381,6 +4538,14 @@ HP.Police.prototype.update = function (ctx) {
     }
     if (b.z < -70) this._clearBlock();
   }
+
+  /* The tail warning is issued LAST and only onto a free strip.
+     `warn` keeps whichever threat is soonest, which is the right rule between
+     threats of comparable weight — but a rear-end costs 0.45 and a roadblock
+     costs 2.00, so a cruiser closing in 0.6s must not push a roadblock at 1.2s
+     off the display. It is the cheapest police hit in the game and it yields
+     to everything. */
+  if (tailWarn && !this.warning) this.warning = tailWarn;
 };
 
 /* --- the only thing that lets them in -------------------------------------
