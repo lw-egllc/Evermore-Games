@@ -64,6 +64,10 @@ const K = {
   VIEW_W:        400,    // world units across the stage — sets the zoom
   MAX_ASPECT:    0.60,   // stage never gets wider than this: portrait lock
   DPR_CAP:       2,
+  PERF_MIN:      0.55,   // floor on the adaptive render scale
+  PERF_WIN:      30,     // frames averaged before it decides anything
+  PERF_DROP_MS:  20.5,   // average frame time that triggers a step down
+  PERF_RAISE_MS: 13.5,   // ...and the headroom needed to step back up
   CAM_LAG:       9.0,
   CAM_LOOK:      0.18,
   /* Camera shake is a TRAUMA model: shake() adds trauma 0..1, the offset is
@@ -94,6 +98,9 @@ const K = {
   FLOOR_L:       140,    // the straightened room's floor edge — tools/cut.py prints these
   FLOOR_R:       872,
   TILE:          74,     // side of one flat floor slab, world units
+  FLOOR_FADE:    54,     // soft border where the tiled floor meets the painted one
+  TORCH_R:       200,    // torch light radius. Additive fill is the priciest
+                         // pixel in the frame, so this is a real perf dial.
 
   /* player ---------------------------------------------------------------- */
   HP_MAX:        100,
@@ -351,6 +358,32 @@ let SW = 390, SH = 844, DPR = 2, Z = 1, UI = 1;
 let safeTop = 0, safeBot = 0;
 let _vig = null;
 
+/* Adaptive resolution.  Canvas 2D here is fill-rate bound, not CPU bound, and
+   how much fill a device has varies enormously — so rather than guess a DPR,
+   watch the real frame time and back the backing store off until 60 holds.
+   Quality climbs again when there is headroom, with hysteresis so it cannot
+   oscillate. */
+const PERF = { scale:1, acc:0, n:0, cool:0 };
+function perfTick(dtMs){
+  if (dtMs > 100) return;                  // a tab stall is not a slow frame
+  PERF.acc += dtMs; PERF.n++;
+  if (PERF.n < K.PERF_WIN) return;
+  const avg = PERF.acc / PERF.n;
+  PERF.acc = 0; PERF.n = 0;
+  if (PERF.cool > 0){ PERF.cool--; return; }
+  if (avg > K.PERF_DROP_MS && PERF.scale > K.PERF_MIN){
+    /* drop hard and fast — nobody should sit through several seconds of 30fps
+       while the sampler makes up its mind */
+    const step = avg > K.PERF_DROP_MS * 1.5 ? 0.25 : 0.15;
+    PERF.scale = Math.max(K.PERF_MIN, PERF.scale - step);
+    PERF.cool = 1; resize();
+  } else if (avg < K.PERF_RAISE_MS && PERF.scale < 1){
+    /* climb back slowly, so it cannot oscillate around the threshold */
+    PERF.scale = Math.min(1, PERF.scale + 0.08);
+    PERF.cool = 5; resize();
+  }
+}
+
 function resize(){
   const cs = getComputedStyle(safeEl);
   const ww = window.innerWidth, wh = window.innerHeight;
@@ -365,7 +398,7 @@ function resize(){
   if (SW < ww){ safeTop = Math.min(safeTop, 6); safeBot = Math.min(safeBot, 6); }
   stageEl.style.width  = SW + 'px';
   stageEl.style.height = SH + 'px';
-  DPR = Math.min(window.devicePixelRatio || 1, K.DPR_CAP);
+  DPR = Math.min(window.devicePixelRatio || 1, K.DPR_CAP) * PERF.scale;
   cv.width  = Math.round(SW * DPR);
   cv.height = Math.round(SH * DPR);
   Z  = SW / K.VIEW_W;
@@ -473,7 +506,7 @@ function buildFloor(){
 
   /* erase the border into nothing so it melts into the painted floor */
   g.globalCompositeOperation = 'destination-out';
-  const FADE = 54;
+  const FADE = K.FLOOR_FADE;
   const edges = [
     [0, 0, FADE, 0, 0, 0, FADE, h],
     [w, 0, w - FADE, 0, w - FADE, 0, FADE, h],
@@ -487,30 +520,62 @@ function buildFloor(){
     g.fillStyle = gr;
     g.fillRect(e[4], e[5], e[6], e[7]);
   }
-  world.floor = { c:c, x:A.x0 - M, y:A.y0 - M, w:w, h:h };
+  world.floor = { c:c, x:A.x0 - M, y:A.y0 - M, w:w, h:h, fade:K.FLOOR_FADE };
+}
+
+/* Draw one horizontal slab of the room, CLIPPED to what is actually on screen.
+   Drawing whole bands was the single biggest cost in the frame: the room is
+   780 world units wide against a 400-unit view, and a band is 472 tall, so
+   every partially-visible band blitted ~3x more pixels than the canvas holds.
+   Three bands plus the caps came to ~4M wasted pixels a frame. */
+function roomSlab(srcY0, srcY1, dy, dh, flip){
+  const hh = (K.VIEW_W * SH / SW) / 2 + 8, hw = K.VIEW_W / 2 + 8;
+  const vx0 = Math.max(0, cam.x - hw), vx1 = Math.min(R.w, cam.x + hw);
+  const vy0 = Math.max(dy, cam.y - hh), vy1 = Math.min(dy + dh, cam.y + hh);
+  if (vx1 <= vx0 || vy1 <= vy0) return;
+  const ky = (srcY1 - srcY0) / dh;
+
+  /* The baked floor is fully opaque inside its fade border, so any room pixel
+     under that band is painted and then immediately covered. Where this slab
+     sits wholly inside the floor's vertical span, draw only the two strips
+     either side of it — usually just the walls. */
+  const F = world.floor;
+  if (F && vy0 >= F.y + F.fade && vy1 <= F.y + F.h - F.fade){
+    const ox0 = F.x + F.fade, ox1 = F.x + F.w - F.fade;
+    roomPiece(srcY0, srcY1, dy, ky, vx0, Math.min(vx1, ox0), vy0, vy1, flip);
+    roomPiece(srcY0, srcY1, dy, ky, Math.max(vx0, ox1), vx1, vy0, vy1, flip);
+  } else {
+    roomPiece(srcY0, srcY1, dy, ky, vx0, vx1, vy0, vy1, flip);
+  }
+}
+
+function roomPiece(srcY0, srcY1, dy, ky, x0, x1, vy0, vy1, flip){
+  if (x1 <= x0) return;
+  const kx = 1024 / R.w;
+  const sx = x0 * kx, sw = (x1 - x0) * kx;
+  const dwv = x1 - x0, dhv = vy1 - vy0, sh = dhv * ky;
+  if (!flip){
+    ctx.drawImage(ROOM, sx, srcY0 + (vy0 - dy) * ky, sw, sh, x0, vy0, dwv, dhv);
+  } else {
+    ctx.save();
+    ctx.translate(0, vy1);
+    ctx.scale(1, -1);
+    ctx.drawImage(ROOM, sx, srcY1 - (vy1 - dy) * ky, sw, sh, x0, 0, dwv, dhv);
+    ctx.restore();
+  }
 }
 
 function drawRoom(){
   const hh = (K.VIEW_W * SH / SW) / 2 + 40, hw = K.VIEW_W / 2 + 40;
   const y0 = cam.y - hh, y1 = cam.y + hh;
-  const M0 = K.SRC_TOP, MH = R.midSrcH;
 
-  if (y0 < R.topH) ctx.drawImage(ROOM, 0, 0, 1024, K.SRC_TOP, 0, 0, R.w, R.topH);
+  roomSlab(0, K.SRC_TOP, 0, R.topH, false);
   for (let i = 0; i < K.MID_BANDS; i++){
     const top = R.topH + i * R.bandH;
     if (top > y1 || top + R.bandH < y0) continue;
-    if ((i & 1) === 0){
-      ctx.drawImage(ROOM, 0, M0, 1024, MH, 0, top, R.w, R.bandH);
-    } else {
-      ctx.save();
-      ctx.translate(0, top + R.bandH);
-      ctx.scale(1, -1);
-      ctx.drawImage(ROOM, 0, M0, 1024, MH, 0, 0, R.w, R.bandH);
-      ctx.restore();
-    }
+    roomSlab(K.SRC_TOP, K.SRC_BOT, top, R.bandH, (i & 1) === 1);
   }
-  if (y1 > R.h - R.botH)
-    ctx.drawImage(ROOM, 0, K.SRC_BOT, 1024, 1536 - K.SRC_BOT, 0, R.h - R.botH, R.w, R.botH);
+  roomSlab(K.SRC_BOT, 1536, R.h - R.botH, R.botH, false);
 
   /* black past the room so the stage edge never shows bare canvas */
   ctx.fillStyle = '#05040a';
@@ -538,14 +603,16 @@ function drawRoom(){
 }
 
 function drawTorchLight(){
-  const hw = K.VIEW_W / 2 + 160, hh = (K.VIEW_W * SH / SW) / 2 + 180;
+  const R2 = K.TORCH_R;
+  const hw = K.VIEW_W / 2 + R2, hh = (K.VIEW_W * SH / SW) / 2 + R2;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
+  const img = tintCache('#ff9433');
   for (const t of world.torches){
     if (Math.abs(t.x - cam.x) > hw || Math.abs(t.y - cam.y) > hh) continue;
     const fl = 0.78 + 0.22 * Math.sin(RUN.t * 8.5 + t.ph) + 0.10 * Math.sin(RUN.t * 21.3 + t.ph * 2);
-    ctx.globalAlpha = clamp(0.24 * fl, 0, 1);
-    ctx.drawImage(tintCache('#ff9433'), t.x - 145, t.y - 145, 290, 290);
+    ctx.globalAlpha = clamp(0.30 * fl, 0, 1);
+    ctx.drawImage(img, t.x - R2 / 2, t.y - R2 / 2, R2, R2);
   }
   ctx.restore();
 }
@@ -1764,6 +1831,8 @@ function frame(ts){
   let dt = (ts - last) / 1000;
   last = ts;
   if (dt > 0.25) dt = 0.25;
+  perfTick((ts - (frame._p || ts)));
+  frame._p = ts;
   if (!frozen){
     keyStick();
     for (let i = 0; i < btnPress.length; i++) btnPress[i] = Math.max(0, btnPress[i] - dt);
