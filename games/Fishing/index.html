@@ -1,0 +1,1903 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#04101F">
+<title>FATHOM — Evermore Arcade</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#03080F;
+    touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#03080F}
+  canvas{display:block;touch-action:none;box-shadow:0 0 120px rgba(0,0,0,.9)}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+/* =========================================================================
+   FATHOM  —  Evermore Arcade prototype
+   Press-your-luck deep-sea fishing. Hold to sink the hook and steer it
+   through the shoals; let go and the reel hauls everything up ALONG THE LINE
+   YOU LEFT BEHIND. The line is both the exit ramp and the threat surface:
+   anything drifting onto it frays it, anything still on it when you climb
+   cuts it. Depth sets the multiplier, so the clock is a depth budget.
+   Eighty seconds. Canvas 2D, no dependencies.
+   ========================================================================= */
+
+/* ------------------------------------------------------------------ utils */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth= t => t * t * (3 - 2 * t);
+const eOut  = t => 1 - Math.pow(1 - t, 3);
+const eIn   = t => t * t * t;
+const eBack = t => { const c = 2.70158; return 1 + c*Math.pow(t-1,3) + 1.70158*Math.pow(t-1,2); };
+
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const _hx = {};
+function HX(h){
+  let v = _hx[h]; if (v) return v;
+  if (h.charCodeAt(0) === 35){
+    v = [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  } else {
+    const m = h.match(/-?\d+(\.\d+)?/g);
+    v = (m && m.length >= 3) ? [m[0]|0, m[1]|0, m[2]|0] : [255,255,255];
+  }
+  _hx[h] = v; return v;
+}
+function rgba(h,a){ const A=HX(h); return 'rgba('+A[0]+','+A[1]+','+A[2]+','+a+')'; }
+function mix(a,b,t){ const A=HX(a), B=HX(b); t=clamp(t,0,1);
+  return 'rgb('+(A[0]+(B[0]-A[0])*t|0)+','+(A[1]+(B[1]-A[1])*t|0)+','+(A[2]+(B[2]-A[2])*t|0)+')'; }
+function tone(h,f){ const A=HX(h);
+  return 'rgb('+clamp(A[0]*f|0,0,255)+','+clamp(A[1]*f|0,0,255)+','+clamp(A[2]*f|0,0,255)+')'; }
+function commas(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function noise1(t,s){
+  return Math.sin(t*1.0+s*11.13)*0.5 + Math.sin(t*2.31+s*4.77)*0.32 + Math.sin(t*4.13+s*8.91)*0.18;
+}
+/* distance from point to segment — the line-fouling test lives on this */
+function segDist(ax,ay,bx,by,px,py){
+  const dx=bx-ax, dy=by-ay, L=dx*dx+dy*dy;
+  let t = L>1e-9 ? ((px-ax)*dx+(py-ay)*dy)/L : 0;
+  t = clamp(t,0,1);
+  return Math.hypot(ax+dx*t-px, ay+dy*t-py);
+}
+
+/* ---------------------------------------------------------------- palette */
+const C = {
+  sky:'#8FD8F5', skyLo:'#5FB6E4', sun:'#FFE9A6', sunHi:'#FFF7DC',
+  /* the five depth bands. Every one of them is a §5.6 authored beat. */
+  b0a:'#2FB0DC', b0b:'#1C86BE',
+  b1a:'#12719C', b1b:'#0B5578',
+  b2a:'#0A4166', b2b:'#06304F',
+  b3a:'#0A2247', b3b:'#061634',
+  b4a:'#0A0F2C', b4b:'#03040F',
+
+  ink:'#04101F', ink2:'#0B1C33', ink3:'#14304F',
+  white:'#FFFFFF', cream:'#FFF6E2',
+
+  gold:'#FFC53D', goldHi:'#FFE9A6', goldLo:'#BE7F09',
+  hot:'#FF6B2B', hotHi:'#FFAF74',
+  red:'#FF4D5E', redHi:'#FF97A2', redLo:'#B01B32',
+  grn:'#3ED68C', grnLo:'#158B54',
+  line:'#EFE6C8',
+
+  /* fish — bright, warm-lit, gold-rimmed so "catchable" is one silhouette
+     family however the band palette shifts */
+  f0:'#CFE9F7', f0b:'#8FB9D4',
+  f1:'#FF9350', f1b:'#C4571F',
+  f2:'#7FA0F2', f2b:'#3D57B4',
+  f3:'#FFD65C', f3b:'#C08A0C',
+
+  /* hazards — warm red family, and they PULSE (two channels, §11.6) */
+  jel:'#FF5B7A', jelHi:'#FFA8BC', jelLo:'#B01B47',
+  eel:'#E8443C', eelLo:'#7A1017', eelHi:'#FF9A72',
+
+  kelp:'#12704F', kelpLo:'#0A4632',
+  bed:'#2A2036', bedLo:'#17111F',
+  boat:'#C4763A', boatLo:'#7C4318', boatHi:'#F0A867',
+};
+
+/* ================================================================== AUDIO
+   Every signal here has a visual twin (§7.7 / §11.7) — the audio amplifies,
+   it never carries alone.                                                  */
+class Snd {
+  constructor(){ this.ctx=null; this.on=true; this.master=null; this.amb=null; this.ambF=null;
+    this.ambG=null; this.nb=null; this.strainO=null; this.strainG=null; this.reelT=0; }
+  init(){
+    if (this.ctx){ if (this.ctx.state==='suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC){ this.on=false; return; }
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = 0.85;
+    this.master.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 1.0, b = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i=0;i<n;i++) d[i] = Math.random()*2-1;
+    this.nb = b;
+    this.startAmb(); this.startStrain();
+  }
+  get t(){ return this.ctx.currentTime; }
+  startAmb(){
+    const s = this.ctx.createBufferSource(); s.buffer = this.nb; s.loop = true;
+    const f = this.ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 220; f.Q.value = 0.7;
+    const g = this.ctx.createGain(); g.gain.value = 0.0;
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(); this.amb = s; this.ambF = f; this.ambG = g;
+  }
+  /* the line straining — a continuous tone whose gain tracks fray. The
+     visual twin is the reddening line and the ring around the hook. */
+  startStrain(){
+    const o = this.ctx.createOscillator(); o.type='sawtooth'; o.frequency.value = 84;
+    const f = this.ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value = 300; f.Q.value = 5;
+    const g = this.ctx.createGain(); g.gain.value = 0;
+    o.connect(f); f.connect(g); g.connect(this.master); o.start();
+    this.strainO = o; this.strainG = g;
+  }
+  ambient(depth, on){
+    if (!this.ctx||!this.ambG) return;
+    this.ambG.gain.setTargetAtTime((this.on&&on)?0.13:0, this.t, 0.3);
+    this.ambF.frequency.setTargetAtTime(320 - 200*clamp(depth,0,1), this.t, 0.4);
+  }
+  strain(f){
+    if (!this.ctx||!this.strainG) return;
+    const v = this.on ? Math.pow(clamp(f,0,1),1.7)*0.075 : 0;
+    this.strainG.gain.setTargetAtTime(v, this.t, 0.08);
+    this.strainO.frequency.setTargetAtTime(84 + 120*clamp(f,0,1), this.t, 0.15);
+  }
+  noise(dur, freq, Q, gain, type){
+    if (!this.ctx||!this.on) return;
+    const s = this.ctx.createBufferSource(); s.buffer = this.nb;
+    s.playbackRate.value = 0.8 + Math.random()*0.4;
+    const f = this.ctx.createBiquadFilter(); f.type = type||'bandpass'; f.frequency.value = freq; f.Q.value = Q;
+    const g = this.ctx.createGain(); const t = this.t;
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(gain,t+0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t+dur+0.02);
+  }
+  blip(freq, dur, gain, type, slide){
+    if (!this.ctx||!this.on) return;
+    if (!(freq>0) || !(dur>0)) return;      // a NaN here THROWS inside the AudioParam
+    const o = this.ctx.createOscillator(); o.type = type||'sine';
+    const g = this.ctx.createGain(); const t = this.t;
+    o.frequency.setValueAtTime(freq,t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,slide), t+dur);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(gain,t+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t+dur+0.02);
+  }
+  /* §7.7 — the pentatonic catch ladder. streak drives the degree. */
+  bite(streak, big){
+    const deg = [0,2,4,7,9][streak % 5];
+    const oct = Math.min(Math.floor(streak/5), 3);
+    const f = 360 * Math.pow(2, deg/12) * Math.pow(2, oct) * (1 + (Math.random()-0.5)*0.014);
+    this.blip(f, 0.12, big?0.15:0.10, 'triangle');
+    this.blip(f*2, 0.035, 0.05 + Math.min(streak,24)*0.0015, 'sine');
+    this.noise(0.05, 900, 1.4, big?0.14:0.07);
+  }
+  /* the ladder FALLING — the loss is heard before it is read */
+  snap(){
+    this.noise(0.10, 2600, 0.9, 0.34);
+    this.blip(700, 0.42, 0.22, 'sawtooth', 90);
+    this.blip(990, 0.30, 0.12, 'square', 130);
+    [0,-2,-5,-9].forEach((d,i)=>setTimeout(()=>this.blip(300*Math.pow(2,d/12),0.22,0.11,'triangle'), i*70));
+  }
+  bank(mult, big){
+    this.noise(0.26, 700, 0.6, 0.20, 'lowpass');       // the splash
+    const n = clamp(2 + Math.round(mult), 2, 6);
+    for (let i=0;i<n;i++)
+      setTimeout(()=>this.blip(392*Math.pow(2,[0,4,7,11,14,16][i]/12), 0.22, 0.12, 'triangle'), i*58);
+    if (big) setTimeout(()=>this.blip(1568,0.5,0.10,'sine'), 200);
+  }
+  cast(){ this.noise(0.16, 500, 0.8, 0.16, 'lowpass'); this.blip(300,0.10,0.08,'sine',700); }
+  click(){ this.noise(0.018, 3400, 6, 0.055); }
+  tick(hot){ this.blip(hot?1180:760, 0.05, hot?0.13:0.07, 'square'); }
+  warn(){ this.blip(300, 0.16, 0.10, 'square', 220); }
+  siren(){
+    if (!this.ctx||!this.on) return;
+    const t=this.t;
+    [520, 392].forEach((f,i)=>{
+      const o=this.ctx.createOscillator(); o.type='triangle'; o.frequency.value=f;
+      const g=this.ctx.createGain();
+      g.gain.setValueAtTime(0,t+i*0.24); g.gain.linearRampToValueAtTime(0.17,t+0.02+i*0.24);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+1.1+i*0.24);
+      o.connect(g); g.connect(this.master); o.start(t+i*0.24); o.stop(t+1.3+i*0.24);
+    });
+    this.noise(0.6, 380, 0.5, 0.12, 'lowpass');
+  }
+  pb(){ [0,7,12,16,19].forEach((d,i)=>setTimeout(()=>this.blip(523*Math.pow(2,d/12),0.30,0.13,'triangle'), i*80)); }
+  ui(up){ this.blip(up?620:420, 0.06, 0.11, 'square'); }
+}
+const S = new Snd();
+
+/* =================================================================== SAVE */
+const SAVE = {
+  best: 0, sound: 1, haptic: 1, reduced: 0, runs: 0, recent: [],
+  load(){ try{ const j = JSON.parse(localStorage.getItem('fathom.v1')||'null');
+    if (j) Object.assign(this, j); }catch(e){} },
+  save(){ try{ localStorage.setItem('fathom.v1', JSON.stringify({
+    best:this.best, sound:this.sound, haptic:this.haptic,
+    reduced:this.reduced, runs:this.runs, recent:this.recent.slice(-20) })); }catch(e){} },
+};
+SAVE.load();
+
+/* =============================================================== CONSTANTS
+   Sim units: the water column is K.W wide and K.DMAX deep. K.FM units make
+   one fathom, which is the only unit the player ever sees. Nothing in the
+   sim knows about pixels.                                                  */
+const K = {
+  W: 100,              // column width
+  DMAX: 560,           // seabed, sim units  (70 fathoms)
+  FM: 8,               // sim units per fathom
+  WALL: 4.2,           // hook clamp inset from each side
+
+  RUN_TIME: 80,        // C3 — the platform default session
+  ONRAMP: 4,
+
+  /* §5.1 difficulty curve. D_PHASE puts the breathe PEAK on the siren, and
+     D_AWARM ramps the breathe amplitude in so D_eff(0) is exactly 1.0. */
+  D_K: 2.0, D_TRAMP: 45, D_A: 0.10, D_P: 12, D_PHASE: -0.522, D_AWARM: 6,
+
+  /* ---- the hook -------------------------------------------------------- */
+  HOOK_R: 3.6,
+  SINK: 56,            // base descent, u/s
+  REEL: 250,           // base haul, u/s. Fast on purpose: a slow climb lets
+                       // the drifting hazards outrun the forecast the player
+                       // released on, which makes the exit unreadable.
+  SINK_W: 0.030, SINK_WMAX: 1.45,   // a fat stringer plummets...
+  REEL_W: 0.070, REEL_WMIN: 0.40,   // ...and climbs out slowly
+  LAT_ACC: 620, LAT_MAX: 122,
+  LAT_ACC_W: 0.070, LAT_MAX_W: 0.032,
+  LAT_DAMP: 4.6,
+  GRAB_DECAY: 0.22,    // thumb grab offset melts away; the hook never teleports
+  RECAST: 0.42,        // dead time after a bank — the tempo cost of cashing out
+  BOAT_K: 1.15,        // the skiff drifts over the hook; a fast dart leaves a diagonal
+
+  /* ---- the line --------------------------------------------------------
+     THE LINE IS A TRAIL, NOT A TAUT SEGMENT. It records where the hook has
+     actually been, one sample every TSTEP of depth, and the reel retraces it
+     exactly. This is the load-bearing choice in the whole game:
+
+       - a straight boat->hook segment means a clean exit needs a clean
+         VERTICAL COLUMN, and at these radii one jelly blocks ~40% of the
+         column's width, so from 45 fm a clean exit essentially never exists.
+         Measured: clean releases survived 100%, dirty ones 43%, and the
+         bot could only find a clean lane on 30% of dives. That is a coin
+         flip wearing a decision's clothes.
+       - a trail means the exit path IS the water you just swam through and
+         verified. Snapping is then about what DRIFTED in behind you, which
+         is visible, and about how much water your line covers, which is
+         your own greed. Sweeping wide for a shoal leaves a long snaking
+         line; punching straight down leaves a short one.
+
+     THE INVARIANT: the foul radius is strictly larger than the cut radius,
+     so anything that can cut you was ringed on the line first. An early
+     build had it the other way round (foul 8.2, cut 9.4) and jellies cut the
+     hook on the climb having never been marked — an invisible cost, and the
+     reason an 8x more cautious bot snapped exactly as often.
+     JEL_SWEEP then grows the ring with your time-to-surface: the longer the
+     climb, the more of that jelly's drift you have to answer for.         */
+  TSTEP: 7,            // depth between trail samples, sim units
+  LINE_R: 4.0,         // margin the foul radius carries over the cut radius
+  JEL_SWEEP: 5.0,      // u/s of drift to forecast, per second of climb
+  FRAY_FOUL: 0.255,    // per fouling hazard, /s
+  FRAY_D: 0.25,        // share of the fray rate that scales with D_eff
+  FRAY_HEAL: 0.11,     // fray only fully clears on a BANK — this is the anti-stall
+  FRAY_P1: 340, FRAY_P1R: 0.030,    // pressure fray: the trench
+  FRAY_P2: 460, FRAY_P2R: 0.058,    // ...and the abyss
+  FRAY_WARN: 0.55,
+
+  /* ---- scoring --------------------------------------------------------- */
+  /* The depth ladder is the score, not the fish count. Collecting fish is
+     an execution task with a low ceiling — measured, a perfect line beats a
+     passive one by only ~1.5x — so if raw catch drove the score there would
+     be nothing to separate players by. Nerve is the decision this game is
+     about, so the rung has to dominate: 1 + 11*(d/DMAX)^1.45 runs 1.0x in
+     the shallows to 12x on the floor, and every rung is a real risk. */
+  MULT_MAX: 12.0, MULT_POW: 1.45,
+  SNAP_CLOCK: 1.0,  CLOCK_CAP: 10,  // §4.1 clock damage, capped well under 25%
+  CLOSE_AT: 15,     CLOSE_MUL: 1.75, CLOSE_HAZ: 1.40, CLOSE_FRAY: 1.25,
+
+  /* ---- the world ------------------------------------------------------- */
+  ROW: 70,             // the column is populated a row at a time
+  ROW_IN: 260, ROW_OUT: 320,        // hysteresis, or rows flicker
+  HAZ_0: 1.0,          // hazard density scalar, multiplied by D_eff
+  /* No hazard may sit in the top SAFE_TOP units. Without it the hook recasts
+     into whatever drifted over the boat and snaps again instantly — measured
+     at 4 surface snaps in an 80 s run, a loop the player cannot answer. It
+     also buys the first 0.6 s of every dive as guaranteed visibility (§5.5)
+     and makes the SHALLOWS an honest onramp band. */
+  SAFE_TOP: 42,
+  /* A THREADABLE LANE ALWAYS EXISTS, AND IT NARROWS WITH DEPTH.
+     Two jobs in one rule.
+     (a) Without a guaranteed lane the deep bands close completely once
+         D_eff and the depth term stack — measured at ~5 jellies per 70-unit
+         row of a 100-wide column, i.e. 100 units of blockage across 100
+         units of column. Every skill level then snapped 11-14 times a run
+         and the ladder went flat, because a wall is not a decision.
+     (b) Narrowing it with depth is what makes NERVE A SKILL GATE. With a
+         constant lane, every skill level's best depth came out at 0.90 and
+         a careless player scored 77% of an expert at the same nerve — the
+         cliff has to move right as the hands get better or the depth ladder
+         is just a number everybody claims. At LANE_ABYSS the gap leaves
+         ~3 units either side of a 7.2-wide hook, which an 18-unit thumb
+         error cannot hold and a 1-unit one can.
+     Checked against each jelly's full DRIFT extent, so a lane that opens
+     stays open. */
+  LANE_TOP: 30, LANE_ABYSS: 13.5,
+  CUR_AT: 26,          // currents open at 0:26 (§5.6's new-hazard beat)
+  CUR_FADE: 1.5,       // and fade their force in, so nothing ever snaps on
+  CUR_MAX: 46,
+
+  EEL_MIN: 240,        // eels only live below the drop
+  EEL_SPD: 0.62,
+  EEL_SPAN: 42,
+  EEL_BODY: 17,        // head-to-tail, sim units. Art and physics share it.
+
+  /* ---- presentation ---------------------------------------------------- */
+  CAM_DIVE: 0.40, CAM_REEL: 0.66, CAM_K: 9,
+  VH_MIN: 150, VH_MAX: 205,
+  OVER_HOLD: 0.75,     // retry lockout (§7.9)
+};
+
+/* fish: value, size, how they swim, and which bands they live in */
+const FISH = [
+  { n:'SARDINE', val:5,  r:3.3, len:9.0,  sw:16, a:C.f0, b:C.f0b, d0:0,   d1:250 },
+  { n:'SNAPPER', val:11, r:4.5, len:13.0, sw:12, a:C.f1, b:C.f1b, d0:90,  d1:380 },
+  { n:'TUNA',    val:20, r:6.0, len:19.0, sw:20, a:C.f2, b:C.f2b, d0:215, d1:505 },
+  { n:'LANTERN', val:34, r:5.2, len:13.5, sw:7,  a:C.f3, b:C.f3b, d0:385, d1:560 },
+];
+/* the five depth bands — each one is a palette shift, a music layer and a
+   rung on the press-your-luck ladder */
+const BANDS = [
+  { n:'SHALLOWS', d:0,   a:C.b0a, b:C.b0b },
+  { n:'THE KELP', d:95,  a:C.b1a, b:C.b1b },
+  { n:'THE DROP', d:210, a:C.b2a, b:C.b2b },
+  { n:'THE TRENCH', d:340, a:C.b3a, b:C.b3b },
+  { n:'THE ABYSS', d:460, a:C.b4a, b:C.b4b },
+];
+function bandAt(d){ let i=0; for (let j=0;j<BANDS.length;j++) if (d >= BANDS[j].d) i=j; return i; }
+
+/* ------------------------------------------------------------------------
+   THE CHUNK LIBRARY (§6). Authored 2–4 s shapes, randomly sequenced with
+   jitter — never per-object randomness. `f` items take whatever fish type
+   the band they land in supports, so one shape works at every depth.
+   BAIT is the load-bearing one: a shoal with a jelly tucked behind it is the
+   only reason reading the board matters instead of just sweeping.
+   ------------------------------------------------------------------------ */
+function ringF(n, rx, ry, oy){
+  const o = [];
+  for (let i=0;i<n;i++){ const a = i/n*TAU + 0.3;
+    o.push({k:'f', x:Math.cos(a)*rx, y:Math.sin(a)*ry + (oy||0)}); }
+  return o;
+}
+/* Shoals are TIGHT and RICH, and the water between them is empty. A first
+   pass spread the same fish evenly and the whole skill ladder collapsed:
+   careless scored 90% of expert because every lane collected about the same
+   number. Clumping is what makes reading the board pay. */
+/* THE SHOALS ARE TRACKS, NOT BLOBS.
+   The hook sinks at a fixed rate, so a round shoal is sliced through in
+   0.45 s however well you steer — measured, and it made the whole execution
+   ladder vanish: 0.5 units of thumb error and 22 units of thumb error both
+   caught 85 fish a run. A shoal has to be a shape you FOLLOW, laid out so
+   that the descent rate and the lateral speed cap make tracking it a real
+   task: the diagonals and the weave pay ~5x for a line held against ~1x for
+   falling straight through them.                                          */
+const SOFT = [
+  /* the two diagonals — follow the run down and across, or take one fish */
+  { n:'RUN-R',  w:74, h:50, min:0, items:[0,1,2,3,4,5,6,7,8,9,10].map(i=>
+      ({k:'f', x:-36+i*7.2, y:-25+i*5.0})) },
+  { n:'RUN-L',  w:74, h:50, min:0, items:[0,1,2,3,4,5,6,7,8,9,10].map(i=>
+      ({k:'f', x:36-i*7.2, y:-25+i*5.0})) },
+  /* the weave: two changes of direction, and the middle one is against the
+     lateral cap if you are carrying weight */
+  { n:'WEAVE',  w:58, h:62, min:40, items:[0,1,2,3,4,5,6,7,8,9,10,11].map(i=>{
+      const p = i/11, s = Math.sin(p*Math.PI*2);
+      return {k:'f', x:s*27, y:-31+p*62}; }) },
+  /* the jackpot: dense, and a centred pass takes most of it */
+  { n:'BALL',   w:30, h:34, min:0, items: ringF(8, 13, 13).concat(ringF(5, 6, 6)).concat([{k:'f',x:0,y:0}]) },
+  /* a single lane — free if you are in it, worth nothing if you are not */
+  { n:'COLUMN', w:12, h:56, min:0, items:[0,1,2,3,4,5,6,7].map(i=>({k:'f', x:Math.sin(i)*2.5, y:-27+i*7.5})) },
+  { n:'PAIR',   w:30, h:40, min:180, items:[{k:'F',x:-13,y:-16},{k:'F',x:12,y:14}] },
+  { n:'TRIO',   w:34, h:48, min:300, items:[{k:'F',x:-14,y:-19},{k:'F',x:11,y:0},{k:'F',x:-6,y:20}] },
+];
+/* Hazard shapes. Every one of them puts the fish IN the gap, so the rich
+   water is the dangerous water and the lane choice is the greed decision. */
+const HARD = [
+  { n:'WALL',   w:92, h:20, min:60,
+    items:[{k:'j',x:-40,y:0},{k:'j',x:-22,y:3},{k:'j',x:20,y:-2},{k:'j',x:39,y:2},
+           {k:'f',x:-1,y:-6},{k:'f',x:0,y:2},{k:'f',x:1,y:10},{k:'f',x:-2,y:-14}] },
+  { n:'GATE',   w:78, h:44, min:50,
+    items:[{k:'j',x:-28,y:0},{k:'j',x:29,y:4},
+           {k:'f',x:-1,y:-20},{k:'f',x:1,y:-12},{k:'f',x:0,y:-4},{k:'f',x:1,y:4},
+           {k:'f',x:-1,y:12},{k:'f',x:0,y:20}] },
+  /* the trap: the shoal is the lure, the jelly is directly under it */
+  { n:'BAIT',   w:44, h:44, min:60,
+    items:[{k:'f',x:-13,y:-16},{k:'f',x:-3,y:-19},{k:'f',x:8,y:-15},{k:'f',x:-5,y:-9},
+           {k:'f',x:5,y:-6},{k:'f',x:0,y:-1},{k:'j',x:-1,y:13}] },
+  { n:'GAUNTLET', w:88, h:56, min:120,
+    items:[{k:'j',x:-34,y:-18},{k:'j',x:-4,y:2},{k:'j',x:33,y:16},
+           {k:'f',x:14,y:-16},{k:'f',x:22,y:-8},{k:'f',x:-20,y:8},{k:'f',x:-26,y:17},
+           {k:'F',x:6,y:24}] },
+  { n:'SHELF',  w:74, h:32, min:200,
+    items:[{k:'j',x:-30,y:2},{k:'j',x:30,y:2},{k:'j',x:0,y:20},
+           {k:'f',x:-12,y:-9},{k:'f',x:-2,y:-13},{k:'f',x:11,y:-8},{k:'F',x:0,y:-2}] },
+  { n:'EELRUN', w:100, h:26, min:K.EEL_MIN,
+    items:[{k:'e',x:0,y:0},{k:'f',x:-20,y:-16},{k:'f',x:-8,y:-19},{k:'f',x:6,y:-17},{k:'F',x:18,y:-13}] },
+  { n:'DRIFT',  w:30, h:34, min:20,
+    items:[{k:'j',x:0,y:0},{k:'f',x:-16,y:-12},{k:'f',x:15,y:-9}] },
+  /* THE NARROWS — the threading test, and the reason nerve is a skill gate.
+     Seven jellies at one depth, laid left to right. The lane guarantee
+     rejects each one that would close the gap past laneMin(y), so what
+     survives is a constriction of EXACTLY the width the water allows at that
+     depth: ~30 units up top, ~13.5 on the floor against a 7.2-wide hook.
+     The chunk self-tunes; the difficulty is in laneMin, not in this list.
+     The payoff sits right under the gap, so the only way through is through. */
+  { n:'NARROWS', w:96, h:34, min:90,
+    items:[{k:'j',x:-42,y:0},{k:'j',x:-28,y:2},{k:'j',x:-14,y:-1},{k:'j',x:0,y:1},
+           {k:'j',x:14,y:-2},{k:'j',x:28,y:1},{k:'j',x:42,y:0},
+           {k:'f',x:-6,y:15},{k:'f',x:0,y:21},{k:'F',x:4,y:28}] },
+];
+const CHUNKS = SOFT.concat(HARD);
+/* the closing-phase shoal — a big soft target that arrives with the risk */
+const BOIL = { n:'BOIL', w:56, h:52, min:0,
+  items: ringF(11, 22, 18).concat(ringF(8, 12, 10)).concat([{k:'F',x:0,y:0}]) };
+
+/* ================================================================== STATE */
+const HK = {
+  x:50, y:0, vx:0, mode:'idle',    // idle | dive | reel | recast
+  maxD:0, pool:0, n:0, fray:0, stringer:[], recast:0, fight:0, fightT:0,
+  bandNow:0,
+};
+const BOAT = { x:50, bob:0 };
+/* the trail: TRAIL[i] is the hook's x at depth i*K.TSTEP. Monotonic in depth
+   because a dive only ever descends, which makes the lookup O(1). */
+const TRAIL = new Float64Array(Math.ceil(560/7) + 4);
+let TN = 1;
+function trailX(y){
+  const f = clamp(y / K.TSTEP, 0, TN-1);
+  const i0 = f|0, i1 = Math.min(i0+1, TN-1);
+  return TRAIL[i0] + (TRAIL[i1]-TRAIL[i0]) * (f-i0);
+}
+function trailPush(){
+  while (TN < TRAIL.length && TN*K.TSTEP <= HK.y){ TRAIL[TN] = HK.x; TN++; }
+}
+const RUN = {
+  state:'play',        // play | over
+  seed:1, rnd:Math.random,
+  score:0, shown:0, left:K.RUN_TIME, t:0, tick:0,
+  streak:0, bestStreak:0, catches:0, banks:0, snaps:0,
+  clockDmg:0, deepest:0, bestBank:0, lostAtSiren:0,
+  overT:0, touched:false, hint:0, close:false, pbHit:false,
+  dEff:1, tickSec:-1, log:[],
+};
+const FX = {
+  trauma:0, hitstop:0, flash:0, flashCol:'#FFFFFF',
+  parts:[], rings:[], floats:[], desat:0, push:1, pushX:0, pushY:0,
+  heat:0, bandFade:0, warn:0,
+};
+/* A SEPARATE cosmetic stream. Particle spawns are gated on RENDER, so if the
+   juice drew from RUN.rnd a headless bot run and a rendered run would diverge
+   on the same seed — the fleet would be measuring a different game. */
+let FRND = mulberry32(1);
+for (let i=0;i<400;i++) FX.parts.push({live:false,x:0,y:0,vx:0,vy:0,r:0,life:0,max:0,c:'#fff',g:1,sh:0});
+for (let i=0;i<26;i++)  FX.rings.push({live:false,x:0,y:0,r:0,r1:0,life:0,max:0,c:'#fff',w:1});
+for (let i=0;i<12;i++)  FX.floats.push({live:false,x:0,y:0,txt:'',life:0,max:0,c:'#fff',sz:1});
+
+/* world entity pools — zero per-tick allocation in the sim */
+const ENT = [];
+for (let i=0;i<260;i++) ENT.push({live:false, kind:0, t:0, x:0, y:0, x0:0, ph:0, amp:0,
+  r:0, val:0, gone:0, row:0, foul:0, foulR:0, dir:1, tx:0, ty:0});
+const ROWS = [];
+for (let i=0;i<Math.ceil(K.DMAX/K.ROW)+1;i++)
+  ROWS.push({filled:false, cur:0, curY:0, curH:0, curOn:0, seedN:0});
+
+let RENDER = true;      // the bot harness turns this off
+
+/* ------------------------------------------------------------------- FX */
+function trauma(v){ if (SAVE.reduced) v *= 0.35; FX.trauma = clamp(FX.trauma+v, 0, 1); }
+function hitstop(t){ FX.hitstop = Math.max(FX.hitstop, t); }
+function burst(x,y,n,col,spd,up,grav){
+  if (!RENDER) return;
+  for (let i=0, made=0; i<FX.parts.length && made<n; i++){
+    const p = FX.parts[i]; if (p.live) continue;
+    const a = FRND()*TAU, s = spd*(0.35+FRND()*0.85);
+    p.live=true; p.x=x; p.y=y; p.vx=Math.cos(a)*s; p.vy=Math.sin(a)*s - (up||0);
+    p.r = 0.5+FRND()*1.7; p.max = 0.45+FRND()*0.6; p.life=p.max;
+    p.c = col; p.g = grav===undefined ? -26 : grav; p.sh = FRND()<0.3?1:0; made++;
+  }
+}
+function ring(x,y,r0,r1,life,col,w){
+  if (!RENDER) return;
+  for (let i=0;i<FX.rings.length;i++){ const g=FX.rings[i]; if (g.live) continue;
+    g.live=true; g.x=x; g.y=y; g.r=r0; g.r1=r1; g.max=life; g.life=life; g.c=col; g.w=w||1.4; return; }
+}
+function floatTxt(x,y,txt,col,sz){
+  if (!RENDER) return;
+  for (let i=0;i<FX.floats.length;i++){ const f=FX.floats[i]; if (f.live) continue;
+    f.live=true; f.x=x; f.y=y; f.txt=txt; f.c=col; f.sz=sz||1; f.max=1.0; f.life=1.0; return; }
+}
+function buzz(ms){ if (SAVE.haptic && navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+function stepFX(dt){
+  FX.trauma = clamp(FX.trauma - 1.2*dt, 0, 1);
+  FX.flash  = Math.max(0, FX.flash - dt*5.5);
+  FX.desat  = Math.max(0, FX.desat - dt*4.2);
+  FX.push  += (1 - FX.push) * (1 - Math.exp(-7*dt));
+  FX.bandFade = Math.max(0, FX.bandFade - dt*1.1);
+  FX.warn = Math.max(0, FX.warn - dt*2.4);
+  for (let i=0;i<FX.parts.length;i++){ const p=FX.parts[i]; if (!p.live) continue;
+    p.life -= dt; if (p.life<=0){ p.live=false; continue; }
+    p.x += p.vx*dt; p.y += p.vy*dt; p.vx *= (1-1.9*dt); p.vy = p.vy*(1-1.9*dt) + p.g*dt; }
+  for (let i=0;i<FX.rings.length;i++){ const g=FX.rings[i]; if (!g.live) continue;
+    g.life -= dt; if (g.life<=0) g.live=false; }
+  for (let i=0;i<FX.floats.length;i++){ const f=FX.floats[i]; if (!f.live) continue;
+    f.life -= dt; if (f.life<=0) f.live=false; }
+}
+
+/* ============================================================== DIFFICULTY
+   §5.1 exactly: flat onramp, concave rise, continuous breathe, phased so the
+   siren lands on a breathe PEAK.                                           */
+function dEff(t){
+  if (t < K.ONRAMP) return 1.0;
+  const tau = t - K.ONRAMP;
+  const trend = 1 + K.D_K * Math.pow(tau/K.D_TRAMP, 0.8);
+  const A = K.D_A * Math.min(1, tau/K.D_AWARM);
+  return trend * (1 + A*Math.sin(TAU*tau/K.D_P + K.D_PHASE));
+}
+/* the press-your-luck ladder: proportional per rung, so it tops out on its
+   own and escalation is the only way to buy the multiplier (§9.2C) */
+function depthMult(d){
+  return clamp(1 + (K.MULT_MAX-1) * Math.pow(clamp(d,0,K.DMAX)/K.DMAX, K.MULT_POW), 1, K.MULT_MAX);
+}
+function closeOn(){ return RUN.left <= K.CLOSE_AT; }
+function baseMul(){ return closeOn() ? K.CLOSE_MUL : 1; }
+
+/* =================================================================== WORLD */
+function freeEnt(){
+  for (let i=0;i<ENT.length;i++) if (!ENT[i].live) return ENT[i];
+  return null;
+}
+function rowRnd(ri){
+  const r = ROWS[ri];
+  return mulberry32((RUN.seed ^ (ri*0x9E3779B1) ^ (r.seedN*0x85EBCA6B)) >>> 0);
+}
+/* which fish type this band supports; `big` prefers the largest legal one */
+function pickFish(d, rnd, big){
+  const ok = [];
+  for (let i=0;i<FISH.length;i++) if (d >= FISH[i].d0 && d <= FISH[i].d1) ok.push(i);
+  if (!ok.length) return 0;
+  if (big) return ok[ok.length-1];
+  return ok[(rnd()*ok.length)|0];
+}
+/* Widest hazard-free lane at depth y, measured against each hazard's whole
+   drift range rather than where it happens to be sitting now. */
+function laneAt(y){
+  const seg = LANE_BUF; let n = 0;
+  for (let i=0;i<ENT.length;i++){
+    const e = ENT[i]; if (!e.live || e.kind === 1) continue;
+    const half = (e.kind === 3 ? e.amp + K.EEL_BODY : e.amp*0.75) + e.r + K.HOOK_R + 2;
+    if (Math.abs(e.y - y) > 16 + (e.kind===3?6:0)) continue;
+    if (n < seg.length){ seg[n++] = clamp(e.x0 - half, -50, 150); seg[n++] = clamp(e.x0 + half, -50, 150); }
+  }
+  /* insertion sort on pairs — n is tiny and this must not allocate */
+  for (let i=2;i<n;i+=2){ const a=seg[i], b=seg[i+1]; let j=i-2;
+    while (j>=0 && seg[j]>a){ seg[j+2]=seg[j]; seg[j+3]=seg[j+1]; j-=2; }
+    seg[j+2]=a; seg[j+3]=b; }
+  let gap = 0, cur = K.WALL;
+  for (let i=0;i<n;i+=2){
+    if (seg[i] > cur) gap = Math.max(gap, seg[i]-cur);
+    cur = Math.max(cur, seg[i+1]);
+  }
+  return Math.max(gap, (K.W-K.WALL) - cur);
+}
+const LANE_BUF = new Float64Array(64);
+/* the lane the water will always leave you at this depth */
+function laneMin(y){
+  return lerp(K.LANE_TOP, K.LANE_ABYSS, clamp(y/K.DMAX, 0, 1));
+}
+
+function spawnChunk(ch, cx, cy, ri, rnd){
+  for (let i=0;i<ch.items.length;i++){
+    const it = ch.items[i];
+    const e = freeEnt(); if (!e) return;
+    const x = clamp(cx + it.x, 6, K.W-6);
+    const y = clamp(cy + it.y, 4, K.DMAX-6);
+    if ((it.k === 'j' || it.k === 'e') && y < K.SAFE_TOP) continue;   // never over the boat
+    e.live = true; e.row = ri; e.gone = 0; e.foul = 0; e.x0 = x; e.x = x; e.y = y;
+    e.ph = rnd()*TAU; e.dir = rnd()<0.5 ? -1 : 1;
+    if (it.k === 'f' || it.k === 'F'){
+      const ti = pickFish(y, rnd, it.k === 'F');
+      e.kind = 1; e.t = ti; e.r = FISH[ti].r; e.val = FISH[ti].val;
+      /* Fish hold station. Wide cruising swept them onto a passive hook for
+         free, which propped the do-nothing baseline up to 70% of a steered
+         line and flattened the whole execution ladder. It also broke §6:
+         a fish that wanders 22 units is not resolved before you commit. */
+      e.amp = 1.5 + rnd()*3.5;
+    } else if (it.k === 'j'){
+      e.kind = 2; e.t = 0; e.r = 5.2 + rnd()*1.1; e.val = 0;
+      /* a narrow patrol. A wide one outruns the forecast the player released
+         on, and JEL_SWEEP then has to draw a ring the size of the column. */
+      e.amp = 1.5 + rnd()*3.0;
+    } else {
+      e.kind = 3; e.t = 0; e.r = 4.6; e.val = 0; e.amp = K.EEL_SPAN;
+      e.x0 = K.W/2; e.tx = x; e.ty = y;
+    }
+    /* place, then take it back if it closed the last lane */
+    if (e.kind !== 1 && laneAt(y) < laneMin(y)) e.live = false;
+  }
+}
+function fillRow(ri){
+  const r = ROWS[ri];
+  r.seedN++;
+  const rnd = rowRnd(ri);
+  const y0 = ri*K.ROW, y1 = y0 + K.ROW, cy = (y0+y1)/2;
+  const D = RUN.dEff;
+  r.filled = true; r.cur = 0; r.curOn = 0;
+
+  /* currents — the §5.6 hazard beat, force faded in so it never snaps on */
+  if (RUN.t >= K.CUR_AT && cy > 200 && rnd() < 0.34){
+    r.cur = (rnd()<0.5?-1:1) * (24 + rnd()*(K.CUR_MAX-24));
+    r.curY = y0 + 8 + rnd()*(K.ROW-30); r.curH = 20 + rnd()*16; r.curOn = 0;
+  }
+
+  /* the onramp is the shallows: nothing costs anything up top for 4 s */
+  const safe = (RUN.t < K.ONRAMP && cy < 130);
+  /* EXACTLY ONE SHOAL PER ROW, plus hazards on their own roll. Two shoals a
+     row saturated the water: a bot that ignored fish completely and fell in
+     a straight line still collected 66 of the 91 an actively-steered line
+     got, so steering was worth 38% and the execution ladder never appeared.
+     One track per row means a passive line takes the few fish it happens to
+     fall through and a tracked line takes the whole run. */
+  const hazW = clamp(0.30 + 0.34*(D-1) + 0.34*(cy/K.DMAX), 0, 0.95)
+             * K.HAZ_0 * (closeOn()?K.CLOSE_HAZ:1);
+  const place = (pool) => {
+    const use = pool.filter(ch => cy >= ch.min && (cy >= K.EEL_MIN || ch.n !== 'EELRUN'));
+    if (!use.length) return;
+    let ch = use[(rnd()*use.length)|0];
+    /* the boil: the closing phase seeds fat shoals into the mid/deep water */
+    if (pool === SOFT && closeOn() && cy > 120 && rnd() < 0.45) ch = BOIL;
+    spawnChunk(ch, 14 + rnd()*(K.W-28), y0 + 10 + rnd()*(K.ROW-20), ri, rnd);
+  };
+  place(SOFT);
+  if (!safe){
+    place(HARD);
+    if (rnd() < hazW) place(HARD);
+    if (rnd() < hazW*0.7) place(HARD);
+  }
+}
+function clearRow(ri){
+  ROWS[ri].filled = false; ROWS[ri].cur = 0;
+  for (let i=0;i<ENT.length;i++) if (ENT[i].live && ENT[i].row === ri) ENT[i].live = false;
+}
+function stepWorld(dt){
+  const hy = HK.y;
+  for (let ri=0; ri<ROWS.length; ri++){
+    const cy = ri*K.ROW + K.ROW/2;
+    const d = Math.abs(cy - hy);
+    if (!ROWS[ri].filled && d < K.ROW_IN) fillRow(ri);
+    else if (ROWS[ri].filled && d > K.ROW_OUT) clearRow(ri);
+    if (ROWS[ri].cur) ROWS[ri].curOn = Math.min(1, ROWS[ri].curOn + dt/K.CUR_FADE);
+  }
+  const t = RUN.t, D = RUN.dEff, spd = 0.6 + 0.4*D;
+  for (let i=0;i<ENT.length;i++){
+    const e = ENT[i]; if (!e.live) continue;
+    if (e.gone > 0){ e.gone -= dt; if (e.gone <= 0) e.live = false;
+      e.x += e.dir*34*dt; e.y -= 12*dt; continue; }
+    if (e.kind === 1){                                     // fish: sinusoidal cruise
+      const f = FISH[e.t];
+      e.x = e.x0 + Math.sin(t*f.sw*0.055 + e.ph) * e.amp;
+      e.y += Math.sin(t*0.9 + e.ph*1.7) * 3.2 * dt;
+    } else if (e.kind === 2){                              // jelly: slow drift + bob
+      e.x = e.x0 + Math.sin(t*0.30*spd + e.ph) * e.amp;
+      e.y += Math.sin(t*0.7 + e.ph) * 5.0 * dt;
+    } else {                                               // eel: full-width patrol
+      const a = t*K.EEL_SPD*spd + e.ph;
+      e.x = K.W/2 + Math.sin(a) * e.amp;
+      e.y += Math.sin(t*1.4 + e.ph) * 2.0 * dt;
+      /* The TAIL is sim state, not a drawing flourish. Physics origin and art
+         origin have to be the same thing or the fleet greenlights a hitbox
+         nobody can see (see §12 of the design doc). */
+      e.dir = Math.cos(a) >= 0 ? 1 : -1;
+      e.tx = clamp(e.x - e.dir*K.EEL_BODY, 2, K.W-2);
+      e.ty = e.y;
+    }
+    e.x = clamp(e.x, 5, K.W-5);
+  }
+}
+/* the eel's four collision points, head to tail — the same four the art
+   sways between */
+function eelPt(e, i){
+  const p = i/3;
+  return { x: e.x + (e.tx - e.x)*p, y: e.y + (e.ty - e.y)*p };
+}
+
+/* ==================================================================== SIM */
+function weight(){ return HK.n; }
+function sinkSpeed(){ return K.SINK * Math.min(1 + K.SINK_W*weight(), K.SINK_WMAX); }
+function reelSpeed(){ return K.REEL * Math.max(1/(1 + K.REEL_W*weight()), K.REEL_WMIN); }
+/* honest, public readout: can this stringer still make the surface in time? */
+function timeToSurface(){ return HK.y / Math.max(1, reelSpeed()) + K.RECAST*0.5; }
+/* fray per second at this instant — what the straining line is telling you */
+let FOULN = 0;
+function frayRate(){
+  const dScale = (0.75 + K.FRAY_D*RUN.dEff) * (closeOn()?K.CLOSE_FRAY:1);
+  let r = FOULN * K.FRAY_FOUL * dScale;
+  if (HK.y > K.FRAY_P2) r += K.FRAY_P2R*dScale;
+  else if (HK.y > K.FRAY_P1) r += K.FRAY_P1R*dScale;
+  return r;
+}
+
+function startDive(){
+  HK.mode = 'dive'; HK.maxD = HK.y; HK.fray = 0;
+  HK.pool = 0; HK.n = 0; HK.stringer.length = 0;
+  BOAT.x = HK.x; TRAIL[0] = HK.x; TN = 1;      // the line pays out from here
+  if (RENDER){ S.cast(); ring(HK.x, 0, 1, 9, 0.5, C.line, 1.6);
+    burst(HK.x, 1, 8, C.white, 22, 0, 40); }
+}
+function catchFish(e){
+  const f = FISH[e.t];
+  const v = Math.round(f.val * baseMul());
+  HK.pool += v; HK.n++;
+  HK.stringer.push({ t:e.t, ph:FRND()*TAU });
+  if (HK.stringer.length > 18) HK.stringer.shift();
+  RUN.streak++; RUN.catches++;
+  if (RUN.streak > RUN.bestStreak) RUN.bestStreak = RUN.streak;
+  e.gone = 0.30; e.dir = e.x < HK.x ? -1 : 1;
+  const big = f.val >= 20;
+  if (RENDER){
+    S.bite(RUN.streak, big);
+    const tier = RUN.streak>=40?4:RUN.streak>=24?3:RUN.streak>=12?2:RUN.streak>=5?1:0;
+    burst(e.x, e.y, 6 + tier*4, f.a, 26 + tier*6, 8, -20);
+    ring(e.x, e.y, e.r, e.r+7+tier*2, 0.34, C.goldHi, 1.3);
+    floatTxt(e.x, e.y, '+'+v, big?C.goldHi:C.cream, big?1.15:0.9);
+    if (big){ trauma(0.24); buzz(9); }
+    /* §9.5 tier entry is the only routine event allowed to shake */
+    if (RUN.streak===5||RUN.streak===12||RUN.streak===24||RUN.streak===40){
+      trauma(0.50); hitstop(0.10); ring(HK.x, HK.y, 4, 30, 0.5, C.gold, 2.4);
+    }
+  }
+  /* a tuna FIGHTS — a lateral shove you have to steer out of */
+  if (f.val >= 20){ HK.fight = (e.x < HK.x ? 1 : -1) * (58 + f.val*1.4); HK.fightT = 0.75; }
+}
+function snapLine(cause, ex, ey){
+  const lost = Math.round(HK.pool * depthMult(HK.maxD));
+  RUN.snaps++; RUN.streak = 0;
+  RUN.log.push('snap:'+cause+':'+HK.mode+':'+Math.round(HK.y/K.FM)+'fm:'+lost);
+  /* §7.9b — the loss announces itself inside live play */
+  if (RENDER){
+    S.snap(); trauma(0.85); hitstop(0.167); FX.desat = 1; FX.push = 1.08;
+    FX.pushX = ex!==undefined?ex:HK.x; FX.pushY = ey!==undefined?ey:HK.y;
+    FX.flash = 0.5; FX.flashCol = C.red; buzz([22,40,28]);
+    ring(HK.x, HK.y, 3, 42, 0.6, C.red, 3);
+    burst(HK.x, HK.y, 26, C.redHi, 62, 0, 30);
+    if (lost > 0) floatTxt(HK.x, HK.y-10, '−'+commas(lost), C.red, 1.35);
+  }
+  /* the stringer swims away — the loss is SHOWN, never silently subtracted */
+  if (RENDER) for (let i=0;i<HK.stringer.length;i++){
+    const s = HK.stringer[i], f = FISH[s.t];
+    burst(HK.x + (FRND()-0.5)*10, HK.y + i*3, 3, f.a, 40, 0, -30);
+  }
+  /* clock damage: the sharpest cost in the format, and here it is exactly
+     the right one — the clock IS the depth budget */
+  const dmg = Math.min(K.SNAP_CLOCK, Math.max(0, K.CLOCK_CAP - RUN.clockDmg));
+  if (dmg > 0){ RUN.left = Math.max(0, RUN.left - dmg); RUN.clockDmg += dmg;
+    if (RENDER){ trauma(1.0); floatTxt(K.W/2, HK.y - 26, '−'+dmg.toFixed(1)+'s', C.red, 1.2); } }
+  HK.pool = 0; HK.n = 0; HK.stringer.length = 0; HK.fray = 0;
+  HK.mode = 'recast'; HK.recast = K.RECAST + 0.22;
+}
+function bankIt(){
+  const mult = depthMult(HK.maxD);
+  const gain = Math.round(HK.pool * mult);
+  RUN.score += gain; RUN.banks++;
+  if (gain > RUN.bestBank) RUN.bestBank = gain;
+  RUN.log.push('bank:'+Math.round(HK.maxD/K.FM)+'fm:x'+mult.toFixed(1)+':'+gain);
+  if (RENDER && gain > 0){
+    S.bank(mult, gain >= 260);
+    trauma(clamp(0.28 + gain/2600, 0, 0.62)); hitstop(0.05);
+    ring(BOAT.x, 0, 2, 26, 0.55, C.gold, 2.6);
+    burst(BOAT.x, 1, 14 + Math.min(18, gain/26|0), C.goldHi, 46, 26, 60);
+    floatTxt(BOAT.x, -6, '+'+commas(gain), C.goldHi, 1.4);
+    if (mult >= 3) floatTxt(BOAT.x, -18, '×'+mult.toFixed(1), C.gold, 1.0);
+    buzz(gain >= 260 ? [14,30,20] : 12);
+  }
+  /* §9.6 — never let a personal best pass silently */
+  if (!RUN.pbHit && SAVE.best > 0 && RUN.score >= SAVE.best){
+    RUN.pbHit = true;
+    if (RENDER){ S.pb(); FX.flash = 0.7; FX.flashCol = C.gold; trauma(0.70);
+      floatTxt(K.W/2, HK.y-30, 'BEST', C.gold, 1.6); }
+  }
+  HK.pool = 0; HK.n = 0; HK.stringer.length = 0; HK.fray = 0; HK.maxD = 0;
+  HK.mode = 'recast'; HK.recast = K.RECAST;
+}
+
+let PTR = { down:false, x:50, grab:0, gt:0 };
+
+function simStep(dt){
+  if (RUN.state !== 'play') { RUN.overT += dt; return; }
+  RUN.t += dt; RUN.tick++;
+  RUN.left = Math.max(0, RUN.left - dt);
+  RUN.dEff = dEff(RUN.t);
+  if (!RUN.close && closeOn()){
+    RUN.close = true;
+    if (RENDER){ S.siren(); FX.flash=0.34; FX.flashCol=C.hot; trauma(0.45); }
+  }
+  FX.heat = clamp((K.CLOSE_AT - RUN.left)/K.CLOSE_AT, 0, 1);
+  /* per-second countdown pulse in the closing phase */
+  const sec = Math.ceil(RUN.left);
+  if (sec !== RUN.tickSec){
+    if (RENDER && RUN.tickSec >= 0 && RUN.left <= 5.2) S.tick(true);
+    else if (RENDER && RUN.tickSec >= 0 && RUN.left <= K.CLOSE_AT) S.tick(false);
+    RUN.tickSec = sec;
+  }
+
+  stepWorld(dt);
+
+  /* ---------------------------------------------------------- the hook */
+  const bandWas = HK.bandNow;
+  if (HK.mode === 'recast'){
+    HK.recast -= dt;
+    HK.y = Math.max(0, HK.y - reelSpeed()*dt*1.6);
+    HK.x += (BOAT.x - HK.x) * (1 - Math.exp(-8*dt));
+    if (HK.recast <= 0){ HK.mode = 'idle'; HK.y = 0; }
+  }
+  if (HK.mode === 'idle'){
+    HK.y = 0; HK.vx *= Math.exp(-6*dt);
+    HK.x += (PTR.down ? (PTR.x - HK.x) : (BOAT.x - HK.x)) * (1 - Math.exp(-6*dt));
+    if (PTR.down) startDive();
+  }
+  else if (HK.mode === 'dive'){
+    if (!PTR.down){ HK.mode = 'reel'; if (RENDER) S.click(); }
+    else {
+      /* lateral: real mass, and a fat stringer is a sluggish one */
+      const accM = 1/(1 + K.LAT_ACC_W*weight()), maxM = 1/(1 + K.LAT_MAX_W*weight());
+      const want = clamp(PTR.x + PTR.grab, K.WALL, K.W-K.WALL);
+      const dx = want - HK.x;
+      const acc = clamp(dx*14, -1, 1) * K.LAT_ACC * accM;
+      HK.vx += acc*dt;
+      HK.vx -= HK.vx * K.LAT_DAMP * dt;
+      const vmax = K.LAT_MAX * maxM;
+      HK.vx = clamp(HK.vx, -vmax, vmax);
+      if (HK.fightT > 0){ HK.fightT -= dt; HK.vx += HK.fight*dt*1.6; }
+      HK.y = Math.min(K.DMAX, HK.y + sinkSpeed()*dt);
+      if (HK.y > HK.maxD) HK.maxD = HK.y;
+      if (HK.maxD > RUN.deepest) RUN.deepest = HK.maxD;
+    }
+  }
+  if (HK.mode === 'reel'){
+    /* retrace the trail exactly — the climb IS the water you already read */
+    const step = reelSpeed()*dt;
+    if (HK.y <= step){ HK.y = 0; HK.x = TRAIL[0]; bankIt(); }
+    else { HK.y -= step; HK.x = trailX(HK.y); HK.vx = 0;
+           TN = Math.min(TN, Math.floor(HK.y/K.TSTEP) + 2); }
+    if (RENDER && (RUN.tick % 4 === 0)) S.click();
+  }
+  /* the current pushes you sideways whatever the mode — it is the water,
+     not a control, and it can help as easily as hurt */
+  for (let ri=0; ri<ROWS.length; ri++){
+    const r = ROWS[ri]; if (!r.cur) continue;
+    if (HK.y >= r.curY && HK.y <= r.curY + r.curH){ HK.x += r.cur * r.curOn * dt; }
+  }
+  if (HK.mode === 'dive'){ HK.x += HK.vx*dt; }
+  HK.x = clamp(HK.x, K.WALL, K.W-K.WALL);
+  if (HK.mode === 'dive') trailPush();
+  HK.bandNow = bandAt(HK.y);
+  if (HK.bandNow !== bandWas && RENDER){
+    FX.bandFade = 1;
+    if (HK.bandNow > bandWas){ S.warn(); floatTxt(HK.x, HK.y-22, BANDS[HK.bandNow].n, C.cream, 1.0); }
+  }
+  /* The skiff is anchored to the cast for the whole dive — it is the top of
+     the trail. It only drifts over the hook between dives, which is what
+     places your next cast. */
+  if (HK.mode === 'idle' || HK.mode === 'recast'){
+    BOAT.x += (HK.x - BOAT.x) * (1 - Math.exp(-K.BOAT_K*2*dt));
+    BOAT.x = clamp(BOAT.x, 10, K.W-10);
+  } else BOAT.x = TRAIL[0];
+  BOAT.bob = Math.sin(RUN.t*1.6)*1.4;
+
+  /* ------------------------------------------- contacts, fouling, fray */
+  const live = (HK.mode === 'dive' || HK.mode === 'reel');
+  let fouls = 0;
+  const climb = timeToSurface();
+  if (live){
+    for (let i=0;i<ENT.length;i++){
+      const e = ENT[i]; if (!e.live || e.gone > 0) continue;
+      if (e.kind === 1){
+        if (Math.hypot(e.x-HK.x, e.y-HK.y) < e.r + K.HOOK_R){ catchFish(e); continue; }
+        continue;
+      }
+      /* hazard vs the HOOK cuts. Hazard vs the LINE frays. Same threat
+         surface, one visual: what the line touches is what will cut you. */
+      const hr = e.r*0.90;                 // §7.8 hazard hitbox under sprite
+      const cutR = hr + K.HOOK_R;
+      const sweep = e.kind === 2 ? Math.min(e.amp, K.JEL_SWEEP*Math.min(4, climb)) : 0;
+      e.foulR = cutR + K.LINE_R + sweep;   // strictly > cutR, always
+      const np = e.kind === 3 ? 4 : 1;     // an eel is a body, not a dot
+      let cut = false; e.foul = 0;
+      for (let k=0;k<np;k++){
+        const p = np===1 ? e : eelPt(e, k);
+        if (Math.hypot(p.x-HK.x, p.y-HK.y) < cutR){ cut = true; break; }
+        /* Eels do not tangle. They are a fast animal that swims past the
+           line, and a full-width patrol would foul every possible trail —
+           which would make the exit unreadable rather than difficult. They
+           bite the hook and nothing else. */
+        if (!e.foul && e.kind === 2 && p.y > 2 && p.y < HK.y - 2
+            && Math.abs(p.x - trailX(p.y)) < e.foulR){ e.foul = 1; }
+      }
+      if (cut){ snapLine(e.kind===2?'jelly':'eel', e.x, e.y); break; }
+      if (e.foul) fouls++;
+    }
+  } else {
+    for (let i=0;i<ENT.length;i++) if (ENT[i].live) ENT[i].foul = 0;
+  }
+  FOULN = fouls;
+  if (live){
+    const rate = frayRate();
+    if (rate > 0) HK.fray = Math.min(1.4, HK.fray + rate*dt);
+    else HK.fray = Math.max(0, HK.fray - K.FRAY_HEAL*dt);
+    if (HK.fray >= 1) snapLine('fray');
+    if (RENDER && HK.fray > K.FRAY_WARN && FX.warn <= 0){ FX.warn = 1; }
+  }
+
+  /* the honest "you cannot make the surface" readout */
+  if (live && HK.pool > 0 && timeToSurface() > RUN.left) FX.warn = Math.max(FX.warn, 0.6);
+
+  /* AudioParam scheduling is not free — 60 Hz of setTargetAtTime on two
+     params is measurable on a min-spec phone */
+  if (RENDER && (RUN.tick % 6 === 0)){
+    S.ambient(clamp(HK.y/K.DMAX,0,1), true);
+    S.strain(live ? HK.fray : 0);
+  }
+
+  if (RUN.left <= 0) endRun();
+}
+
+function endRun(){
+  RUN.state = 'over'; RUN.overT = 0;
+  /* §7.9 — the unbanked pool is LOST, and the loss is shown on screen */
+  RUN.lostAtSiren = Math.round(HK.pool * depthMult(HK.maxD));
+  if (RENDER){
+    S.siren(); S.strain(0); trauma(0.60); hitstop(0.167);
+    if (RUN.lostAtSiren > 0){
+      floatTxt(HK.x, HK.y-14, '−'+commas(RUN.lostAtSiren), C.red, 1.3);
+      burst(HK.x, HK.y, 20, C.redHi, 44, 0, 26);
+      for (let i=0;i<HK.stringer.length;i++){
+        const f = FISH[HK.stringer[i].t];
+        burst(HK.x+(FRND()-0.5)*10, HK.y+i*3, 3, f.a, 36, 0, -30);
+      }
+    }
+  }
+  HK.pool = 0; HK.n = 0; HK.stringer.length = 0;
+  /* A 24-seed fleet pass must not write 24 bot scores into the player's
+     personal best. Headless runs never touch SAVE. */
+  if (!RENDER) return;
+  SAVE.runs++;
+  SAVE.recent.push(RUN.score); if (SAVE.recent.length > 20) SAVE.recent.shift();
+  if (RUN.score > SAVE.best) SAVE.best = RUN.score;
+  SAVE.save();
+}
+
+function startRun(seed){
+  RUN.seed = seed>>>0; RUN.rnd = mulberry32(RUN.seed);
+  FRND = mulberry32((RUN.seed ^ 0xB5297A4D)>>>0);
+  RUN.state='play'; RUN.score=0; RUN.shown=0; RUN.left=K.RUN_TIME; RUN.t=0; RUN.tick=0;
+  RUN.streak=0; RUN.bestStreak=0; RUN.catches=0; RUN.banks=0; RUN.snaps=0;
+  RUN.clockDmg=0; RUN.deepest=0; RUN.bestBank=0; RUN.lostAtSiren=0;
+  RUN.overT=0; RUN.touched=false; RUN.hint=0; RUN.close=false; RUN.pbHit=false;
+  RUN.dEff=1; RUN.tickSec=-1; RUN.log.length=0;
+  HK.x=50; HK.y=0; HK.vx=0; HK.mode='idle'; HK.maxD=0; HK.pool=0; HK.n=0;
+  HK.fray=0; HK.stringer.length=0; HK.recast=0; HK.fight=0; HK.fightT=0; HK.bandNow=0;
+  BOAT.x=50; BOAT.bob=0; TRAIL[0]=50; TN=1;
+  PTR.down=false; PTR.x=50; PTR.grab=0; PTR.gt=0;
+  for (let i=0;i<ENT.length;i++) ENT[i].live=false;
+  for (let i=0;i<ROWS.length;i++){ ROWS[i].filled=false; ROWS[i].cur=0; ROWS[i].seedN=0; }
+  for (const p of FX.parts) p.live=false;
+  for (const g of FX.rings) g.live=false;
+  for (const f of FX.floats) f.live=false;
+  FX.trauma=0; FX.hitstop=0; FX.flash=0; FX.desat=0; FX.push=1; FX.heat=0; FX.warn=0;
+  CAM.y = -14; CAM.set = false;
+  stepWorld(1/60);
+}
+
+/* =================================================================== STAGE */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha:false });
+const STAGE = { w:0, h:0, dpr:1, S:1, PX:0, PY:0, PW:0, PH:0, VH:170, u:1, hudY:0, hudH:0 };
+const CAM = { y:-14, set:false };
+
+function sx(x){ return STAGE.PX + x*STAGE.S; }
+function sy(y){ return STAGE.PY + (y - CAM.y)*STAGE.S; }
+function su(u){ return u*STAGE.S; }
+function ux(x){ return (x - STAGE.PX)/STAGE.S; }
+
+function resize(){
+  const vw = Math.max(120, window.innerWidth), vh = Math.max(220, window.innerHeight);
+  const dpr = Math.min(window.devicePixelRatio||1, 2.75);
+  const w = Math.min(vw, vh*0.66), h = vh;
+  STAGE.w=w; STAGE.h=h; STAGE.dpr=dpr;
+  cv.style.width=w+'px'; cv.style.height=h+'px';
+  cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  const safeTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sat')) || 0;
+  STAGE.u = Math.min(w/390, h/844);
+  STAGE.hudY = Math.max(h*0.016, safeTop);
+  STAGE.hudH = 74*STAGE.u;
+
+  /* left rail = score meter, right rail = the sounder (§8.1) */
+  const railL = 34*STAGE.u, railR = 30*STAGE.u, gap = 6*STAGE.u;
+  const top = STAGE.hudY + STAGE.hudH + 6*STAGE.u;
+  const bot = h - 20*STAGE.u;
+  const availW = w - railL - railR - gap*2, availH = bot - top;
+  /* The visible depth window is CLAMPED and the stage letterboxes to hold it.
+     §8.4 lets extra height extend the approach distance, but here that
+     distance is the visibility floor for everything you steer into — a very
+     tall phone would otherwise get a free extra half-second of lookahead. */
+  let S = availW / K.W;
+  let VH = availH / S;
+  let pw = availW, ph = availH;
+  if (VH > K.VH_MAX){ VH = K.VH_MAX; ph = VH*S; }             // tall: letterbox
+  else if (VH < K.VH_MIN){ VH = K.VH_MIN; S = availH/VH; pw = K.W*S; }  // squat: pillarbox
+  STAGE.S = S; STAGE.VH = VH; STAGE.PW = pw; STAGE.PH = ph;
+  STAGE.PX = railL + gap + (availW - K.W*S)/2;
+  STAGE.PY = top + (availH - ph)/2;
+  STAGE.rail = { lx: 6*STAGE.u, lw: railL - 10*STAGE.u, rx: w - railR + 4*STAGE.u,
+                 rw: railR - 10*STAGE.u, y: STAGE.PY, h: STAGE.PH };
+}
+
+function camTarget(){
+  const bias = (HK.mode === 'reel' || HK.mode === 'recast') ? K.CAM_REEL : K.CAM_DIVE;
+  return clamp(HK.y - bias*STAGE.VH, -16, K.DMAX + 20 - STAGE.VH);
+}
+function stepCam(dt){
+  const t = camTarget();
+  if (!CAM.set){ CAM.y = t; CAM.set = true; return; }
+  CAM.y += (t - CAM.y) * (1 - Math.exp(-K.CAM_K*dt));
+}
+
+/* ================================================================ DRAWING */
+function rr(g,x,y,w,h,r){
+  w=Math.max(0,w); h=Math.max(0,h); r=Math.max(0,Math.min(r,w/2,h/2));
+  g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath();
+}
+function capsule(g,x,y,w,h){ rr(g,x,y,w,h,Math.min(w,h)/2); }
+
+/* the water column: five authored band colours blended by depth */
+function waterAt(d){
+  const i = bandAt(d), last = i === BANDS.length-1;
+  const b = BANDS[i];
+  const end = last ? K.DMAX : BANDS[i+1].d;
+  const t = clamp((d - b.d)/Math.max(1, end - b.d), 0, 1);
+  return mix(b.a, last ? b.b : BANDS[i+1].a, t);
+}
+function drawWater(){
+  const w = STAGE.w, h = STAGE.h;
+  const top = CAM.y, bot = CAM.y + STAGE.VH;
+  const g = ctx.createLinearGradient(0, sy(Math.max(top,-16)), 0, sy(bot));
+  for (let i=0;i<=6;i++){
+    const d = lerp(Math.max(top,0), bot, i/6);
+    g.addColorStop(i/6, waterAt(d));
+  }
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  /* sky above the waterline */
+  if (top < 0){
+    const yh = sy(0);
+    const sg = ctx.createLinearGradient(0, sy(-16), 0, yh);
+    sg.addColorStop(0, C.sky); sg.addColorStop(1, C.skyLo);
+    ctx.fillStyle = sg; ctx.fillRect(0, 0, w, yh);
+  }
+}
+/* god rays near the surface — cheap, and they sell the depth falloff */
+function drawShafts(){
+  const topD = Math.max(0, CAM.y);
+  if (topD > 260) return;
+  const a = clamp(1 - topD/260, 0, 1) * 0.13;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i=0;i<5;i++){
+    const px = (0.12 + i*0.19) * STAGE.w + Math.sin(RUN.t*0.15 + i)*10*STAGE.u;
+    const g = ctx.createLinearGradient(px, sy(0), px + 40*STAGE.u, sy(300));
+    g.addColorStop(0, rgba(C.sunHi, a)); g.addColorStop(1, rgba(C.sunHi, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(px - 12*STAGE.u, sy(0)); ctx.lineTo(px + 12*STAGE.u, sy(0));
+    ctx.lineTo(px + 62*STAGE.u, sy(320)); ctx.lineTo(px + 16*STAGE.u, sy(320));
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+/* Marine snow — two parallax layers on a wrapping world-space tile. This is
+   the depth cue that makes a descent read as a descent rather than as the
+   fish scrolling past. */
+function drawSnow(){
+  const t = RUN.t, TILE = 120;
+  ctx.save();
+  for (let L=0; L<2; L++){
+    const par = L ? 1.0 : 0.45, n = L ? 22 : 16, r = (L?1.5:2.8)*STAGE.u;
+    ctx.fillStyle = rgba(C.white, L?0.15:0.08);
+    const camp = CAM.y*par;                       // the layer's own camera
+    const base = Math.floor(camp/TILE)*TILE;
+    for (let tile=0; tile<3; tile++){
+      const y0 = base + tile*TILE;
+      for (let i=0;i<n;i++){
+        const s = i*97.13 + L*311.7;
+        const wy = y0 + ((s*13.7) % TILE) + Math.sin(t*0.5 + i)*1.5;
+        const wx = (Math.sin(s)*0.5+0.5) * K.W + Math.sin(t*0.35 + i*2.1)*2.5;
+        const py = STAGE.PY + (wy - camp)*STAGE.S;
+        if (py < STAGE.PY-8 || py > STAGE.PY+STAGE.PH+8) continue;
+        ctx.beginPath(); ctx.arc(sx(wx), py, r, 0, TAU); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+function drawKelp(){
+  const t = RUN.t;
+  for (let side=0; side<2; side++){
+    for (let i=0;i<7;i++){
+      const base = 96 + i*24 + side*13;
+      if (base < CAM.y - 60 || base > CAM.y + STAGE.VH + 30) continue;
+      const x = side ? K.W - 2.5 - (i%3)*3.2 : 2.5 + (i%3)*3.2;
+      const hgt = 46 + (i%4)*16;
+      ctx.strokeStyle = rgba(C.kelp, 0.5); ctx.lineWidth = su(3.2); ctx.lineCap='round';
+      ctx.beginPath();
+      for (let s=0;s<=8;s++){
+        const p = s/8, yy = base - hgt*p;
+        const xx = x + Math.sin(t*0.7 + i + p*2.6) * 5.5 * p * (side?-1:1);
+        s ? ctx.lineTo(sx(xx), sy(yy)) : ctx.moveTo(sx(xx), sy(yy));
+      }
+      ctx.stroke();
+    }
+  }
+}
+function drawSeabed(){
+  const y = K.DMAX;
+  if (y < CAM.y - 10 || y > CAM.y + STAGE.VH + 60) return;
+  const py = sy(y);
+  ctx.fillStyle = C.bedLo;
+  ctx.beginPath(); ctx.moveTo(0, py + su(14));
+  for (let i=0;i<=10;i++){
+    const xx = i/10*K.W;
+    ctx.lineTo(sx(xx), py + Math.sin(i*1.7)*su(5));
+  }
+  ctx.lineTo(STAGE.w, py + su(14)); ctx.lineTo(STAGE.w, STAGE.h); ctx.lineTo(0, STAGE.h);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba(C.bed, 0.9); ctx.lineWidth = su(1.4); ctx.stroke();
+}
+function drawCurrents(){
+  for (let ri=0; ri<ROWS.length; ri++){
+    const r = ROWS[ri]; if (!r.cur) continue;
+    if (r.curY > CAM.y + STAGE.VH || r.curY + r.curH < CAM.y) continue;
+    const dir = Math.sign(r.cur), a = 0.10 + 0.14*r.curOn;
+    ctx.save(); ctx.strokeStyle = rgba(C.white, a); ctx.lineWidth = su(1.5); ctx.lineCap='round';
+    for (let i=0;i<12;i++){
+      const yy = r.curY + ((i*7.7) % r.curH);
+      const t = (RUN.t*Math.abs(r.cur)*0.9 + i*23) % (K.W+40) - 20;
+      const xx = dir > 0 ? t : K.W - t;
+      ctx.beginPath(); ctx.moveTo(sx(xx), sy(yy)); ctx.lineTo(sx(xx + dir*9), sy(yy)); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function drawFish(e){
+  const f = FISH[e.t];
+  const px = sx(e.x), py = sy(e.y);
+  if (py < -40 || py > STAGE.h+40) return;
+  const wig = Math.sin(RUN.t*f.sw*0.42 + e.ph);
+  const face = Math.cos(RUN.t*f.sw*0.055 + e.ph) >= 0 ? 1 : -1;
+  const L = su(f.len), H = su(f.r*1.55);
+  const go = e.gone > 0 ? clamp(e.gone/0.30,0,1) : 1;
+  ctx.save(); ctx.translate(px, py); ctx.scale(face, 1); ctx.rotate(wig*0.10);
+  ctx.globalAlpha = go;
+  if (e.t === 3){ // lantern — its own light, kept tight
+    /* A wide additive glow on a BOIL-sized shoal of these whites out the
+       whole closing phase and the jellyfish stop reading, which §11.6 makes
+       a hard requirement rather than a preference. */
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    const g = ctx.createRadialGradient(0,0,0,0,0,L*1.05);
+    g.addColorStop(0, rgba(C.f3, 0.30)); g.addColorStop(1, rgba(C.f3,0));
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,L*1.05,0,TAU); ctx.fill(); ctx.restore();
+  }
+  // tail
+  ctx.fillStyle = f.b;
+  ctx.beginPath(); ctx.moveTo(-L*0.42,0);
+  ctx.lineTo(-L*0.80, -H*0.72 + wig*H*0.22); ctx.lineTo(-L*0.66, 0);
+  ctx.lineTo(-L*0.80,  H*0.72 + wig*H*0.22); ctx.closePath(); ctx.fill();
+  // body
+  ctx.fillStyle = f.a;
+  ctx.beginPath(); ctx.ellipse(0,0,L*0.5,H*0.5,0,0,TAU); ctx.fill();
+  ctx.fillStyle = rgba(f.b, 0.55);
+  ctx.beginPath(); ctx.ellipse(0,H*0.16,L*0.46,H*0.30,0,0,TAU); ctx.fill();
+  // dorsal
+  ctx.fillStyle = f.b;
+  ctx.beginPath(); ctx.moveTo(-L*0.10,-H*0.44); ctx.lineTo(L*0.10,-H*0.86);
+  ctx.lineTo(L*0.20,-H*0.40); ctx.closePath(); ctx.fill();
+  // gold rim — the "catchable" family marker, stable across every palette
+  ctx.strokeStyle = rgba(C.goldHi, 0.55); ctx.lineWidth = Math.max(1, su(0.55));
+  ctx.beginPath(); ctx.ellipse(0,0,L*0.5,H*0.5,0,0,TAU); ctx.stroke();
+  // eye
+  ctx.fillStyle = C.white; ctx.beginPath(); ctx.arc(L*0.28,-H*0.13,Math.max(1,su(0.95)),0,TAU); ctx.fill();
+  ctx.fillStyle = C.ink;   ctx.beginPath(); ctx.arc(L*0.31,-H*0.13,Math.max(0.7,su(0.52)),0,TAU); ctx.fill();
+  ctx.restore();
+}
+function drawJelly(e){
+  const px = sx(e.x), py = sy(e.y);
+  if (py < -50 || py > STAGE.h+50) return;
+  const pulse = 0.85 + 0.15*Math.sin(RUN.t*2.4 + e.ph);
+  const R = su(e.r)*pulse;
+  ctx.save(); ctx.translate(px, py);
+  ctx.globalCompositeOperation='lighter';
+  const g = ctx.createRadialGradient(0,0,0,0,0,R*2.3);
+  g.addColorStop(0, rgba(C.jel, e.foul?0.50:0.34)); g.addColorStop(1, rgba(C.jel,0));
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,R*2.3,0,TAU); ctx.fill();
+  ctx.globalCompositeOperation='source-over';
+  // tentacles
+  ctx.strokeStyle = rgba(C.jelLo, 0.9); ctx.lineWidth = Math.max(1, su(0.85)); ctx.lineCap='round';
+  for (let i=0;i<5;i++){
+    const ox = (-2 + i)*R*0.34;
+    ctx.beginPath(); ctx.moveTo(ox, R*0.30);
+    for (let s=1;s<=4;s++){
+      const p=s/4;
+      ctx.lineTo(ox + Math.sin(RUN.t*3.0 + e.ph + i + p*3)*R*0.30*p, R*0.30 + R*1.55*p);
+    }
+    ctx.stroke();
+  }
+  // bell
+  ctx.fillStyle = C.jel;
+  ctx.beginPath(); ctx.ellipse(0,0,R,R*0.86,0,Math.PI,TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0,R*0.05,R,R*0.30,0,0,Math.PI); ctx.fill();
+  ctx.fillStyle = rgba(C.jelHi, 0.85);
+  ctx.beginPath(); ctx.ellipse(-R*0.26,-R*0.30,R*0.34,R*0.22,-0.5,0,TAU); ctx.fill();
+  ctx.strokeStyle = C.jelLo; ctx.lineWidth = Math.max(1, su(0.7));
+  ctx.beginPath(); ctx.ellipse(0,0,R,R*0.86,0,Math.PI,TAU); ctx.stroke();
+  ctx.restore();
+}
+/* Drawn along the SAME head->tail the collision uses. The wiggle is bounded
+   well inside the body radius so the silhouette never claims reach the
+   hitbox does not have. */
+function drawEel(e){
+  const py = sy(e.y);
+  if (py < -60 || py > STAGE.h+60) return;
+  const hx = sx(e.x), tx = sx(e.tx), ty = sy(e.ty);
+  ctx.save();
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  for (let pass=0; pass<2; pass++){
+    ctx.strokeStyle = pass ? rgba(C.eelLo, 0.7) : (e.foul ? C.eelHi : C.eel);
+    ctx.lineWidth = su(e.r) * (pass ? 0.7 : 1.8);
+    ctx.beginPath();
+    for (let s=0;s<=10;s++){
+      const p = s/10;
+      const xx = lerp(hx, tx, p);
+      const yy = lerp(py, ty, p) + Math.sin(RUN.t*5.0 + e.ph + p*4.6)*su(e.r*0.55)*p;
+      s ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = e.foul ? C.eelHi : C.eel;
+  ctx.beginPath(); ctx.arc(hx, py, su(e.r)*1.0, 0, TAU); ctx.fill();
+  ctx.fillStyle = C.gold; ctx.beginPath();
+  ctx.arc(hx + e.dir*su(1.5), py-su(1.2), Math.max(1,su(1.0)), 0, TAU); ctx.fill();
+  ctx.restore();
+}
+/* The line. This is the whole game in one shape: it reddens as it frays,
+   and every hazard fouling it is ringed — that ring is the forecast of the
+   cut you will take if you reel through it. */
+function drawLine(){
+  if (HK.mode === 'idle' && HK.y <= 0.5) {
+    ctx.strokeStyle = rgba(C.line, 0.5); ctx.lineWidth = Math.max(1, su(0.6));
+    ctx.beginPath(); ctx.moveTo(sx(BOAT.x), sy(-1)); ctx.lineTo(sx(HK.x), sy(HK.y)); ctx.stroke();
+    return;
+  }
+  const f = clamp(HK.fray, 0, 1);
+  const col = mix(C.line, C.red, Math.pow(f, 1.5));   // stays pale until it matters
+  const wob = f > 0.5 ? (f-0.5)*2 : 0;
+  /* THE TRAIL, drawn from the same samples the reel retraces. If this were
+     a straight line to the boat the picture would promise an exit path the
+     physics does not use. */
+  const path = () => {
+    ctx.beginPath();
+    ctx.moveTo(sx(TRAIL[0]), sy(-0.5));
+    const top = Math.max(0, Math.floor((CAM.y - 20)/K.TSTEP));
+    if (top > 0) ctx.moveTo(sx(TRAIL[Math.min(top, TN-1)]), sy(top*K.TSTEP));
+    for (let i=top; i<TN; i++){
+      const yy = i*K.TSTEP;
+      if (yy > CAM.y + STAGE.VH + 20) break;
+      const jit = wob ? Math.sin(RUN.t*46 + i*1.7)*su(1.3)*wob : 0;
+      ctx.lineTo(sx(TRAIL[i]) + jit, sy(yy));
+    }
+    ctx.lineTo(sx(HK.x), sy(HK.y));
+  };
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (f > 0.25){
+    ctx.strokeStyle = rgba(C.red, f*0.45);
+    ctx.lineWidth = Math.max(1, su(2.6)*f); path(); ctx.stroke();
+  }
+  ctx.strokeStyle = col;
+  ctx.lineWidth = Math.max(1, su(0.9) * (1 - 0.35*f));
+  path(); ctx.stroke();
+  ctx.restore();
+  // fouling rings — the exit-lane forecast
+  for (let i=0;i<ENT.length;i++){
+    const e = ENT[i]; if (!e.live || !e.foul) continue;
+    const px = sx(e.x), py = sy(e.y);
+    if (py < -40 || py > STAGE.h+40) continue;
+    const pu = 0.6 + 0.4*Math.sin(RUN.t*9);
+    /* the SAME radius the sim fouls on — a ring that under-draws the rule is
+       a lie the player pays for on the climb */
+    ctx.strokeStyle = rgba(C.red, 0.5 + 0.35*pu);
+    ctx.lineWidth = Math.max(1.2, su(1.2));
+    ctx.beginPath(); ctx.arc(px, py, su(e.foulR)*(0.98+0.04*pu), 0, TAU); ctx.stroke();
+    ctx.strokeStyle = rgba(C.red, 0.22);
+    ctx.setLineDash([su(2), su(2.6)]);
+    ctx.beginPath(); ctx.arc(px, py, su(e.foulR), 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+/* The catch is threaded ON the line, above the hook — that is where a
+   stringer actually hangs, and it keeps the hook itself readable. Drawn as a
+   small train following the trail so a fat haul is legible at a glance. */
+function drawStringer(){
+  if (!HK.stringer.length) return;
+  const n = HK.stringer.length;
+  for (let i=0;i<n;i++){
+    const s = HK.stringer[n-1-i], f = FISH[s.t];
+    const yy = HK.y - (i+1)*5.6;
+    if (yy < 1) break;
+    const xx = trailX(yy) + Math.sin(RUN.t*3.4 + s.ph)*1.4;
+    const px = sx(xx), py = sy(yy);
+    if (py < -30 || py > STAGE.h+30) continue;
+    const L = su(f.len)*0.44, H = su(f.r)*0.78;
+    ctx.save(); ctx.translate(px, py);
+    ctx.rotate(Math.PI/2 + Math.sin(RUN.t*4 + s.ph)*0.22);
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = f.b;
+    ctx.beginPath(); ctx.moveTo(-L*0.40,0);
+    ctx.lineTo(-L*0.72,-H*0.62); ctx.lineTo(-L*0.72,H*0.62); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = f.a;
+    ctx.beginPath(); ctx.ellipse(0,0,L*0.46,H*0.5,0,0,TAU); ctx.fill();
+    ctx.strokeStyle = rgba(C.ink, 0.35); ctx.lineWidth = Math.max(0.7, su(0.35));
+    ctx.beginPath(); ctx.ellipse(0,0,L*0.46,H*0.5,0,0,TAU); ctx.stroke();
+    ctx.restore();
+  }
+}
+function drawHook(){
+  const px = sx(HK.x), py = sy(HK.y);
+  const R = su(K.HOOK_R);
+  ctx.save(); ctx.translate(px, py);
+  // fray ring — the meter lives AT the focal point, not in the HUD
+  if (HK.fray > 0.02){
+    const f = clamp(HK.fray,0,1);
+    ctx.strokeStyle = rgba(C.red, 0.85); ctx.lineWidth = Math.max(1.6, R*0.34);
+    ctx.beginPath(); ctx.arc(0,0,R*2.1, -Math.PI/2, -Math.PI/2 + TAU*f); ctx.stroke();
+    ctx.strokeStyle = rgba(C.ink, 0.35); ctx.lineWidth = Math.max(1, R*0.34);
+    ctx.beginPath(); ctx.arc(0,0,R*2.1, -Math.PI/2 + TAU*f, -Math.PI/2 + TAU); ctx.stroke();
+  }
+  // a lure glow so the hook reads around a thumb
+  ctx.save(); ctx.globalCompositeOperation='lighter';
+  const g = ctx.createRadialGradient(0,0,0,0,0,R*3.4);
+  g.addColorStop(0, rgba(C.goldHi, 0.42)); g.addColorStop(1, rgba(C.goldHi,0));
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,R*3.4,0,TAU); ctx.fill(); ctx.restore();
+  // the hook itself
+  ctx.strokeStyle = C.cream; ctx.lineWidth = Math.max(1.4, R*0.44); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(0,-R*1.5); ctx.lineTo(0, R*0.15);
+  ctx.arc(-R*0.62, R*0.15, R*0.62, 0, Math.PI, false); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-R*1.24, R*0.15); ctx.lineTo(-R*1.0,-R*0.62); ctx.stroke();
+  ctx.fillStyle = C.gold;
+  ctx.beginPath(); ctx.ellipse(R*0.05, -R*0.55, R*0.42, R*0.72, 0.2, 0, TAU); ctx.fill();
+  ctx.strokeStyle = rgba(C.goldLo,0.9); ctx.lineWidth=Math.max(1,R*0.16); ctx.stroke();
+  ctx.restore();
+  // the at-risk pool rides with the hook (C6 — never confusable with score)
+  if (HK.pool > 0){
+    const m = depthMult(HK.maxD);
+    const txt = commas(Math.round(HK.pool*m));
+    ctx.save();
+    ctx.font = '800 '+(13*STAGE.u).toFixed(1)+'px system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const wTxt = ctx.measureText(txt).width + 14*STAGE.u;
+    const bx = px, by = py - R*3.6;
+    ctx.fillStyle = rgba(C.ink, 0.62);
+    rr(ctx, bx-wTxt/2, by-9*STAGE.u, wTxt, 18*STAGE.u, 9*STAGE.u); ctx.fill();
+    ctx.strokeStyle = rgba(C.gold, 0.75); ctx.lineWidth = Math.max(1, 1.2*STAGE.u); ctx.stroke();
+    ctx.fillStyle = C.goldHi; ctx.fillText(txt, bx, by);
+    ctx.restore();
+  }
+}
+function drawBoat(){
+  const py = sy(-0.5) + BOAT.bob*STAGE.S;
+  const px = sx(BOAT.x);
+  if (py < -60 || py > STAGE.h + 40) return;
+  // waterline
+  ctx.strokeStyle = rgba(C.white, 0.30); ctx.lineWidth = Math.max(1, su(0.8));
+  ctx.beginPath();
+  for (let i=0;i<=24;i++){
+    const xx = i/24*K.W;
+    const yy = -0.5 + Math.sin(RUN.t*1.7 + i*0.55)*1.0;
+    i ? ctx.lineTo(sx(xx), sy(yy)) : ctx.moveTo(sx(xx), sy(yy));
+  }
+  ctx.stroke();
+  const W = su(17), H = su(7);
+  ctx.save(); ctx.translate(px, py); ctx.rotate(Math.sin(RUN.t*1.6)*0.05);
+  ctx.fillStyle = C.boatLo;
+  ctx.beginPath(); ctx.moveTo(-W,-H*0.5); ctx.lineTo(W,-H*0.5);
+  ctx.lineTo(W*0.62,H*0.9); ctx.lineTo(-W*0.62,H*0.9); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = C.boat;
+  ctx.beginPath(); ctx.moveTo(-W,-H*0.5); ctx.lineTo(W,-H*0.5);
+  ctx.lineTo(W*0.80,H*0.15); ctx.lineTo(-W*0.80,H*0.15); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = C.boatHi; ctx.fillRect(-W, -H*0.62, W*2, H*0.22);
+  // the rod, angled toward the hook
+  const ang = Math.atan2(HK.y - 0, HK.x - BOAT.x);
+  ctx.save(); ctx.rotate(clamp(ang - Math.PI/2, -0.7, 0.7)*0.5);
+  ctx.strokeStyle = C.ink2; ctx.lineWidth = Math.max(1.2, su(0.9)); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(0,-H*0.6); ctx.lineTo(su(1.5), -su(13)); ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
+/* -------------------------------------------------------------- FX layer */
+function drawFX(){
+  for (let i=0;i<FX.parts.length;i++){
+    const p = FX.parts[i]; if (!p.live) continue;
+    const a = clamp(p.life/p.max, 0, 1);
+    const py = sy(p.y); if (py < -30 || py > STAGE.h+30) continue;
+    ctx.globalAlpha = a * (p.sh ? 1 : 0.8);
+    ctx.fillStyle = p.sh ? C.white : p.c;
+    ctx.beginPath(); ctx.arc(sx(p.x), py, su(p.r)*(0.5+a*0.6), 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (let i=0;i<FX.rings.length;i++){
+    const g = FX.rings[i]; if (!g.live) continue;
+    const t = 1 - g.life/g.max, a = 1-t;
+    ctx.globalAlpha = a*0.85; ctx.strokeStyle = g.c;
+    ctx.lineWidth = Math.max(1, su(g.w)*(1-t*0.6));
+    ctx.beginPath(); ctx.arc(sx(g.x), sy(g.y), su(lerp(g.r,g.r1,eOut(t))), 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  for (let i=0;i<FX.floats.length;i++){
+    const f = FX.floats[i]; if (!f.live) continue;
+    const t = 1 - f.life/f.max;
+    ctx.globalAlpha = clamp(1 - t*t, 0, 1);
+    ctx.font = '900 '+(15*STAGE.u*f.sz).toFixed(1)+'px system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.lineWidth = 3.4*STAGE.u; ctx.strokeStyle = rgba(C.ink, 0.65);
+    const py = sy(f.y) - 34*STAGE.u*eOut(t);
+    ctx.strokeText(f.txt, sx(f.x), py);
+    ctx.fillStyle = f.c; ctx.fillText(f.txt, sx(f.x), py);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ==================================================================== HUD */
+const HITS = [];
+function hit(id,x,y,w,h){ HITS.push({id,x,y,w,h}); }
+
+function drawHud(){
+  const w = STAGE.w, u = STAGE.u;
+  const y0 = STAGE.hudY, hh = STAGE.hudH;
+  ctx.save();
+  ctx.fillStyle = rgba(C.ink, 0.42);
+  rr(ctx, 5*u, y0, w-10*u, hh, 16*u); ctx.fill();
+
+  /* committed score — left */
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.font = '900 '+(34*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = RUN.pbHit ? C.gold : C.white;
+  ctx.fillText(commas(RUN.shown), 17*u, y0 + 36*u);
+  ctx.font = '800 '+(9.5*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = rgba(C.white, 0.5);
+  ctx.fillText('CATCH', 18*u, y0 + 48*u);
+
+  /* countdown — centre, mandatory, takes visible damage */
+  const left = RUN.left;
+  const hot = left <= K.CLOSE_AT;
+  const pulse = hot ? (0.85 + 0.15*Math.sin(RUN.t*Math.PI*2)) : 1;
+  const tooDeep = HK.pool>0 && timeToSurface() > left && RUN.state==='play';
+  ctx.textAlign='center';
+  ctx.font = '900 '+((hot?33:30)*u*pulse).toFixed(1)+'px ui-monospace,SFMono-Regular,Menlo,monospace';
+  ctx.fillStyle = tooDeep ? C.hot : hot ? C.red : C.white;
+  const mm = Math.floor(left/60), ss = Math.floor(left%60);
+  const txt = left > 20 ? (mm+':'+String(ss).padStart(2,'0'))
+                        : left.toFixed(1);
+  ctx.fillText(txt, w/2, y0 + 34*u);
+  ctx.font = '800 '+(8.5*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = tooDeep ? C.hot : rgba(C.white, 0.5);
+  ctx.fillText(tooDeep ? 'TOO DEEP' : hot ? 'LAST CALL' : BANDS[HK.bandNow].n, w/2, y0 + 47*u);
+
+  /* depth multiplier — right, colour-shifts by band */
+  const m = depthMult(Math.max(HK.maxD, HK.y));
+  ctx.textAlign='right';
+  ctx.font = '900 '+(30*u*(1+0.12*FX.bandFade)).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = m >= 4 ? C.gold : m >= 2.4 ? C.goldHi : C.white;
+  ctx.fillText('×'+m.toFixed(1), w-17*u, y0 + 34*u);
+  ctx.font = '800 '+(8.5*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = rgba(C.white, 0.5);
+  ctx.fillText(Math.round(Math.max(HK.maxD,HK.y)/K.FM)+' FM', w-18*u, y0 + 46*u);
+
+  /* streak pips — the visual twin of the audio ladder */
+  const tier = RUN.streak>=40?4:RUN.streak>=24?3:RUN.streak>=12?2:RUN.streak>=5?1:0;
+  for (let i=0;i<4;i++){
+    const px = w - 17*u - i*8*u, py = y0 + 56*u;
+    ctx.beginPath(); ctx.arc(px, py, 2.6*u, 0, TAU);
+    ctx.fillStyle = i < tier ? C.gold : rgba(C.white, 0.18); ctx.fill();
+  }
+
+  /* clock-damage ledger, so the docked seconds stay accounted for */
+  if (RUN.clockDmg > 0){
+    ctx.textAlign='center'; ctx.font='800 '+(8.5*u).toFixed(1)+'px system-ui,sans-serif';
+    ctx.fillStyle = rgba(C.red, 0.8);
+    ctx.fillText('−'+RUN.clockDmg.toFixed(1)+'s', w/2, y0 + 58*u);
+  }
+  ctx.restore();
+  drawMeter(); drawSounder();
+}
+
+/* left rail — the score meter with the persistent BEST marker */
+function drawMeter(){
+  const r = STAGE.rail, u = STAGE.u;
+  ctx.save();
+  rr(ctx, r.lx, r.y, r.lw, r.h, r.lw/2); ctx.fillStyle = rgba(C.ink, 0.40); ctx.fill();
+  /* headroom for the at-risk band, or a good run pins the fill and the pool
+     renders as a brick jammed against the top of the rail */
+  const ref = Math.max(SAVE.best*1.2, RUN.shown*1.35 + 400, 2600);
+  const f = clamp(RUN.shown/ref, 0, 1);
+  const fh = r.h*f;
+  const g = ctx.createLinearGradient(0, r.y+r.h, 0, r.y);
+  g.addColorStop(0, C.grnLo); g.addColorStop(0.6, C.gold); g.addColorStop(1, C.goldHi);
+  ctx.save(); rr(ctx, r.lx, r.y, r.lw, r.h, r.lw/2); ctx.clip();
+  ctx.fillStyle = g; ctx.fillRect(r.lx, r.y+r.h-fh, r.lw, fh);
+  /* the at-risk pool sits ABOVE the committed fill, hatched — never counted
+     as score until it is banked (C6) */
+  if (HK.pool > 0){
+    const pv = HK.pool*depthMult(HK.maxD);
+    const ph = r.h*clamp(pv/ref, 0, 1-f);
+    const py0 = r.y+r.h-fh-ph;
+    ctx.fillStyle = rgba(C.ink, 0.55); ctx.fillRect(r.lx, py0, r.lw, ph);
+    ctx.strokeStyle = rgba(C.hot, 0.95); ctx.lineWidth = Math.max(1, 1.6*u);
+    for (let yy = py0 - r.lw; yy < r.y+r.h-fh; yy += 6*u){
+      ctx.beginPath(); ctx.moveTo(r.lx, Math.max(py0, yy));
+      ctx.lineTo(r.lx+r.lw, Math.min(r.y+r.h-fh, yy+r.lw)); ctx.stroke();
+    }
+    ctx.strokeStyle = C.hotHi; ctx.lineWidth = Math.max(1, 1.4*u);
+    ctx.beginPath(); ctx.moveTo(r.lx, py0); ctx.lineTo(r.lx+r.lw, py0); ctx.stroke();
+  }
+  ctx.restore();
+  if (SAVE.best > 0){
+    const by = r.y + r.h - r.h*clamp(SAVE.best/ref,0,1);
+    ctx.strokeStyle = rgba(C.white, 0.85); ctx.lineWidth = Math.max(1.4, 1.6*u);
+    ctx.setLineDash([3*u, 3*u]);
+    ctx.beginPath(); ctx.moveTo(r.lx-1.5*u, by); ctx.lineTo(r.lx+r.lw+1.5*u, by); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.save(); ctx.translate(r.lx+r.lw*0.5, by-7*u);
+    ctx.font='800 '+(7.6*u).toFixed(1)+'px system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.fillStyle=rgba(C.white,0.85); ctx.fillText('BEST',0,0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* right rail — THE SOUNDER. The whole column at a glance: your depth, the
+   bands, and every hazard currently fouling your line. It is the exit-lane
+   instrument, and it is the only thing the greed decision needs. */
+function drawSounder(){
+  const r = STAGE.rail, u = STAGE.u;
+  const x = r.rx, w = r.rw, y = r.y, h = r.h;
+  ctx.save();
+  rr(ctx, x, y, w, h, 6*u); ctx.fillStyle = rgba(C.ink, 0.46); ctx.fill();
+  ctx.save(); rr(ctx, x, y, w, h, 6*u); ctx.clip();
+  // band strip
+  for (let i=0;i<BANDS.length;i++){
+    const d0 = BANDS[i].d, d1 = (i+1<BANDS.length) ? BANDS[i+1].d : K.DMAX;
+    const yy0 = y + h*(d0/K.DMAX), yy1 = y + h*(d1/K.DMAX);
+    ctx.fillStyle = rgba(BANDS[i].a, 0.55); ctx.fillRect(x, yy0, w, yy1-yy0);
+    ctx.fillStyle = rgba(C.ink, 0.35); ctx.fillRect(x, yy0, w, Math.max(1,0.9*u));
+  }
+  // your line: surface down to the hook
+  const hy = y + h*clamp(HK.y/K.DMAX,0,1);
+  const live = HK.mode==='dive' || HK.mode==='reel';
+  ctx.strokeStyle = live ? mix(C.line, C.red, clamp(HK.fray,0,1)) : rgba(C.line,0.35);
+  ctx.lineWidth = Math.max(1.4, 1.8*u);
+  ctx.beginPath(); ctx.moveTo(x+w/2, y); ctx.lineTo(x+w/2, hy); ctx.stroke();
+  // fouling pips
+  for (let i=0;i<ENT.length;i++){
+    const e = ENT[i]; if (!e.live || !e.foul) continue;
+    const py = y + h*clamp(e.y/K.DMAX,0,1);
+    ctx.fillStyle = C.red;
+    ctx.beginPath(); ctx.arc(x+w/2, py, 3.0*u, 0, TAU); ctx.fill();
+    ctx.strokeStyle = rgba(C.redHi, 0.6+0.4*Math.sin(RUN.t*9)); ctx.lineWidth=Math.max(1,1.1*u);
+    ctx.beginPath(); ctx.arc(x+w/2, py, 5.2*u, 0, TAU); ctx.stroke();
+  }
+  // the hook marker
+  ctx.fillStyle = C.goldHi;
+  ctx.beginPath(); ctx.moveTo(x+w/2, hy+4*u); ctx.lineTo(x-1*u, hy);
+  ctx.lineTo(x+w/2, hy-4*u); ctx.lineTo(x+w+1*u, hy); ctx.closePath(); ctx.fill();
+  // deepest-this-dive tick
+  if (HK.maxD > 4){
+    const my = y + h*clamp(HK.maxD/K.DMAX,0,1);
+    ctx.strokeStyle = rgba(C.gold,0.8); ctx.lineWidth=Math.max(1,1.3*u);
+    ctx.beginPath(); ctx.moveTo(x, my); ctx.lineTo(x+w, my); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.restore();
+}
+
+/* the zero-text hint: one animated finger, gone forever on first input */
+function drawHint(){
+  if (RUN.touched || RUN.t < 1.0 || RUN.state !== 'play') return;
+  const u = STAGE.u, t = (RUN.t*0.9) % 2.2;
+  const p = clamp(t/1.5, 0, 1);
+  const px = sx(50), py = STAGE.PY + STAGE.PH*0.40 + eOut(p)*STAGE.PH*0.26;
+  const press = t < 1.6 ? 1 : 0;
+  ctx.save();
+  ctx.globalAlpha = t < 1.9 ? 1 : clamp((2.2-t)/0.3,0,1);
+  ctx.strokeStyle = rgba(C.white, 0.85); ctx.lineWidth = 2.2*u;
+  ctx.beginPath(); ctx.arc(px, py, (press?13:16)*u, 0, TAU); ctx.stroke();
+  ctx.fillStyle = rgba(C.white, press?0.35:0.14);
+  ctx.beginPath(); ctx.arc(px, py, (press?13:16)*u, 0, TAU); ctx.fill();
+  ctx.strokeStyle = rgba(C.white,0.5); ctx.lineWidth=1.6*u; ctx.setLineDash([4*u,4*u]);
+  ctx.beginPath(); ctx.moveTo(px, STAGE.PY + STAGE.PH*0.40);
+  ctx.lineTo(px, STAGE.PY + STAGE.PH*0.66); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font='800 '+(11*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.textAlign='center'; ctx.fillStyle=rgba(C.white,0.8);
+  ctx.fillText('HOLD', px, py + 30*u);
+  ctx.restore();
+}
+
+/* ================================================================= RESULT */
+function gapLine(){
+  const s = RUN.score;
+  const cands = [];
+  if (SAVE.best > s) cands.push({v: SAVE.best - s, t:'TO YOUR BEST'});
+  const med = SAVE.recent.length >= 3
+    ? SAVE.recent.slice().sort((a,b)=>a-b)[Math.floor(SAVE.recent.length/2)] : 0;
+  if (med > s) cands.push({v: med - s, t:'TO YOUR MEDIAN'});
+  const step = s < 2000 ? 500 : 1000;
+  const nxt = (Math.floor(s/step)+1)*step;
+  cands.push({v: nxt - s, t:'TO '+commas(nxt)});
+  if (RUN.lostAtSiren > 0) cands.push({v: RUN.lostAtSiren, t:'LEFT ON THE LINE'});
+  cands.sort((a,b)=>a.v-b.v);
+  return cands[0];
+}
+function drawResult(){
+  const w = STAGE.w, h = STAGE.h, u = STAGE.u, t = RUN.overT;
+  ctx.fillStyle = rgba(C.ink, clamp((t-0.167)*2.4, 0, 0.72)); ctx.fillRect(0,0,w,h);
+  if (t < 0.5) return;
+  const p = clamp((t-0.5)/0.32, 0, 1), yo = (1-eOut(p))*h*0.3;
+  const ph = 250*u, py = h - ph - 22*u + yo;
+  ctx.save();
+  rr(ctx, 16*u, py, w-32*u, ph, 22*u);
+  ctx.fillStyle = rgba(C.ink2, 0.97); ctx.fill();
+  ctx.strokeStyle = rgba(C.white, 0.10); ctx.lineWidth = 1.4*u; ctx.stroke();
+
+  ctx.textAlign='center';
+  ctx.font='800 '+(11*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle=rgba(C.white,0.5); ctx.fillText('SIREN', w/2, py+26*u);
+
+  const cu = clamp((t-0.55)/0.35, 0, 1);
+  const shown = Math.round(RUN.score*eOut(cu));
+  ctx.font='900 '+(56*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = (RUN.score >= SAVE.best && RUN.score>0) ? C.gold : C.white;
+  ctx.fillText(commas(shown), w/2, py+80*u);
+
+  const g = gapLine();
+  ctx.font='900 '+(19*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = C.hotHi;
+  ctx.fillText('+'+commas(g.v)+'  '+g.t, w/2, py+112*u);
+
+  ctx.font='800 '+(10.5*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle=rgba(C.white,0.55);
+  ctx.fillText(RUN.catches+' FISH   ·   '+RUN.banks+' HAULS   ·   '+RUN.snaps+' SNAPS'
+    + '   ·   '+Math.round(RUN.deepest/K.FM)+' FM', w/2, py+138*u);
+
+  const bw = w*0.56, bh = 56*u, bx = (w-bw)/2, by = py + ph - bh - 24*u;
+  const live = t >= K.OVER_HOLD;
+  const bp = live ? eBack(clamp((t-K.OVER_HOLD)/0.28,0,1)) : 0;
+  ctx.save(); ctx.translate(bx+bw/2, by+bh/2); ctx.scale(0.7+0.3*bp, 0.7+0.3*bp);
+  rr(ctx, -bw/2, -bh/2, bw, bh, bh/2);
+  ctx.fillStyle = live ? C.gold : rgba(C.gold,0.35); ctx.fill();
+  ctx.font='900 '+(21*u).toFixed(1)+'px system-ui,sans-serif';
+  ctx.fillStyle = C.ink; ctx.textBaseline='middle';
+  ctx.fillText('CAST AGAIN', 0, 1*u);
+  ctx.restore();
+  if (live) hit('retry', bx, by, bw, bh);
+  ctx.restore();
+}
+
+/* ================================================================== DRAW */
+function draw(){
+  const w = STAGE.w, h = STAGE.h;
+  HITS.length = 0;
+  ctx.save();
+  const sh = Math.pow(FX.trauma, 3);
+  if (sh > 0.001){
+    const tt = performance.now()/1000*25;
+    ctx.translate(w/2, h/2);
+    ctx.rotate(2.0*Math.PI/180 * sh * noise1(tt,3.1));
+    ctx.translate(-w/2 + 14*sh*noise1(tt,1.1)*STAGE.u*2.6,
+                  -h/2 + 14*sh*noise1(tt,2.2)*STAGE.u*2.6);
+  }
+  drawWater();
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, STAGE.PY - 40*STAGE.u, w, STAGE.PH + 60*STAGE.u); ctx.clip();
+  /* the §7.9b mistake push — deliberately weaker than the siren's pull-back */
+  if (FX.push !== 1){
+    ctx.translate(sx(FX.pushX), sy(FX.pushY)); ctx.scale(FX.push, FX.push);
+    ctx.translate(-sx(FX.pushX), -sy(FX.pushY));
+  }
+  drawShafts(); drawSnow(); drawCurrents(); drawKelp(); drawSeabed();
+  for (let i=0;i<ENT.length;i++){ const e=ENT[i]; if (e.live && e.kind===1) drawFish(e); }
+  for (let i=0;i<ENT.length;i++){ const e=ENT[i]; if (e.live && e.kind===3) drawEel(e); }
+  for (let i=0;i<ENT.length;i++){ const e=ENT[i]; if (e.live && e.kind===2) drawJelly(e); }
+  drawLine(); drawStringer(); drawHook(); drawFX();
+  drawBoat();
+  ctx.restore();
+  /* depth vignette — the abyss closes in */
+  const dv = clamp(HK.y/K.DMAX, 0, 1);
+  const vg = ctx.createRadialGradient(w*0.5, STAGE.PY+STAGE.PH*0.45, STAGE.PH*0.22,
+                                      w*0.5, STAGE.PY+STAGE.PH*0.45, STAGE.PH*0.92);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,'+(0.34+0.34*dv).toFixed(2)+')');
+  ctx.fillStyle = vg; ctx.fillRect(0,0,w,h);
+  /* closing phase: a warm rim on the whole frame (palette shift 3) */
+  if (FX.heat > 0.01){
+    const hg = ctx.createLinearGradient(0, STAGE.PY, 0, STAGE.PY+STAGE.PH);
+    hg.addColorStop(0, rgba(C.hot, 0.16*FX.heat)); hg.addColorStop(0.5, rgba(C.hot,0));
+    hg.addColorStop(1, rgba(C.red, 0.12*FX.heat));
+    ctx.fillStyle = hg; ctx.fillRect(0,0,w,h);
+  }
+  /* desaturate everything but the cause, for 167 ms after a snap */
+  if (FX.desat > 0.01){
+    ctx.fillStyle = rgba('#0A1424', FX.desat*0.42); ctx.fillRect(0,0,w,h);
+  }
+  ctx.restore();
+
+  drawHud();
+  drawHint();
+  if (RUN.state === 'over') drawResult();
+  if (FX.flash > 0.002){
+    ctx.fillStyle = rgba(FX.flashCol, FX.flash*0.5); ctx.fillRect(0,0,w,h);
+  }
+}
+
+/* ================================================================= INPUT */
+function localPt(e){ const r = cv.getBoundingClientRect(); return { x:e.clientX-r.left, y:e.clientY-r.top }; }
+function testHits(x,y){
+  for (let i=HITS.length-1;i>=0;i--){ const h=HITS[i];
+    if (x>=h.x && x<=h.x+h.w && y>=h.y && y<=h.y+h.h) return h; }
+  return null;
+}
+let ptrId = -1, ptrSX = 0;
+function pointerDown(e){
+  S.init(); S.on = !!SAVE.sound;
+  const p = localPt(e);
+  if (RUN.state === 'over'){
+    const h = testHits(p.x, p.y);
+    if (h && h.id === 'retry'){ S.ui(1); startRun((RUN.seed*1664525+1013904223)>>>0); }
+    e.preventDefault(); return;
+  }
+  ptrId = e.pointerId; ptrSX = p.x;
+  PTR.down = true; RUN.touched = true;
+  /* grab offset so the hook never teleports under the thumb (§8.3) */
+  PTR.x = ux(p.x);
+  PTR.grab = clamp(HK.x - PTR.x, -14, 14); PTR.gt = K.GRAB_DECAY;
+  e.preventDefault();
+}
+function pointerMove(e){
+  if (!PTR.down || e.pointerId !== ptrId) return;
+  const p = localPt(e); ptrSX = p.x; PTR.x = ux(p.x);
+  e.preventDefault();
+}
+function pointerUp(e){
+  if (e.pointerId !== ptrId) return;
+  PTR.down = false; ptrId = -1; e.preventDefault();
+}
+cv.addEventListener('pointerdown', pointerDown, {passive:false});
+cv.addEventListener('pointermove', pointerMove, {passive:false});
+window.addEventListener('pointerup', pointerUp, {passive:false});
+window.addEventListener('pointercancel', pointerUp, {passive:false});
+cv.addEventListener('contextmenu', e=>e.preventDefault());
+
+/* ================================================================== LOOP */
+let acc = 0, last = 0, running = true;
+const FIXED = 1/60;
+function frame(now){
+  requestAnimationFrame(frame);
+  if (!running) return;
+  if (!last) last = now;
+  let dt = (now-last)/1000; last = now;
+  if (dt > 0.25) dt = 0.25;
+  /* hitstop is presentation-only. It must never pause the countdown, or
+     mistakes buy run time and the whole format inverts (§7.9b). */
+  let simDt = dt;
+  if (FX.hitstop > 0){ FX.hitstop -= dt; simDt = 0; }
+  acc += simDt;
+  let guard = 0;
+  while (acc >= FIXED && guard++ < 5){ simStep(FIXED); acc -= FIXED; }
+  if (PTR.gt > 0){ PTR.gt -= dt; PTR.grab *= clamp(PTR.gt/K.GRAB_DECAY, 0, 1); }
+  RUN.shown += (RUN.score - RUN.shown) * (1 - Math.exp(-11*dt));
+  if (Math.abs(RUN.score - RUN.shown) < 0.6) RUN.shown = RUN.score;
+  stepCam(dt); stepFX(dt);
+  draw();
+}
+
+/* ================================================================ HARNESS
+   The bot fleet drives the sim through here. Nothing below touches the DOM.
+   __FA.pump(sec, fn) runs a whole session headless at a fixed tick; the
+   degenerate bots are ALSO driven through the real pointer path (see
+   _fathombot.js dom()) because that is where input bugs hide.             */
+window.__FA = {
+  K, C, HK, BOAT, RUN, FX, ENT, ROWS, FISH, BANDS, STAGE, SAVE, PTR,
+  depthMult, dEff, timeToSurface, frayRate, bandAt, segDist, reelSpeed, sinkSpeed,
+  TRAIL, trailX, trailN(){ return TN; }, laneAt, laneMin,
+  start(seed){ RENDER = false; startRun(seed||1); },
+  startFull(seed){ startRun(seed||1); },
+  render(on){ RENDER = !!on; },
+  step(dt){ simStep(dt||FIXED); },
+  input(down, x){ PTR.down = !!down; if (down) RUN.touched = true;
+    if (x !== undefined) PTR.x = clamp(x, 0, K.W); PTR.grab = 0; },
+  pump(sec, fn, dt){
+    dt = dt || FIXED;
+    const n = Math.ceil((sec || K.RUN_TIME + 1)/dt);
+    for (let i=0;i<n;i++){
+      if (RUN.state === 'over') break;
+      if (fn) fn(this.state());
+      simStep(dt);
+    }
+    return this.result();
+  },
+  state(){ return { x:HK.x, y:HK.y, vx:HK.vx, mode:HK.mode, fray:HK.fray,
+    pool:HK.pool, n:HK.n, maxD:HK.maxD, t:RUN.t, left:RUN.left, score:RUN.score,
+    streak:RUN.streak, dEff:RUN.dEff, boat:BOAT.x }; },
+  result(){ return { score:RUN.score, catches:RUN.catches, banks:RUN.banks,
+    snaps:RUN.snaps, deepest:Math.round(RUN.deepest/K.FM), best:RUN.bestBank,
+    streak:RUN.bestStreak, clock:Math.round(RUN.clockDmg*10)/10,
+    lost:RUN.lostAtSiren, log:RUN.log.slice() }; },
+  /* everything live within `rad` of the hook — the bots' only sensor */
+  scan(rad){
+    const out = [];
+    for (let i=0;i<ENT.length;i++){
+      const e = ENT[i]; if (!e.live || e.gone>0) continue;
+      if (Math.abs(e.y - HK.y) > (rad||150)) continue;
+      out.push({k:e.kind, t:e.t, x:e.x, y:e.y, r:e.r, val:e.val, foul:e.foul});
+    }
+    return out;
+  },
+  freeze(v){ running = !v; },
+  draw(){ draw(); },
+  /* a backgrounded tab never fires rAF — advance() runs sim AND present */
+  advance(sec, fn, dt){
+    dt = dt || FIXED;
+    const n = Math.ceil((sec||0)/dt);
+    for (let i=0;i<n;i++){
+      if (fn) fn(this.state());
+      simStep(dt);
+      RUN.shown += (RUN.score - RUN.shown)*0.16;
+      stepCam(dt); stepFX(dt);
+    }
+    draw();
+  },
+};
+
+/* ================================================================== BOOT */
+window.addEventListener('resize', ()=>{ resize(); });
+window.addEventListener('orientationchange', ()=>setTimeout(resize, 120));
+document.documentElement.style.setProperty('--sat','env(safe-area-inset-top)');
+resize();
+startRun((Math.random()*1e9)|0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
