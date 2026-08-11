@@ -40,8 +40,16 @@ window.TILE_IMGS = {"skeeball":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABA
 /* ==========================================================================
    PLAYABLE CONFIG — the only block an ad network should ever need to touch.
    ========================================================================== */
+/*  Every destination on this card is the Evermore Arcade app, so the CTA and
+    all three tiles resolve to the SAME store — picked per platform, because
+    sending an Android user to the App Store is a wasted click. Inside AppLovin
+    the container normally intercepts via mraid.open() and routes to the store
+    itself; these links are what a web preview, a direct link, or any container
+    without that hook will use.                                               */
 window.PLAYABLE = Object.assign({
-  ctaUrl:      'https://evermoregames.com/arcade',  // the arcade itself
+  storeIOS:     'https://apps.apple.com/us/app/evermore-arcade-win-cash/id6751233543',
+  storeAndroid: 'https://play.google.com/store/apps/details?id=com.evermoregames.evermorearcade&hl=en_US',
+  ctaUrl:      '',        // left blank: resolved from the two above at load
   ctaLabel:    'OPEN THE ARCADE',
   headline:    'EVERMORE ARCADE',
   subhead:     'Play games, Win Cash. No betting or deposits!',
@@ -58,13 +66,36 @@ window.PLAYABLE = Object.assign({
     /* c0/c1 are sampled from each game's real screenshot, so the painted
        fallback already reads as that game before the previews are dropped in */
     { name:'SKEEBALL', tag:'Roll it up',    c0:'#2aa39c', c1:'#5e1119',
-      url:'', img:(window.TILE_IMGS || {}).skeeball || null },
+      url:'', img:(window.TILE_IMGS || {}).skeeball || null },   // url: UNSET
     { name:'POOL',     tag:'Run the table', c0:'#3fa85c', c1:'#0b3b1d',
-      url:'', img:(window.TILE_IMGS || {}).pool || null },
+      url:'', img:(window.TILE_IMGS || {}).pool || null },       // url: UNSET
     { name:'BUBBLE',   tag:'Match & pop',   c0:'#37b4d8', c1:'#124a71',
-      url:'', img:(window.TILE_IMGS || {}).bubble || null },
+      url:'', img:(window.TILE_IMGS || {}).bubble || null },     // url: UNSET
   ],
 }, window.PLAYABLE || {});
+
+/* Pick the store for the device we are actually on. Exported so it can be
+   unit-tested against real user-agent strings rather than trusted by eye. */
+window.PLAYABLE.resolveStore = function(ua, maxTouch, platform){
+  const P = window.PLAYABLE;
+  ua = ua || navigator.userAgent || '';
+  if (/android/i.test(ua)) return P.storeAndroid;
+  if (/iPad|iPhone|iPod/i.test(ua)) return P.storeIOS;
+  /* iPadOS 13+ reports itself as a Mac; the touch count gives it away */
+  if ((platform || navigator.platform) === 'MacIntel' &&
+      (maxTouch !== undefined ? maxTouch : navigator.maxTouchPoints) > 1) return P.storeIOS;
+  return P.storeIOS;                       // desktop preview: default to iOS
+};
+if (!window.PLAYABLE.ctaUrl) window.PLAYABLE.ctaUrl = window.PLAYABLE.resolveStore();
+
+/* An empty tile url is intentional -- it falls through to the resolved store.
+   Only shout if there is no store to fall through to. */
+(function(){
+  const P = window.PLAYABLE;
+  if ((!P.storeIOS || !P.storeAndroid) && window.console && console.warn)
+    console.warn('[PLAYABLE] storeIOS / storeAndroid not both set — the CTA may ' +
+                 'send the wrong platform to the wrong store.');
+})();
 
 /* Fire the click through whatever container we are inside. Networks each have
    their own hook and none of them are present outside their own player, so try
@@ -190,7 +221,7 @@ const K = {
   HEAT_AURA:     0.22,   // heat above which the ground aura appears
 
   /* audio */
-  MUSIC_VOL:     0.16,   // deliberately low: it plays under everything
+  MUSIC_VOL:     0.13,   // absolute, via a GainNode (see audioInit)
   SFX_SWORD:     0.22,   // the one-shots are mastered at 0 dBFS, so pull them down
   SWORD_GAP:     0.30,   // min seconds between clashes, so they never stack
   SFX_CASH:      0.50,
@@ -363,8 +394,8 @@ function glow(x, y, r, col, a){
    call sites real one-shots would use. AU.on is false in headless runs.
    Every AudioParam value is clamped finite: a NaN into one of these throws and
    kills the frame loop. */
-const AU = { ctx:null, on:true, master:null, buf:{}, music:null,
-             swordI:0, lastCash:-9, lastSword:-9 };
+const AU = { ctx:null, on:true, master:null, musicGain:null, buf:{},
+             musicSrc:null, swordI:0, lastCash:-9, lastSword:-9 };
 
 function b64bytes(dataUrl){
   const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
@@ -373,8 +404,19 @@ function b64bytes(dataUrl){
   return out.buffer;
 }
 
+/* iOS will hand you a SUSPENDED context even from inside a touch handler, and
+   a suspended context plays nothing while an <audio> element carries on
+   regardless. That combination is exactly "music but no effects". */
+function audioResume(){
+  if (AU.ctx && AU.ctx.state !== 'running' && AU.ctx.resume){
+    const pr = AU.ctx.resume();
+    if (pr && pr.catch) pr.catch(function(){});
+  }
+}
+
 function audioInit(){
-  if (AU.ctx || !AU.on) return;
+  if (AU.ctx){ audioResume(); musicPlay(); return; }
+  if (!AU.on) return;
   const C = window.AudioContext || window.webkitAudioContext;
   if (!C) return;
   AU.ctx = new C();
@@ -382,30 +424,42 @@ function audioInit(){
   AU.master.gain.value = 0.45;
   AU.master.connect(AU.ctx.destination);
 
+  /* Music gets its own gain straight to the destination. It used to be an
+     <audio> element, which is why it was deafening on a phone: iOS ignores
+     HTMLMediaElement.volume entirely, so `music.volume = 0.16` silently did
+     nothing and the track played at full system level. A GainNode is honoured
+     everywhere, and it also gives a seamless loop for free. */
+  AU.musicGain = AU.ctx.createGain();
+  AU.musicGain.gain.value = K.MUSIC_VOL;
+  AU.musicGain.connect(AU.ctx.destination);
+
   const clips = window.AUDIO_CLIPS || {};
-  /* the short one-shots go through the AudioContext so they can overlap and
-     fire with no latency; an <audio> element can do neither */
-  for (const name of ['sword0', 'sword1', 'sword2', 'cash']){
+  for (const name of ['sword0', 'sword1', 'sword2', 'cash', 'bgm']){
     if (!clips[name]) continue;
     try {
       AU.ctx.decodeAudioData(b64bytes(clips[name]),
-        function(b){ AU.buf[name] = b; },
+        function(b){ AU.buf[name] = b; if (name === 'bgm') musicPlay(); },
         function(){});
     } catch (e) { /* a clip that will not decode simply stays silent */ }
   }
-  /* the music streams from an element instead: decoding 30 s to PCM would cost
-     ~10 MB of memory for something that only ever loops quietly */
-  if (clips.bgm && !AU.music){
-    AU.music = new Audio(clips.bgm);
-    AU.music.loop = true;
-    AU.music.volume = K.MUSIC_VOL;
-  }
-  musicPlay();
+  audioResume();
 }
+
 function musicPlay(){
-  if (!AU.music || !AU.on) return;
-  const pr = AU.music.play();
-  if (pr && pr.catch) pr.catch(function(){});   // blocked until a real gesture
+  if (!AU.ctx || !AU.on || !AU.buf.bgm || AU.musicSrc) return;
+  audioResume();
+  const src = AU.ctx.createBufferSource();
+  src.buffer = AU.buf.bgm;
+  src.loop = true;
+  src.connect(AU.musicGain);
+  src.start();
+  AU.musicSrc = src;
+}
+function musicStop(){
+  if (!AU.musicSrc) return;
+  try { AU.musicSrc.stop(); } catch (e) { /* already stopped */ }
+  try { AU.musicSrc.disconnect(); } catch (e) { }
+  AU.musicSrc = null;
 }
 function sample(name, gain, rate){
   if (!AU.ctx || !AU.on || !AU.buf[name]) return;
@@ -549,8 +603,9 @@ window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
 /* do not keep playing to an empty room */
 document.addEventListener('visibilitychange', function(){
-  if (!AU.music) return;
-  if (document.hidden) AU.music.pause(); else musicPlay();
+  if (!AU.ctx) return;
+  if (document.hidden){ if (AU.ctx.suspend) AU.ctx.suspend(); }
+  else { audioResume(); musicPlay(); }
 });
 
 /* ============================ WORLD ====================================== */
@@ -2233,7 +2288,7 @@ function hitBtn(p){
   return -1;
 }
 function onDown(ev){
-  audioInit();
+  audioInit(); audioResume();
   const p = localPt(ev);
   if (RUN.state === 'over'){
     /* nothing is tappable until the card has actually arrived, so a player
@@ -2389,7 +2444,13 @@ window.__CD = {
   freeze:  function(v){ frozen = v; },
   sound:   function(v){
     AU.on = v;
-    if (AU.music){ if (v) musicPlay(); else AU.music.pause(); }
+    if (v) musicPlay(); else musicStop();
+  },
+  audio:   function(){
+    return { ctx:AU.ctx ? AU.ctx.state : 'none',
+             decoded:Object.keys(AU.buf),
+             musicPlaying:!!AU.musicSrc,
+             musicGain:AU.musicGain ? +AU.musicGain.gain.value.toFixed(3) : null };
   },
   state:   function(){
     return { t:RUN.t, state:RUN.state, hp:P.hp, x:P.x, y:P.y,
