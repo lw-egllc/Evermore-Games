@@ -194,10 +194,18 @@ body{
 
 .powers-mini{ display:flex; gap:4px; }
 .pmini{
+  position:relative;
   width:22px; height:22px; border-radius:7px; font-size:13px;
   border:2px solid var(--ink); background:var(--opp); color:var(--ink);
   display:grid; place-items:center;
 }
+.pmini .pmn{
+  position:absolute; right:-4px; top:-5px;
+  font-style:normal; font-size:9px; font-weight:900; line-height:1;
+  padding:1px 3px; border-radius:5px;
+  background:var(--good); color:var(--ink); border:1.5px solid var(--ink);
+}
+.pmini .pmn:empty{ display:none; }
 .pmini.spent{ background:rgba(255,255,255,.10); color:rgba(255,255,255,.34); }
 .pmini.fire{ animation:miniFire .5s cubic-bezier(.22,1,.36,1); }
 @keyframes miniFire{ 0%{transform:scale(1)} 40%{transform:scale(1.55)} 100%{transform:scale(1)} }
@@ -213,11 +221,20 @@ body{
 /* the opponent's cards are held, not played — they read as a threat count,
    so they are deliberately much smaller than the player's own hand */
 .hand-opp{ --card-w:60px; min-height:86px; align-items:flex-start; }
-.hand-you{ min-height:150px; align-items:flex-end; }
+/* card height + headroom for the 16px selected-card lift, so a lifted card
+   never rides up into the hint line. Derived from --card-w, so it holds at
+   every breakpoint without a second set of numbers to keep in sync. */
+.hand-you{ min-height:calc(var(--card-w) * 1.42 + 24px); align-items:flex-end; }
 
 /* tall enough to hold the badge outright — at 17px it overflowed onto the
    round bar once the arena compressed on a short viewport */
-.tellrow{ height:21px; flex:none; display:flex; justify-content:center; align-items:center; }
+/* the tell floats over the hand instead of taking a row of its own — with a
+   ~50-battle round every vertical pixel is contested */
+.handwrap{ position:relative; }
+.tellrow{
+  position:absolute; left:0; right:0; bottom:-9px;
+  display:flex; justify-content:center; align-items:center; pointer-events:none; z-index:5;
+}
 .tell{
   font-size:10.5px; font-weight:900; letter-spacing:.1em; line-height:1;
   padding:3px 9px; border-radius:9px;
@@ -325,41 +342,83 @@ body{
 .hand-opp .card.launch{ transform:translateY(112px) scale(.78); opacity:0; }
 .card.swapout{ transition:transform .22s, opacity .22s; transform:translateY(28px) scale(.7); opacity:0; }
 
+/* ── the rank tracker: what VIPER still holds ────────────────────────
+   Public information — every card played is face-up — surfaced so the round
+   is a counting game rather than a memory test. */
+.track{
+  display:grid; grid-template-columns:repeat(13,1fr); gap:2px;
+  padding:4px 3px; border-radius:11px;
+  background:rgba(0,0,0,.24); border:2px solid var(--panel-line);
+}
+.tcell{
+  border-radius:5px; text-align:center; padding:2px 0 1px;
+  background:rgba(255,247,231,.10);
+  transition:background .25s, opacity .25s;
+}
+.tcell .tr{ display:block; font-size:9.5px; font-weight:900; color:var(--cream); line-height:1.05; }
+.tcell .tn{ display:block; font-size:8px; font-weight:800; color:#8FBFB0; line-height:1.05; }
+.tcell[data-n="4"]{ background:rgba(255,111,97,.62); }
+.tcell[data-n="3"]{ background:rgba(255,111,97,.46); }
+.tcell[data-n="2"]{ background:rgba(255,111,97,.30); }
+.tcell[data-n="1"]{ background:rgba(255,111,97,.16); }
+.tcell.out{ opacity:.34; background:rgba(255,255,255,.05); }
+.tcell.out .tr{ text-decoration:line-through; color:#9EC9BB; }
+
 /* ── arena ── */
 /* padding-bottom reserves room for the absolutely-positioned hint/callout,
    which sit on the padding-box edge and so are unaffected by it. Without it
    the hint collides with the player's hand once the arena compresses. */
 .arena{
   flex:1; min-height:0; position:relative;
-  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
-  padding:6px 0 20px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;
+  padding:4px 0 20px;
 }
 .roundbar{
-  display:flex; align-items:center; gap:9px;
-  font-size:10.5px; font-weight:900; letter-spacing:.14em; color:#9DCBBC;
+  display:flex; align-items:center; gap:8px; width:100%;
+  font-size:10px; font-weight:900; letter-spacing:.12em; color:#9DCBBC;
 }
-.rb-sep{ width:4px; height:4px; border-radius:50%; background:#5E9689; }
-.rb-battle{ color:var(--cream); }
+.rb-round{ flex:none; }
+.rb-round.hot{ color:var(--opp); }
+.rb-left{ flex:none; font-variant-numeric:tabular-nums; color:var(--cream); }
+.prog{
+  flex:1; height:7px; border-radius:5px; overflow:hidden;
+  border:2px solid var(--ink); background:rgba(0,0,0,.3);
+}
+.prog-fill{
+  height:100%; width:100%; background:var(--cream);
+  transform-origin:left center; transform:scaleX(0);
+  transition:transform .3s cubic-bezier(.22,1,.36,1);
+}
 
-.battlescore{ display:flex; align-items:center; gap:11px; }
-.bs-side{
-  width:30px; height:30px; border-radius:10px;
+/* running battle tally — this can reach the twenties, so it is digits, big */
+.tally{ display:flex; align-items:center; gap:10px; }
+.t-side{
+  position:relative;
+  min-width:44px; height:34px; padding:0 8px; border-radius:11px;
   border:var(--bw) solid var(--ink);
   display:grid; place-items:center;
-  font-size:16px; font-weight:900; color:var(--ink);
+  font-size:19px; font-weight:900; color:var(--ink);
   box-shadow:var(--shadow-sm);
   font-variant-numeric:tabular-nums;
+  transition:transform .2s;
 }
-.bs-opp{ background:var(--opp); }
-.bs-you{ background:var(--you); }
-.bs-side.bump{ animation:pipPop .42s cubic-bezier(.22,1,.36,1); }
-.bs-dots{ display:flex; gap:5px; }
-.bs-dot{
-  width:9px; height:9px; border-radius:50%;
-  border:2px solid var(--ink); background:rgba(255,255,255,.14);
+.t-opp{ background:var(--opp); }
+.t-you{ background:var(--you); }
+.t-side.lead{ transform:scale(1.08); }
+.t-side.bump{ animation:pipPop .4s cubic-bezier(.22,1,.36,1); }
+.t-label{ font-size:9px; font-weight:900; letter-spacing:.14em; color:#7FB3A4; }
+.floatn{
+  position:absolute; left:50%; top:-4px;
+  font-size:15px; font-weight:900; color:var(--cream);
+  text-shadow:0 2px 0 var(--ink);
+  pointer-events:none;
+  animation:floatUp .7s cubic-bezier(.22,1,.36,1) forwards;
 }
-.bs-dot.you{ background:var(--you); }
-.bs-dot.opp{ background:var(--opp); }
+@keyframes floatUp{
+  from{ transform:translate(-50%,6px) scale(.7); opacity:0 }
+  30%{ transform:translate(-50%,-8px) scale(1.15); opacity:1 }
+  to{ transform:translate(-50%,-30px) scale(1); opacity:0 }
+}
 
 .slots{
   display:flex; align-items:center; justify-content:center; gap:6px;
@@ -428,6 +487,7 @@ body{
 /* ── power bar ── */
 .powerbar{ display:flex; gap:7px; }
 .pbtn{
+  position:relative;
   flex:1; height:50px; cursor:pointer; font-family:inherit;
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
   background:var(--panel-2); color:var(--cream);
@@ -443,6 +503,23 @@ body{
 .pbtn:disabled{ cursor:default; opacity:.4; background:rgba(255,255,255,.07); }
 .pbtn.spent{ cursor:default; opacity:.34; background:rgba(255,255,255,.05); }
 .pbtn.spent .pbtn-l{ text-decoration:line-through; }
+
+/* how many of this power-up you hold — war spoils can stack them */
+.pcount{
+  position:absolute; top:-8px; right:-6px; z-index:2;
+  min-width:20px; height:20px; padding:0 4px; border-radius:7px;
+  border:2.5px solid var(--ink); background:var(--cream); color:var(--ink);
+  display:grid; place-items:center;
+  font-size:11px; font-weight:900; line-height:1;
+  font-variant-numeric:tabular-nums;
+}
+.pcount.multi{ background:var(--good); }
+.pbtn.spent .pcount{ background:rgba(255,255,255,.14); color:rgba(255,255,255,.5); }
+.pbtn.won{ animation:wonPop .7s cubic-bezier(.22,1,.36,1); }
+@keyframes wonPop{
+  0%{ transform:scale(1) } 30%{ transform:scale(1.14); box-shadow:0 3px 0 var(--ink), 0 0 0 6px rgba(99,214,155,.5) }
+  100%{ transform:scale(1) }
+}
 
 /* ── action bar ── */
 .actionbar{ position:relative; height:48px; flex:none; }
@@ -604,25 +681,31 @@ body{
 #screen-result .btn{ width:100%; padding:15px 0; font-size:19px; }
 
 /* ═══════════ small screens ═══════════ */
+@media (max-height:800px){
+  .hand-opp{ --card-w:52px; min-height:76px; }
+  .slot{ width:84px; height:120px; --card-w:84px; }
+}
 @media (max-height:730px){
   :root{ --card-w:88px; }
   .bigtitle{ font-size:72px; }
   .title-fan{ height:110px; }
-  .hand-opp{ --card-w:54px; min-height:78px; }
-  .hand-you{ min-height:132px; }
-  .slot{ width:80px; height:114px; --card-w:80px; }
-  .vs{ width:48px; height:48px; }
+  .hand-opp{ --card-w:48px; min-height:70px; }
+  .slot{ width:78px; height:111px; --card-w:78px; }
+  .vs{ width:46px; height:46px; }
   .powerbar .pbtn{ height:44px; }
   .actionbar{ height:44px; }
   .avatar{ width:33px; height:33px; }
-  .callout .co{ font-size:25px; }
+  .callout .co{ font-size:23px; }
+  .t-side{ height:30px; font-size:17px; }
 }
 @media (max-height:640px){
   :root{ --card-w:76px; }
-  .hand-you{ min-height:116px; }
-  .hand-opp{ --card-w:46px; min-height:66px; }
-  .slot{ width:70px; height:100px; --card-w:70px; }
+  .hand-opp{ --card-w:42px; min-height:62px; }
+  .slot{ width:68px; height:97px; --card-w:68px; }
   .title-rules{ display:none; }
+  .track{ padding:3px 2px; }
+  .tcell .tn{ display:none; }
+  .t-label{ display:none; }
 }
 @media (prefers-reduced-motion:reduce){
   *{ animation-duration:.01ms !important; transition-duration:.06s !important; }
@@ -666,9 +749,10 @@ body{
   <p class="subtitle">Outsmart. Outplay. Win the War.</p>
   <button id="btn-play" class="btn btn-primary">PLAY</button>
   <ul class="title-rules">
-    <li><b>1</b> Draw three. Pick one. Higher card wins.</li>
-    <li><b>2</b> Win 2 battles to take a round. 3 rounds wins the match.</li>
-    <li><b>3</b> Three power-ups. One use each. All match.</li>
+    <li><b>1</b> Pick a card. Higher wins. Draw a fresh one every battle.</li>
+    <li><b>2</b> A round burns your whole 52-card deck. Most battles takes it.</li>
+    <li><b>3</b> Best of 3 rounds. Count what they&rsquo;ve spent &mdash; it&rsquo;s all face-up.</li>
+    <li><b>4</b> Three power-ups the whole match. Win a WAR, earn another.</li>
   </ul>
 </section>
 
@@ -697,29 +781,36 @@ body{
         </div>
         <div class="plate-right">
           <div class="powers-mini" id="opp-powers">
-            <span class="pmini" data-p="scout"><svg class="ico"><use href="#ico-scout"/></svg></span>
-            <span class="pmini" data-p="swap"><svg class="ico"><use href="#ico-swap"/></svg></span>
-            <span class="pmini" data-p="boost"><svg class="ico"><use href="#ico-boost"/></svg></span>
+            <span class="pmini" data-p="scout"><svg class="ico"><use href="#ico-scout"/></svg><i class="pmn"></i></span>
+            <span class="pmini" data-p="swap"><svg class="ico"><use href="#ico-swap"/></svg><i class="pmn"></i></span>
+            <span class="pmini" data-p="boost"><svg class="ico"><use href="#ico-boost"/></svg><i class="pmn"></i></span>
           </div>
           <div class="deckcount"><svg class="ico"><use href="#ico-deck"/></svg><span id="opp-deck">52</span></div>
         </div>
       </div>
-      <div class="hand hand-opp" id="opp-hand"></div>
-      <div class="tellrow" id="opp-tell"></div>
+
+      <div class="handwrap">
+        <div class="hand hand-opp" id="opp-hand"></div>
+        <div class="tellrow" id="opp-tell"></div>
+      </div>
+
+      <!-- what VIPER still holds — every played card is face-up, so this is
+           public information, not a cheat. It is the whole skill of the round. -->
+      <div class="track" id="rank-track" aria-label="cards left in opponent's deck"></div>
     </header>
 
     <!-- ── ARENA ── -->
     <main class="arena">
       <div class="roundbar">
         <span class="rb-round" id="rb-round">ROUND 1</span>
-        <span class="rb-sep"></span>
-        <span class="rb-battle" id="rb-battle">BATTLE 1</span>
+        <div class="prog"><div class="prog-fill" id="prog-fill"></div></div>
+        <span class="rb-left" id="rb-left">52</span>
       </div>
 
-      <div class="battlescore">
-        <div class="bs-side bs-opp"><span id="bs-opp">0</span></div>
-        <div class="bs-dots" id="bs-dots"></div>
-        <div class="bs-side bs-you"><span id="bs-you">0</span></div>
+      <div class="tally">
+        <div class="t-side t-opp"><span id="t-opp">0</span></div>
+        <div class="t-label">BATTLES</div>
+        <div class="t-side t-you"><span id="t-you">0</span></div>
       </div>
 
       <div class="slots">
@@ -743,14 +834,17 @@ body{
 
       <div class="powerbar" id="powerbar">
         <button class="pbtn" data-p="scout">
+          <span class="pcount">1</span>
           <svg class="ico"><use href="#ico-scout"/></svg>
           <span class="pbtn-l">SCOUT</span>
         </button>
         <button class="pbtn" data-p="swap">
+          <span class="pcount">1</span>
           <svg class="ico"><use href="#ico-swap"/></svg>
           <span class="pbtn-l">SWAP</span>
         </button>
         <button class="pbtn" data-p="boost">
+          <span class="pcount">1</span>
           <svg class="ico"><use href="#ico-boost"/></svg>
           <span class="pbtn-l">BOOST +2</span>
         </button>
@@ -802,7 +896,7 @@ body{
   <div class="result-card">
     <div class="res-crest" id="res-crest"></div>
     <h2 class="res-title" id="res-title">VICTORY</h2>
-    <div class="res-score" id="res-score">3 &ndash; 1</div>
+    <div class="res-score" id="res-score">2 &ndash; 1</div>
     <ul class="res-stats">
       <li><span>Rounds won</span><b id="st-rounds">0</b></li>
       <li><span>Battles won</span><b id="st-battles">0</b></li>
@@ -819,12 +913,20 @@ body{
 /* ══════════════════════════════════════════════════════════════════════
    WAR — a decision-driven duel
    ----------------------------------------------------------------------
+   A round burns a whole 52-card deck. You hold 3 and draw a replacement
+   every time you play one, so the hand never runs dry until the deck does.
+   Most battles won takes the round; best of 3 rounds takes the match.
+
+   That structure is what makes the game: both decks are the same 52 cards
+   and every card played is face-up, so the pool your opponent still holds
+   is PUBLIC and shrinking. Early it is a guess. Late it is arithmetic.
+
    Layout of this file:
      1. UTIL          rng, timing helpers
      2. CARDS         deck construction, ranks
      3. ENGINE        pure rules — no DOM, drives both the UI and the bots
-     4. AI            one evaluation function drives card choice AND
-                      all three power-up decisions
+     4. AI            counts cards; one score function drives the card
+                      choice AND all three power-ups
      5. VIEW          rendering
      6. FLOW          the animated state machine the player actually sees
      7. INPUT
@@ -849,16 +951,18 @@ const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
 /* ═══════════ 2. CARDS ═══════════ */
 
-const SUITS = ['♠', '♥', '♦', '♣'];   // ♠ ♥ ♦ ♣
+const SUITS = ['♠', '♥', '♦', '♣'];
 const RED_SUITS = new Set(['♥', '♦']);
 const RANK_LABEL = { 11:'J', 12:'Q', 13:'K', 14:'A' };
 const label = r => RANK_LABEL[r] || String(r);
+const RANKS = [2,3,4,5,6,7,8,9,10,11,12,13,14];
 
-function createDeck(owner){
+let CARD_UID = 0;
+function createDeck(){
   const d = [];
   for (let s = 0; s < 4; s++)
     for (let r = 2; r <= 14; r++)
-      d.push({ r, s: SUITS[s], id: owner + (s * 13 + r) });
+      d.push({ r, s: SUITS[s], id: 'c' + (++CARD_UID) });
   return d;
 }
 function shuffleDeck(deck, rng){
@@ -876,52 +980,65 @@ const effVal = (card, boosted) => boosted ? Math.min(card.r + BOOST_AMOUNT, RANK
 
 /* ═══════════ 3. ENGINE (pure — no DOM) ═══════════ */
 
-const HAND_SIZE      = 3;
-const BATTLES_TO_WIN = 2;   // best-of-3 battles -> a round
-const ROUNDS_TO_WIN  = 3;   // best-of-5 rounds  -> the match
-const WAR_STAKE      = 2;   // a tie is worth two battle points
+const HAND_SIZE     = 3;
+const DECK_SIZE     = 52;
+const ROUNDS_TO_WIN = 2;    // best of 3 rounds
+const WAR_STAKE     = 2;    // a tie is worth two battle points
 
 function newMatch(seed){
   const rng = mulberry32(seed >>> 0);
-  return {
+  const m = {
     seed, rng,
-    playerDeck: shuffleDeck(createDeck('p'), rng),
-    aiDeck:     shuffleDeck(createDeck('a'), rng),
+    playerDeck: [], aiDeck: [],
     playerHand: [], aiHand: [],
+    playerSpent: [], aiSpent: [],        // face-up this round — public to both
     playerRoundWins: 0, aiRoundWins: 0,
     playerBattleWins: 0, aiBattleWins: 0,
-    currentRound: 1, currentBattle: 1,
-    playerPowerups: { scout:true, swap:true, boost:true },
-    aiPowerups:     { scout:true, swap:true, boost:true },
-    playerBoost: null,     // card id boosted for THIS battle
-    aiBoost: null,
-    playerScouted: [],     // opponent card ids the player can see this battle
-    aiKnown: [],           // player card ids the AI remembers, this round
+    currentRound: 1, battleNo: 1,
+    suddenDeath: false,
+    // COUNTS, not flags. Three for the whole match — they do NOT refresh
+    // between rounds. The only way to get more is to win a War.
+    playerPowerups: { scout:1, swap:1, boost:1 },
+    aiPowerups:     { scout:1, swap:1, boost:1 },
+    playerBoost: null, aiBoost: null,    // card id boosted for THIS battle
+    playerScouted: [],                   // ai card ids the player can see this battle
+    aiKnown: [],                         // player card ids the AI has scouted
     stake: 1, warDepth: 0,
     gamePhase: 'idle',
     stats: {
       playerBattles:0, aiBattles:0,
       warsPlayed:0, playerWars:0, aiWars:0,
-      playerPowerups:0, aiPowerups:0
+      playerPowerups:0, aiPowerups:0, battlesPlayed:0, playerWarSpoils:0
     }
   };
+  return m;
 }
 
-function drawCards(m, who, n){
-  const deck = who === 'player' ? m.playerDeck : m.aiDeck;
-  // A 5-round match burns at most ~20 cards, so this never fires in
-  // practice — it exists so the engine can't produce `undefined` cards.
-  if (deck.length < n) deck.push(...shuffleDeck(createDeck(who[0]), m.rng));
-  return deck.splice(0, n);
+/* Winning a War is the ONLY source of extra power-ups. It is what makes a tie
+   something you chase rather than something that happens to you. */
+const POWERUP_KEYS = ['scout', 'swap', 'boost'];
+const POWERUP_LABEL = { scout:'SCOUT', swap:'SWAP', boost:'BOOST' };
+function grantPowerup(m, side){
+  const key = POWERUP_KEYS[Math.floor(m.rng() * POWERUP_KEYS.length)];
+  if (side === 'player'){ m.playerPowerups[key]++; m.stats.playerWarSpoils++; }
+  else m.aiPowerups[key]++;
+  return key;
 }
+
+/* --- rounds --- */
 
 function startRound(m){
-  m.playerBattleWins = 0;
-  m.aiBattleWins = 0;
-  m.currentBattle = 1;
+  m.playerDeck = shuffleDeck(createDeck(), m.rng);
+  m.aiDeck     = shuffleDeck(createDeck(), m.rng);
+  m.playerHand = m.playerDeck.splice(0, HAND_SIZE);
+  m.aiHand     = m.aiDeck.splice(0, HAND_SIZE);
+  m.playerSpent = []; m.aiSpent = [];
+  m.playerBattleWins = 0; m.aiBattleWins = 0;
+  m.battleNo = 1;
+  m.suddenDeath = false;
   m.aiKnown = [];
-  m.playerHand = drawCards(m, 'player', HAND_SIZE);
-  m.aiHand     = drawCards(m, 'ai',     HAND_SIZE);
+  // Power-ups deliberately carry over — they are a match-long resource, so
+  // hoarding one into round 3 is a real decision.
   startBattle(m);
 }
 
@@ -933,40 +1050,54 @@ function startBattle(m){
   m.playerScouted = [];
 }
 
+/* Top both hands back up to 3. Both sides play exactly one card per battle
+   (and one more per war round), so the two decks stay in lockstep and each
+   player burns exactly 52 cards per round. */
+function refill(m){
+  while (m.playerHand.length < HAND_SIZE && m.playerDeck.length) m.playerHand.push(m.playerDeck.shift());
+  while (m.aiHand.length     < HAND_SIZE && m.aiDeck.length)     m.aiHand.push(m.aiDeck.shift());
+}
+
 const takeFrom = (hand, id) => {
   const i = hand.findIndex(c => c.id === id);
   return i < 0 ? null : hand.splice(i, 1)[0];
 };
 
+const cardsLeft = (m, who) => who === 'player'
+  ? m.playerDeck.length + m.playerHand.length
+  : m.aiDeck.length + m.aiHand.length;
+
 /* --- power-ups, engine side. Each returns what changed, or null. --- */
 
 function usePlayerScout(m){
-  if (!m.playerPowerups.scout || !m.playerHand.length) return null;
+  if (m.playerPowerups.scout <= 0 || !m.aiHand.length) return null;
   const hidden = m.aiHand.filter(c => !m.playerScouted.includes(c.id));
   if (!hidden.length) return null;
-  m.playerPowerups.scout = false;
+  m.playerPowerups.scout--;
   m.stats.playerPowerups++;
   const card = hidden[Math.floor(m.rng() * hidden.length)];
   m.playerScouted.push(card.id);
   return card;
 }
 function usePlayerSwap(m, id){
-  if (!m.playerPowerups.swap) return null;
+  if (m.playerPowerups.swap <= 0 || !m.playerDeck.length) return null;
   const out = takeFrom(m.playerHand, id);
   if (!out) return null;
-  m.playerPowerups.swap = false;
+  m.playerPowerups.swap--;
   m.stats.playerPowerups++;
-  const [inc] = drawCards(m, 'player', 1);
+  const inc = m.playerDeck.shift();
   m.playerHand.push(inc);
-  m.playerDeck.push(out);                       // spent card goes to the bottom
+  m.playerDeck.push(out);          // to the BOTTOM — the round burns the whole
+                                   // deck, so Swap defers a bad card, never
+                                   // deletes it. That is what keeps it honest.
   if (m.playerBoost === id) m.playerBoost = null;
-  m.aiKnown = m.aiKnown.filter(k => k !== id);  // the AI's intel just went stale
+  m.aiKnown = m.aiKnown.filter(k => k !== id);
   return { out, inc };
 }
 function usePlayerBoost(m, id){
-  if (!m.playerPowerups.boost) return null;
+  if (m.playerPowerups.boost <= 0) return null;
   if (!m.playerHand.some(c => c.id === id)) return null;
-  m.playerPowerups.boost = false;
+  m.playerPowerups.boost--;
   m.stats.playerPowerups++;
   m.playerBoost = id;
   return id;
@@ -979,206 +1110,226 @@ function resolveBattle(m, playerId, aiId){
   const a = takeFrom(m.aiHand, aiId);
   const pv = effVal(p, m.playerBoost === playerId);
   const av = effVal(a, m.aiBoost === aiId);
+  m.playerSpent.push(p);
+  m.aiSpent.push(a);
   m.aiKnown = m.aiKnown.filter(k => k !== playerId);
   m.playerScouted = m.playerScouted.filter(k => k !== aiId);
   const outcome = pv > av ? 'player' : pv < av ? 'ai' : 'war';
   return { p, a, pv, av, outcome, stake: m.stake };
 }
 
-/* Apply the outcome. Returns { war } | { roundOver, roundWinner, matchOver }. */
+function finishRound(m){
+  const roundWinner = m.playerBattleWins > m.aiBattleWins ? 'player' : 'ai';
+  if (roundWinner === 'player') m.playerRoundWins++; else m.aiRoundWins++;
+  const matchOver = m.playerRoundWins >= ROUNDS_TO_WIN || m.aiRoundWins >= ROUNDS_TO_WIN;
+  return { roundOver:true, roundWinner, matchOver };
+}
+
+/* Both decks empty on the same battle, so a dead-level round is a real
+   outcome (~5% of them). Fresh decks, first battle won takes it. */
+function enterSuddenDeath(m){
+  m.suddenDeath = true;
+  m.playerDeck = shuffleDeck(createDeck(), m.rng);
+  m.aiDeck     = shuffleDeck(createDeck(), m.rng);
+  m.playerHand = m.playerDeck.splice(0, HAND_SIZE);
+  m.aiHand     = m.aiDeck.splice(0, HAND_SIZE);
+  m.aiKnown = [];
+  startBattle(m);
+}
+
+function checkRoundEnd(m){
+  if (m.suddenDeath)
+    return m.playerBattleWins !== m.aiBattleWins ? finishRound(m) : null;
+  if (m.playerHand.length || m.aiHand.length) return null;
+  if (m.playerBattleWins === m.aiBattleWins){ enterSuddenDeath(m); return { suddenDeath:true }; }
+  return finishRound(m);
+}
+
+/* Apply the outcome. -> {war} | {suddenDeath} | {roundOver,...} | {roundOver:false} */
 function applyOutcome(m, res){
   if (res.outcome === 'war'){
     m.stake = WAR_STAKE;
     m.warDepth++;
     m.stats.warsPlayed++;
-    // "If a player runs out of hand cards during War, draw a replacement."
-    if (!m.playerHand.length) m.playerHand.push(...drawCards(m, 'player', 1));
-    if (!m.aiHand.length)     m.aiHand.push(...drawCards(m, 'ai', 1));
-    m.playerBoost = null;
-    m.aiBoost = null;
-    m.playerScouted = [];
+    m.playerBoost = null; m.aiBoost = null; m.playerScouted = [];
+    refill(m);
+    // a tie on the literal last card of the deck has nothing to settle it
+    if (!m.playerHand.length || !m.aiHand.length){
+      m.stake = 1; m.warDepth = 0;
+      return checkRoundEnd(m) || { roundOver:false };
+    }
     return { war:true };
   }
 
   const gain = m.stake;
+  const wasWar = m.stake > 1;
+  let granted = null;                       // spoils of war
   if (res.outcome === 'player'){
     m.playerBattleWins += gain;
     m.stats.playerBattles++;
-    if (m.stake > 1) m.stats.playerWars++;
+    if (wasWar){ m.stats.playerWars++; granted = { side:'player', key:grantPowerup(m, 'player') }; }
   } else {
     m.aiBattleWins += gain;
     m.stats.aiBattles++;
-    if (m.stake > 1) m.stats.aiWars++;
+    if (wasWar){ m.stats.aiWars++; granted = { side:'ai', key:grantPowerup(m, 'ai') }; }
   }
+  m.stats.battlesPlayed++;
   m.stake = 1;
   m.warDepth = 0;
+  refill(m);
 
-  const decided = m.playerBattleWins >= BATTLES_TO_WIN || m.aiBattleWins >= BATTLES_TO_WIN;
-  const exhausted = !m.playerHand.length && !m.aiHand.length;
-  if (!decided && !exhausted){
-    m.currentBattle++;
-    startBattle(m);
-    return { war:false, roundOver:false };
-  }
-
-  const roundWinner = m.playerBattleWins >= m.aiBattleWins ? 'player' : 'ai';
-  if (roundWinner === 'player') m.playerRoundWins++; else m.aiRoundWins++;
-
-  // discard whatever is left in hand
-  m.playerDeck.push(...m.playerHand.splice(0));
-  m.aiDeck.push(...m.aiHand.splice(0));
-
-  const matchOver = m.playerRoundWins >= ROUNDS_TO_WIN || m.aiRoundWins >= ROUNDS_TO_WIN;
-  return { war:false, roundOver:true, roundWinner, matchOver };
+  const end = checkRoundEnd(m);
+  if (end){ end.granted = granted; return end; }
+  m.battleNo++;
+  startBattle(m);
+  return { roundOver:false, granted };
 }
 
 
 /* ═══════════ 4. AI ═══════════ */
 /*
-   One scoring function drives everything:
+   The AI counts cards, because the information is public and a player can.
+   Its model of what the opponent still holds is `deck + hand` — as a MULTISET
+   of ranks that is exactly what anyone watching could work out, and it never
+   looks at which of those cards are in the hand or in what order.
 
-       score(v) = need * (P(win) + 0.35 * P(tie))  -  (1 - need) * cost(v)
+   One score function drives everything:
 
-   `need` is how badly this particular battle must be won; `cost` is what
-   spending a card of that rank costs the rest of the round. At 0-0 the cost
-   term dominates, so a weak card gets sacrificed. At 1-1 (or in a War) the
-   need term dominates and the best card comes out. Because `cost` rises with
-   rank, when the AI KNOWS it wins it naturally picks the *cheapest* winner
-   rather than dumping an Ace — which is the behaviour that makes Scout feel
-   dangerous.
+       score(v) = P(win) + 0.4·P(tie)  −  λ · spend(v)
+
+   `spend(v)` is v's percentile inside the AI's OWN remaining cards — what it
+   costs to burn that card now. λ is how much it cares.
+
+   The point: P(win) is measured against THEIR shrinking pool and spend
+   against ITS OWN. Early they are the same deck and the terms cancel, so play
+   is loose. Once the pools diverge — they have burned their aces, you still
+   hold yours — a mid card becomes a cheap win and the AI takes it. That
+   divergence IS the card counting, and it is the whole game.
 */
 
-/*  mustWin = battles still needed to take the round
-    canDrop = battles that can still be thrown away with the cards in hand
+const AI = {
+  LAMBDA_CALM: 0.72,   // comfortable: win cheap, never overkill
+  LAMBDA_DESPERATE: 0.12,
+  NOISE: 0.08
+};
 
-    When canDrop is 0 every remaining battle is must-win, so the ORDER the
-    cards are spent in is worth nothing by itself — it only pays off against
-    the order the opponent spends theirs. That is matching pennies, and a
-    deterministic policy there is free money: an AI that always leads with its
-    best card when behind loses the decider to anyone who simply sacrifices
-    (measured at 71.5% for a five-line counter-strategy). So it mixes.  */
-function needFactor(mine, theirs, stake, handLen, rng){
-  if (handLen <= 1) return 1;                             // forced anyway
-  if (stake >= WAR_STAKE) return 1;                       // a War decides the round
-  const mustWin = BATTLES_TO_WIN - mine;
-  const canDrop = handLen - mustWin;
-  if (canDrop <= 0) return rng() < 0.55 ? 0.52 : 0.95;    // must win them all — mix
-  if (mustWin <= 1) return rng() < 0.45 ? 0.85 : 0.48;    // one win closes the round
-  return rng() < 0.32 ? 0.80 : 0.45;                      // room to sacrifice — usually do
+/* fraction of `pool` strictly weaker than v (v's percentile in that pool) */
+function pctile(v, pool){
+  if (!pool.length) return 0;
+  let lt = 0;
+  for (const c of pool) if (c.r < v) lt++;
+  return lt / pool.length;
 }
 
-/*  How much this battle is WORTH, with no mixing. `need` decides which card
-    goes out; `urgency` decides whether to spend a power-up, and those are
-    different questions — a battle the AI must not lose is worth scouting even
-    on the turns it decides to win it cheaply.  */
-function urgency(mine, theirs, stake, handLen){
-  if (stake >= WAR_STAKE) return 1;
-  const mustWin = BATTLES_TO_WIN - mine;
-  if (handLen <= 1) return mustWin <= 1 ? 0.95 : 0.5;
-  const canDrop = handLen - mustWin;
-  if (canDrop <= 0) return 0.95;
-  if (mustWin <= 1) return 0.60;
-  return 0.40;
-}
-
-// P(this value beats / ties a card drawn from the opponent's hand)
-function pOutcome(v, oppCount, known){
-  if (oppCount <= 0) return { win:1, tie:0 };
+/* P(v beats / ties the card the opponent is about to play), given their
+   remaining pool and anything scouted out of their hand. */
+function pOutcome(v, oppHand, oppPool, known){
+  const n = oppHand.length;
+  if (!n) return { win:1, tie:0 };
   let win = 0, tie = 0;
   for (const kc of known){
     if (v > kc.r) win++;
     else if (v === kc.r) tie++;
   }
-  const unknown = Math.max(0, oppCount - known.length);
-  win += unknown * ((v - 2) / 13);                  // uniform over 2..14
-  tie += unknown * (1 / 13);
-  return { win: win / oppCount, tie: tie / oppCount };
-}
-
-const spendCost = v => Math.pow((v - 2) / 12, 1.5) * 1.1;
-
-function cardScore(v, oppCount, known, need){
-  const o = pOutcome(v, oppCount, known);
-  return need * (o.win + 0.35 * o.tie) - (1 - need) * spendCost(v);
-}
-
-function bestPlay(hand, oppCount, known, need, boostId){
-  let best = null, bestScore = -Infinity;
-  for (const c of hand){
-    const v = effVal(c, boostId === c.id);
-    const s = cardScore(v, oppCount, known, need);
-    if (s > bestScore){ bestScore = s; best = c; }
+  const unknown = n - known.length;
+  if (unknown > 0){
+    const knownIds = new Set(known.map(c => c.id));
+    let lt = 0, eq = 0, tot = 0;
+    for (const c of oppPool){
+      if (knownIds.has(c.id)) continue;
+      tot++;
+      if (c.r < v) lt++; else if (c.r === v) eq++;
+    }
+    if (tot){ win += unknown * (lt / tot); tie += unknown * (eq / tot); }
   }
-  return { card: best, score: bestScore };
+  return { win: win / n, tie: tie / n };
 }
 
-/* Runs the AI's whole turn: power-ups, then the card. Mutates `m`, and
-   returns an ordered action log the view plays back.
-   It reads only oppCount + cards it legitimately knows — never the hand. */
+/* How badly the AI needs wins right now: 0 = cruising, 1 = must win. */
+function aiUrgency(m){
+  if (m.suddenDeath) return 1;
+  const left = Math.max(1, cardsLeft(m, 'ai'));
+  const deficit = m.playerBattleWins - m.aiBattleWins;
+  // a 3-battle hole with 40 cards left is nothing; with 6 left it is the round
+  return clamp(0.5 + deficit / Math.max(5, left * 0.55), 0, 1);
+}
+
+function aiScore(m, v, urg){
+  const oppPool = m.playerDeck.concat(m.playerHand);
+  const known = m.aiKnown.map(id => m.playerHand.find(c => c.id === id)).filter(Boolean);
+  const o = pOutcome(v, m.playerHand, oppPool, known);
+  const spend = pctile(v, m.aiDeck.concat(m.aiHand));
+  const lambda = AI.LAMBDA_CALM + (AI.LAMBDA_DESPERATE - AI.LAMBDA_CALM) * urg;
+  return (o.win + 0.4 * o.tie) - lambda * spend;
+}
+
+function aiBest(m, urg, boostId){
+  let best = null, score = -Infinity;
+  for (const c of m.aiHand){
+    const s = aiScore(m, effVal(c, boostId === c.id), urg);
+    if (s > score){ score = s; best = c; }
+  }
+  return { card: best, score };
+}
+
+/* Runs the AI's whole turn: power-ups, then the card. Mutates `m`, returns an
+   ordered action log the view plays back as live tells. */
 function aiTurn(m){
   const rng = m.rng;
   const acts = [];
-  const known = () => m.aiKnown
-    .map(id => m.playerHand.find(c => c.id === id))
-    .filter(Boolean);
+  const urg = aiUrgency(m);
+  const left = cardsLeft(m, 'ai');
+  const close = Math.abs(m.playerBattleWins - m.aiBattleWins) <= 2;
+  const pivotal = m.suddenDeath || (left <= 12 && close);
 
-  // Rolled ONCE per turn: a swap keeps the hand size, so neither number moves
-  // again before the card goes out. Re-rolling mid-turn would let the AI scout
-  // on one posture and play on another.
-  const need = needFactor(m.aiBattleWins, m.playerBattleWins, m.stake, m.aiHand.length, rng);
-  const urg  = urgency(m.aiBattleWins, m.playerBattleWins, m.stake, m.aiHand.length);
-
-  /* --- SCOUT: buy information when the battle matters --- */
-  if (m.aiPowerups.scout && m.aiHand.length > 1 && m.playerHand.length > 0 && !known().length){
-    if ((urg >= 0.9 && rng() < 0.62) || rng() < 0.10){
-      m.aiPowerups.scout = false;
-      m.stats.aiPowerups++;
-      const card = m.playerHand[Math.floor(rng() * m.playerHand.length)];
-      m.aiKnown.push(card.id);
-      acts.push({ type:'scout', card });
-    }
+  /* --- SCOUT: buy information when the battle actually turns on it --- */
+  if (m.aiPowerups.scout > 0 && m.aiHand.length && m.playerHand.length &&
+      !m.aiKnown.length && ((pivotal && rng() < 0.5) || rng() < 0.03)){
+    m.aiPowerups.scout--;
+    m.stats.aiPowerups++;
+    const card = m.playerHand[Math.floor(rng() * m.playerHand.length)];
+    m.aiKnown.push(card.id);
+    acts.push({ type:'scout', card });
   }
 
-  /* --- SWAP: the hand cannot win a battle it has to win --- */
-  let ev = bestPlay(m.aiHand, m.playerHand.length, known(), need, null);
-  if (m.aiPowerups.swap && m.aiHand.length > 0 && urg >= 0.75 && ev.score < 0.36 && rng() < 0.8){
+  /* --- SWAP: the hand is dead and wins are needed --- */
+  let ev = aiBest(m, urg, null);
+  if (m.aiPowerups.swap > 0 && m.aiDeck.length && m.aiHand.length > 1 &&
+      urg > 0.6 && ev.score < 0.12 && rng() < 0.7){
     const worst = m.aiHand.reduce((a, b) => a.r <= b.r ? a : b);
-    m.aiPowerups.swap = false;
+    m.aiPowerups.swap--;
     m.stats.aiPowerups++;
     takeFrom(m.aiHand, worst.id);
-    const [inc] = drawCards(m, 'ai', 1);
+    const inc = m.aiDeck.shift();
     m.aiHand.push(inc);
     m.aiDeck.push(worst);
     acts.push({ type:'swap', out:worst, inc });
-    ev = bestPlay(m.aiHand, m.playerHand.length, known(), need, null);
+    ev = aiBest(m, urg, null);
   }
 
   /* --- BOOST: only when +2 actually changes the answer --- */
-  if (m.aiPowerups.boost && m.aiHand.length > 0){
-    let bestBoost = null, bestBoostScore = -Infinity;
+  if (m.aiPowerups.boost > 0 && m.aiHand.length){
+    let bc = null, bs = -Infinity;
     for (const c of m.aiHand){
-      const s = cardScore(effVal(c, true), m.playerHand.length, known(), need);
-      if (s > bestBoostScore){ bestBoostScore = s; bestBoost = c; }
+      const s = aiScore(m, effVal(c, true), urg);
+      if (s > bs){ bs = s; bc = c; }
     }
-    const gain = bestBoostScore - ev.score;
-    const threshold = urg >= 0.9 ? 0.13 : 0.32;
-    if (gain > threshold && rng() < 0.82){
-      m.aiPowerups.boost = false;
+    const threshold = pivotal ? 0.10 : 0.30;
+    if (bs - ev.score > threshold && rng() < 0.8){
+      m.aiPowerups.boost--;
       m.stats.aiPowerups++;
-      m.aiBoost = bestBoost.id;
-      acts.push({ type:'boost', card:bestBoost });
+      m.aiBoost = bc.id;
+      acts.push({ type:'boost', card:bc });
     }
   }
 
   /* --- the card, with a little noise so it is not perfectly readable --- */
-  const k = known();
   let pick = null, pickScore = -Infinity;
   for (const c of m.aiHand){
-    const v = effVal(c, m.aiBoost === c.id);
-    const s = cardScore(v, m.playerHand.length, k, need) + (rng() * 0.10 - 0.05);
+    const s = aiScore(m, effVal(c, m.aiBoost === c.id), urg) + (rng() * AI.NOISE - AI.NOISE / 2);
     if (s > pickScore){ pickScore = s; pick = c; }
   }
-  if (m.aiBoost && m.aiBoost !== pick.id) m.aiBoost = null;   // boost not carried onto another card
+  if (m.aiBoost && m.aiBoost !== pick.id) m.aiBoost = null;
   acts.push({ type:'play', card:pick });
   return acts;
 }
@@ -1195,10 +1346,10 @@ const DOM = {
   oppHand:$('#opp-hand'), youHand:$('#you-hand'),
   oppPips:$('#opp-pips'), youPips:$('#you-pips'),
   oppDeck:$('#opp-deck'), youDeck:$('#you-deck'),
-  oppPowers:$('#opp-powers'), oppTell:$('#opp-tell'),
+  oppPowers:$('#opp-powers'), oppTell:$('#opp-tell'), track:$('#rank-track'),
   slotOpp:$('#slot-opp'), slotYou:$('#slot-you'), vs:$('#vs'),
-  rbRound:$('#rb-round'), rbBattle:$('#rb-battle'),
-  bsOpp:$('#bs-opp'), bsYou:$('#bs-you'), bsDots:$('#bs-dots'),
+  rbRound:$('#rb-round'), rbLeft:$('#rb-left'), progFill:$('#prog-fill'),
+  tOpp:$('#t-opp'), tYou:$('#t-you'),
   callout:$('#callout'), hint:$('#hint'), banner:$('#banner'), bannerTxt:$('#banner-txt'),
   powerbar:$('#powerbar'), actionbar:$('.actionbar'), actHint:$('#act-hint'),
   btnCommit:$('#btn-commit'), timerFill:$('#timer-fill'),
@@ -1238,7 +1389,6 @@ function boostBadge(card){
 }
 
 function renderHands(deal){
-  // player
   DOM.youHand.innerHTML = '';
   M.playerHand.forEach((c, i) => {
     const el = cardNode(c);
@@ -1247,7 +1397,6 @@ function renderHands(deal){
     if (M.playerBoost === c.id) boostBadge(c).forEach(n => el.appendChild(n));
     DOM.youHand.appendChild(el);
   });
-  // opponent
   DOM.oppHand.innerHTML = '';
   M.aiHand.forEach((c, i) => {
     const seen = M.playerScouted.includes(c.id);
@@ -1258,6 +1407,29 @@ function renderHands(deal){
     DOM.oppHand.appendChild(el);
   });
   syncSelection();
+}
+
+/* The tracker: how many of each rank VIPER has NOT played yet. Derived purely
+   from the face-up pile, so it tells the player nothing they couldn't count. */
+function renderTrack(){
+  const gone = new Array(15).fill(0);
+  for (const c of M.aiSpent) gone[c.r]++;
+  if (DOM.track.children.length !== RANKS.length){
+    DOM.track.innerHTML = '';
+    for (const r of RANKS){
+      const cell = document.createElement('div');
+      cell.className = 'tcell';
+      cell.innerHTML = '<span class="tr">' + label(r) + '</span><span class="tn"></span>';
+      DOM.track.appendChild(cell);
+    }
+  }
+  RANKS.forEach((r, i) => {
+    const cell = DOM.track.children[i];
+    const n = 4 - gone[r];
+    cell.dataset.n = n;
+    cell.querySelector('.tn').textContent = n;
+    cell.classList.toggle('out', n <= 0);
+  });
 }
 
 function renderHUD(){
@@ -1271,30 +1443,36 @@ function renderHUD(){
   };
   pips(DOM.youPips, M.playerRoundWins);
   pips(DOM.oppPips, M.aiRoundWins);
-  DOM.youDeck.textContent = M.playerDeck.length;
-  DOM.oppDeck.textContent = M.aiDeck.length;
-  DOM.rbRound.textContent  = 'ROUND ' + M.currentRound;
-  DOM.rbBattle.textContent = M.stake > 1 ? 'WAR' : 'BATTLE ' + M.currentBattle;
-  DOM.bsYou.textContent = M.playerBattleWins;
-  DOM.bsOpp.textContent = M.aiBattleWins;
+  DOM.youDeck.textContent = cardsLeft(M, 'player');
+  DOM.oppDeck.textContent = cardsLeft(M, 'ai');
+  DOM.rbRound.textContent = M.suddenDeath ? 'SUDDEN DEATH' : 'ROUND ' + M.currentRound;
+  DOM.rbRound.classList.toggle('hot', M.suddenDeath);
 
-  DOM.bsDots.innerHTML = '';
-  for (let i = 0; i < BATTLES_TO_WIN; i++){
-    const d = document.createElement('div');
-    d.className = 'bs-dot' + (i < M.playerBattleWins ? ' you' : i < M.aiBattleWins ? ' opp' : '');
-    DOM.bsDots.appendChild(d);
-  }
+  const left = cardsLeft(M, 'player');
+  DOM.rbLeft.textContent = left;
+  DOM.progFill.style.transform = 'scaleX(' + (1 - left / DECK_SIZE) + ')';
 
-  $$('#opp-powers .pmini').forEach(el =>
-    el.classList.toggle('spent', !M.aiPowerups[el.dataset.p]));
+  DOM.tYou.textContent = M.playerBattleWins;
+  DOM.tOpp.textContent = M.aiBattleWins;
+  DOM.tYou.parentElement.classList.toggle('lead', M.playerBattleWins > M.aiBattleWins);
+  DOM.tOpp.parentElement.classList.toggle('lead', M.aiBattleWins > M.playerBattleWins);
 
+  $$('#opp-powers .pmini').forEach(el => {
+    const n = M.aiPowerups[el.dataset.p];
+    el.classList.toggle('spent', n <= 0);
+    el.querySelector('.pmn').textContent = n > 1 ? n : '';
+  });
   $$('#powerbar .pbtn').forEach(btn => {
     const p = btn.dataset.p;
-    const spent = !M.playerPowerups[p];
-    btn.classList.toggle('spent', spent);
+    const n = M.playerPowerups[p];
+    btn.classList.toggle('spent', n <= 0);
     btn.classList.toggle('armed', UI.arm === p);
-    btn.disabled = spent || UI.phase !== 'select';
+    btn.disabled = n <= 0 || UI.phase !== 'select' || (p === 'swap' && !M.playerDeck.length);
+    const badge = btn.querySelector('.pcount');
+    badge.textContent = n;
+    badge.classList.toggle('multi', n > 1);
   });
+  renderTrack();
 }
 
 function syncSelection(){
@@ -1330,7 +1508,7 @@ async function callout(text, kind, ms = 760){
   DOM.callout.appendChild(el);
   await wait(ms);
   el.classList.add('out');
-  await wait(200);
+  await wait(180);
   if (el.parentNode) el.remove();
 }
 async function banner(text, ms = 900){
@@ -1348,6 +1526,18 @@ function tell(text){
 }
 const clearTell = () => { DOM.oppTell.innerHTML = ''; };
 
+/* A round is ~50 battles, so the per-battle feedback has to be a tick, not a
+   ceremony: the tally chip bumps and a +N floats off it. */
+function popScore(side, n){
+  const chip = (side === 'player' ? DOM.tYou : DOM.tOpp).parentElement;
+  chip.classList.remove('bump'); void chip.offsetWidth; chip.classList.add('bump');
+  const f = document.createElement('div');
+  f.className = 'floatn ' + side;
+  f.textContent = '+' + n;
+  chip.appendChild(f);
+  setTimeout(() => f.remove(), 700);
+}
+
 function slotCard(slot, card, opts){
   slot.querySelectorAll('.card').forEach(n => n.remove());
   const el = cardNode(card, { down: opts.down });
@@ -1364,21 +1554,28 @@ function clearSlots(){
 /* ═══════════ 6. FLOW ═══════════ */
 
 const TURN_SECONDS = 8;
+const T = {                 // ~1.0 s of animation per battle. A round is ~50 of
+  aiThinkMin: 220,          // them, so anything slower turns into a slideshow.
+  aiThinkVar: 420,
+  launch: 150,
+  settle: 120,
+  reveal: 300,
+  hold:   300,
+  holdWar: 520
+};
+
 let M = null;
 const UI = {
   phase: 'idle',        // 'select' | 'busy'
   selected: null,
   arm: null,            // 'swap' | 'boost' while choosing a target
   aiPlay: null,         // the AI's locked-in card id
-  aiPending: null,      // timer handle for the AI's think delay
-  timer: null,
-  busy: false
+  aiPending: null,
+  timer: null
 };
 
 /* --- the 8-second turn timer --- */
-let FROZEN = false;                 // __WR.freeze(true): a screenshot pass takes
-                                    // seconds, and the timer would auto-play the
-                                    // hand out from under it.
+let FROZEN = false;         // __WR.freeze(true): a screenshot pass takes seconds
 function startTimer(){
   stopTimer();
   if (FROZEN){ DOM.timerFill.style.transform = 'scaleX(1)'; return; }
@@ -1401,13 +1598,12 @@ function stopTimer(){
 }
 function drainTimer(){
   stopTimer();
-  DOM.timerFill.style.transition = 'transform .2s';
+  DOM.timerFill.style.transition = 'transform .18s';
   DOM.timerFill.style.transform = 'scaleX(0)';
 }
 function onTimeout(){
-  if (UI.phase !== 'select') return;
-  const hand = M.playerHand;
-  const c = hand[Math.floor(Math.random() * hand.length)];
+  if (UI.phase !== 'select' || !M.playerHand.length) return;
+  const c = M.playerHand[Math.floor(Math.random() * M.playerHand.length)];
   UI.arm = null;
   UI.selected = c.id;
   DOM.hint.textContent = 'OUT OF TIME — RANDOM CARD PLAYED';
@@ -1422,7 +1618,6 @@ function startMatch(){
   clearSlots(); clearTell();
   DOM.hint.textContent = '';
   showScreen('game');
-  renderAll(false);
   runRound();
 }
 
@@ -1430,8 +1625,7 @@ async function runRound(){
   UI.phase = 'busy';
   startRound(M);
   renderAll(true);
-  await banner('ROUND ' + M.currentRound, 850);
-  await wait(60);
+  await banner('ROUND ' + M.currentRound, 800);
   runBattle();
 }
 
@@ -1440,9 +1634,10 @@ async function runBattle(){
   UI.selected = null; UI.arm = null; UI.aiPlay = null;
   clearSlots(); clearTell();
   renderAll(false);
-  DOM.hint.textContent = M.stake > 1
-    ? 'WAR — THIS BATTLE IS WORTH 2'
-    : (M.currentRound === 1 && M.currentBattle === 1 ? 'HIGHER CARD WINS THE BATTLE' : '');
+  DOM.hint.textContent =
+    M.stake > 1 ? 'WAR — WORTH 2' :
+    M.suddenDeath ? 'NEXT BATTLE TAKES THE ROUND' :
+    (M.currentRound === 1 && M.battleNo === 1) ? 'HIGHER CARD WINS · TAP TWICE TO PLAY' : '';
 
   UI.phase = 'select';
   renderHUD(); syncSelection();
@@ -1450,46 +1645,38 @@ async function runBattle(){
   scheduleAiTurn();
 }
 
-/* The AI commits before it can possibly see the player's card: its plan
-   reads only the number of cards the player holds plus anything it has
-   legitimately scouted. Power-up use is shown as a live tell. */
+/* The AI commits before it can possibly see the player's card: its plan reads
+   the public pile and its own hand, never the player's ranks. */
 function scheduleAiTurn(){
-  const think = 500 + Math.random() * 1000;
-  UI.aiPending = setTimeout(runAiTurn, think);
+  UI.aiPending = setTimeout(runAiTurn, T.aiThinkMin + Math.random() * T.aiThinkVar);
 }
 async function runAiTurn(){
   UI.aiPending = null;
-  if (UI.aiPlay) return;
+  if (UI.aiPlay || !M.aiHand.length) return;
   const acts = aiTurn(M);
   for (const a of acts){
     if (a.type === 'scout'){
-      flashMini('scout');
-      tell('SCOUTING YOUR HAND');
+      flashMini('scout'); tell('SCOUTING YOU');
       const el = DOM.youHand.querySelector('[data-id="' + a.card.id + '"]');
-      if (el){ el.classList.add('scouted'); setTimeout(() => el.classList.remove('scouted'), 1100); }
-      await wait(520);
+      if (el){ el.classList.add('scouted'); setTimeout(() => el.classList.remove('scouted'), 900); }
+      await wait(380);
     } else if (a.type === 'swap'){
-      flashMini('swap');
-      tell('SWAPPED A CARD');
+      flashMini('swap'); tell('SWAPPED A CARD');
       const el = DOM.oppHand.querySelector('.card');
       if (el) el.classList.add('swapout');
-      await wait(240);
+      await wait(180);
       renderHands(false);
-      await wait(240);
+      await wait(160);
     } else if (a.type === 'boost'){
-      flashMini('boost');
-      tell('BOOST ARMED  +2');
-      shake(false);
-      await wait(420);
+      flashMini('boost'); tell('BOOST ARMED  +2');
+      await wait(300);
     } else if (a.type === 'play'){
       UI.aiPlay = a.card.id;
       const el = DOM.oppHand.querySelector('[data-id="' + a.card.id + '"]');
       if (el) el.classList.add('launch');
-      await wait(230);
+      await wait(T.launch);
       renderHands(false);
       slotCard(DOM.slotOpp, a.card, { down:true, from:'top' });
-      // the power-up tell has had its moment; the greyed-out icon in the
-      // opponent's plate is the permanent record of what they spent
       tell('LOCKED IN');
     }
   }
@@ -1510,27 +1697,23 @@ async function commitPlay(){
   drainTimer();
   syncSelection(); renderHUD();
 
-  // make sure the AI has locked (it never sees the player's card either way)
   if (UI.aiPending){ clearTimeout(UI.aiPending); UI.aiPending = null; await runAiTurn(); }
-  for (let i = 0; !UI.aiPlay && i < 100; i++) await wait(30);   // bounded, never a spin
+  for (let i = 0; !UI.aiPlay && i < 100; i++) await wait(30);
   if (!UI.aiPlay) await runAiTurn();
 
   const card = M.playerHand.find(c => c.id === playerId);
   const boosted = M.playerBoost === playerId;
   const el = DOM.youHand.querySelector('[data-id="' + playerId + '"]');
   if (el) el.classList.add('launch');
-  await wait(230);
+  await wait(T.launch);
 
   const aiId = UI.aiPlay;
   const aiCard = M.aiHand.find(c => c.id === aiId);
-  // Either card going missing here would throw inside resolveBattle and kill the
-  // async chain, wedging the game in 'busy' with no way back. Hand the turn back
-  // to the player instead.
+  // Either card going missing would throw inside resolveBattle and kill the
+  // async chain, wedging the game in 'busy'. Hand the turn back instead.
   if (!card || !aiCard){
-    UI.selected = null;
-    UI.phase = 'select';
-    renderAll(false);
-    startTimer();
+    UI.selected = null; UI.phase = 'select';
+    renderAll(false); startTimer();
     return;
   }
   const aiBoosted = M.aiBoost === aiId;
@@ -1541,15 +1724,13 @@ async function commitPlay(){
   if (boosted) boostBadge(card).forEach(n => youEl.appendChild(n));
   const oppEl = DOM.slotOpp.querySelector('.card')
              || slotCard(DOM.slotOpp, aiCard, { down:true, from:'top' });
-  await wait(180);
+  await wait(T.settle);
 
-  // simultaneous reveal
   DOM.vs.classList.add('clash');
   oppEl.classList.remove('down');
   youEl.classList.remove('down');
   if (aiBoosted) boostBadge(aiCard).forEach(n => oppEl.appendChild(n));
-  shake(false);
-  await wait(430);
+  await wait(T.reveal);
   DOM.vs.classList.remove('clash');
 
   await finishBattle(res, youEl, oppEl);
@@ -1560,10 +1741,10 @@ async function finishBattle(res, youEl, oppEl){
   DOM.hint.textContent = '';
 
   if (res.outcome === 'war'){
-    applyOutcome(M, res);
+    const applied = applyOutcome(M, res);
     await runWarAnim();
     renderAll(false);
-    await wait(120);
+    if (applied.roundOver){ await endRound(applied); return; }
     runBattle();
     return;
   }
@@ -1571,34 +1752,48 @@ async function finishBattle(res, youEl, oppEl){
   const youWon = res.outcome === 'player';
   (youWon ? youEl : oppEl).classList.add('winner');
   (youWon ? oppEl : youEl).classList.add('loser');
-  shake(res.stake > 1);
-  await wait(240);
+  if (res.stake > 1) shake(true);
 
   const applied = applyOutcome(M, res);
-  (youWon ? DOM.bsYou : DOM.bsOpp).parentElement.classList.add('bump');
+  popScore(youWon ? 'player' : 'ai', res.stake);
   renderHUD();
-  setTimeout(() => $$('.bs-side').forEach(e => e.classList.remove('bump')), 460);
+  await wait(res.stake > 1 ? T.holdWar : T.hold);
 
-  const big = res.stake > 1;
-  await callout(
-    youWon ? (big ? 'WAR WON!' : 'YOU WIN')
-           : (big ? 'WAR LOST'  : 'OPPONENT WINS'),
-    youWon ? 'you' : 'opp',
-    big ? 900 : 700
-  );
+  // spoils of war — the only way anyone gets a fourth power-up
+  if (applied.granted){
+    const g = applied.granted;
+    if (g.side === 'player'){
+      const btn = $('.pbtn[data-p="' + g.key + '"]');
+      if (btn){ btn.classList.remove('won'); void btn.offsetWidth; btn.classList.add('won'); }
+      shake(false);
+      await callout('WAR SPOILS  +' + POWERUP_LABEL[g.key], 'you', 900);
+    } else {
+      flashMini(g.key);
+      tell('WAR SPOILS  +' + POWERUP_LABEL[g.key]);
+      await wait(700);
+      clearTell();
+    }
+  }
 
+  if (applied.suddenDeath){
+    renderAll(true);
+    await banner('SUDDEN DEATH', 950);
+    runBattle();
+    return;
+  }
   if (!applied.roundOver){ runBattle(); return; }
+  await endRound(applied);
+}
 
-  // round over
+async function endRound(applied){
   const pw = applied.roundWinner === 'player';
   DOM.oppHand.innerHTML = ''; DOM.youHand.innerHTML = '';
   renderHUD();
   $$('.pip.on').forEach(p => p.classList.add('win'));
   shake(true);
-  await banner(pw ? 'ROUND WON' : 'ROUND LOST', 1000);
-
+  await banner(
+    (pw ? 'ROUND WON  ' : 'ROUND LOST  ') + M.playerBattleWins + '–' + M.aiBattleWins, 1150);
   if (applied.matchOver){ endMatch(); return; }
-
   M.currentRound++;
   clearSlots();
   runRound();
@@ -1619,9 +1814,7 @@ async function runWarAnim(){
   }
   DOM.war.classList.add('on');
   shake(true);
-  await wait(430);
-  shake(true);
-  await wait(820);
+  await wait(1050);
   DOM.war.classList.remove('on');
   DOM.sparks.innerHTML = '';
 }
@@ -1639,7 +1832,7 @@ function endMatch(){
   $('#st-rounds').textContent  = M.playerRoundWins + ' / ' + (M.playerRoundWins + M.aiRoundWins);
   $('#st-battles').textContent = s.playerBattles + ' / ' + (s.playerBattles + s.aiBattles);
   $('#st-wars').textContent    = s.playerWars + ' / ' + s.warsPlayed;
-  $('#st-powers').textContent  = s.playerPowerups + ' / 3';
+  $('#st-powers').textContent  = s.playerPowerups + (s.playerWarSpoils ? '  (+' + s.playerWarSpoils + ' won)' : '');
   showScreen('result');
 }
 
@@ -1662,18 +1855,17 @@ DOM.youHand.addEventListener('click', e => {
     UI.arm = null;
     if (UI.selected === id) UI.selected = null;
     renderAll(false);
-    if (r){ shake(false); DOM.hint.textContent = 'SWAPPED FOR ' + label(r.inc.r) + r.inc.s; }
+    if (r) DOM.hint.textContent = 'SWAPPED FOR ' + label(r.inc.r) + r.inc.s;
     return;
   }
   if (UI.arm === 'boost'){
     usePlayerBoost(M, id);
     UI.arm = null;
-    UI.selected = id;                      // boosting is a strong hint at intent
+    UI.selected = id;
     renderAll(false);
-    shake(false);
     return;
   }
-  // tap to select, tap again to confirm
+  // tap to select, tap again to play
   if (UI.selected === id) commitPlay();
   else { UI.selected = id; syncSelection(); }
 });
@@ -1683,24 +1875,23 @@ DOM.powerbar.addEventListener('click', e => {
   if (!btn || btn.disabled || UI.phase !== 'select') return;
   const p = btn.dataset.p;
   if (!M.playerPowerups[p]) return;
-
   if (p === 'scout'){
     const c = usePlayerScout(M);
     UI.arm = null;
     renderAll(false);
-    if (c){ shake(false); DOM.hint.textContent = 'THEY HOLD ' + label(c.r) + c.s; }
+    if (c) DOM.hint.textContent = 'THEY HOLD ' + label(c.r) + c.s;
     return;
   }
-  UI.arm = (UI.arm === p) ? null : p;      // arm / disarm
+  UI.arm = (UI.arm === p) ? null : p;
   renderAll(false);
 });
 
-// keyboard shortcuts for desktop
 window.addEventListener('keydown', e => {
   if (UI.phase !== 'select') return;
   if (e.key >= '1' && e.key <= '3'){
     const c = M.playerHand[+e.key - 1];
-    if (c){ DOM.youHand.querySelector('[data-id="' + c.id + '"]').click(); }
+    const n = c && DOM.youHand.querySelector('[data-id="' + c.id + '"]');
+    if (n) n.click();
   } else if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); commitPlay(); }
   else if (e.key.toLowerCase() === 'q') $('.pbtn[data-p="scout"]').click();
   else if (e.key.toLowerCase() === 'w') $('.pbtn[data-p="swap"]').click();
@@ -1709,52 +1900,55 @@ window.addEventListener('keydown', e => {
 
 
 /* ═══════════ 8. __WR — headless harness ═══════════
-   The whole point of the redesign is that decisions decide matches. That is
-   only true if a thinking strategy beats a lazy one, so prove it:
+   A round is ~50 battles of attrition with identical decks, so the ONLY thing
+   that separates two players is which card they spend on which battle. Prove
+   a thinking line beats a lazy one:
 
-     __WR.fleet(400)
-
-   runs every lazy strategy against the real AI and prints win rates. Any
-   lazy strategy at or above ~50% means the decision layer is decoration.
+     __WR.fleet(200)
    ═════════════════════════════════════════════════════════════════════ */
 
+const asc = h => h.slice().sort((a, b) => a.r - b.r);
+
 const STRATEGIES = {
-  ai:      (m, rng) => 'ai',                                        // the real logic, mirrored
-  highest: m => m.playerHand.reduce((a,b) => a.r >= b.r ? a : b).id,
-  lowest:  m => m.playerHand.reduce((a,b) => a.r <= b.r ? a : b).id,
+  ai:      null,                                                  // mirrored below
+  highest: m => asc(m.playerHand).slice(-1)[0].id,
+  lowest:  m => asc(m.playerHand)[0].id,
+  // the hand drains to 2 then 1 as the deck empties, so never index blind
+  middle:  m => { const h = asc(m.playerHand); return h[Math.min(1, h.length - 1)].id; },
+  random:  m => m.playerHand[Math.floor(m.rng() * m.playerHand.length)].id,
   first:   m => m.playerHand[0].id,
-  random:  (m, rng) => m.playerHand[Math.floor(rng() * m.playerHand.length)].id,
-  // saves its best card for the decisive battle, otherwise dumps the worst
-  hoard: m => {
-    const decisive = m.playerBattleWins >= 1 || m.aiBattleWins >= 1 || m.playerHand.length === 1;
-    return m.playerHand.reduce((a,b) => (decisive ? a.r >= b.r : a.r <= b.r) ? a : b).id;
+  // counts cards: beat their likely card as cheaply as possible, else dump
+  counter: m => {
+    const h = asc(m.playerHand);
+    if (h.length === 1) return h[0].id;
+    const pool = m.aiDeck.concat(m.aiHand);
+    if (!pool.length) return h[h.length - 1].id;
+    const p = v => pool.filter(c => c.r < v).length / pool.length;
+    const cheap = h.find(c => p(c.r) >= 0.62);        // cheapest reliable winner
+    return (cheap || h[0]).id;                         // nothing wins -> sacrifice
   }
 };
 
 /* Mirror the AI onto the player's seat so `ai` can play itself. */
 function playerAiTurn(m){
-  const swap = {
-    hand:m.playerHand, deck:m.playerDeck, pw:m.playerPowerups,
-    wins:m.playerBattleWins, theirs:m.aiBattleWins
-  };
   const mirror = {
-    rng:m.rng,
-    aiHand:swap.hand, playerHand:m.aiHand,
-    aiDeck:swap.deck, playerDeck:m.aiDeck,
-    aiPowerups:swap.pw, playerPowerups:m.aiPowerups,
-    aiBattleWins:swap.wins, playerBattleWins:swap.theirs,
-    aiKnown:m.playerScouted, playerScouted:m.aiKnown,
-    aiBoost:null, stake:m.stake,
-    stats:{ aiPowerups:0 }
+    rng: m.rng, suddenDeath: m.suddenDeath, stake: m.stake,
+    aiHand: m.playerHand, playerHand: m.aiHand,
+    aiDeck: m.playerDeck, playerDeck: m.aiDeck,
+    aiSpent: m.playerSpent, playerSpent: m.aiSpent,
+    aiPowerups: m.playerPowerups, playerPowerups: m.aiPowerups,
+    aiBattleWins: m.playerBattleWins, playerBattleWins: m.aiBattleWins,
+    aiKnown: m.playerScouted, playerScouted: m.aiKnown,
+    aiBoost: null,
+    stats: { aiPowerups: 0 }
   };
   const acts = aiTurn(mirror);
-  // write the mirrored mutations back
-  m.playerHand = mirror.aiHand;
-  m.aiHand = mirror.playerHand;
-  m.playerScouted = mirror.aiKnown;
+  m.playerHand = mirror.aiHand;  m.aiHand = mirror.playerHand;
+  m.playerDeck = mirror.aiDeck;  m.aiDeck = mirror.playerDeck;
   m.playerPowerups = mirror.aiPowerups;
-  m.stats.playerPowerups += mirror.stats.aiPowerups;
+  m.playerScouted = mirror.aiKnown;
   m.playerBoost = mirror.aiBoost;
+  m.stats.playerPowerups += mirror.stats.aiPowerups;
   return acts[acts.length - 1].card.id;
 }
 
@@ -1764,36 +1958,35 @@ function simMatch(seed, stratName){
   let guard = 0;
   startRound(m);
   while (m.playerRoundWins < ROUNDS_TO_WIN && m.aiRoundWins < ROUNDS_TO_WIN){
-    if (++guard > 400) break;
+    if (++guard > 4000) break;
+    if (!m.playerHand.length || !m.aiHand.length) break;
     const aiId = aiTurn(m).slice(-1)[0].card.id;
-    const pid = stratName === 'ai' ? playerAiTurn(m) : strat(m, m.rng);
-    const res = resolveBattle(m, pid, aiId);
-    const out = applyOutcome(m, res);
+    const pid = stratName === 'ai' ? playerAiTurn(m) : strat(m);
+    const out = applyOutcome(m, resolveBattle(m, pid, aiId));
     if (out.roundOver && !out.matchOver){ m.currentRound++; startRound(m); }
   }
   return m;
 }
 
 const __WR = {
-  M: () => M,
-  UI,
-  simMatch,
+  M: () => M, UI, simMatch,
   freeze(on = true){ FROZEN = on; if (on) stopTimer(); else if (UI.phase === 'select') startTimer(); },
-  fleet(n = 300){
+  fleet(n = 200){
     const rows = [];
     for (const name of Object.keys(STRATEGIES)){
-      let wins = 0, battles = 0, aiBattles = 0, wars = 0;
+      let wins = 0, bat = 0, aiBat = 0, battles = 0, wars = 0;
       for (let i = 0; i < n; i++){
         const m = simMatch(0xC0FFEE + i * 7919, name);
         if (m.playerRoundWins > m.aiRoundWins) wins++;
-        battles += m.stats.playerBattles; aiBattles += m.stats.aiBattles;
-        wars += m.stats.warsPlayed;
+        bat += m.stats.playerBattles; aiBat += m.stats.aiBattles;
+        battles += m.stats.battlesPlayed; wars += m.stats.warsPlayed;
       }
       rows.push({
         strategy: name,
         winRate: +(wins / n * 100).toFixed(1),
-        battleShare: +(battles / (battles + aiBattles) * 100).toFixed(1),
-        warsPerMatch: +(wars / n).toFixed(2)
+        battleShare: +(bat / (bat + aiBat) * 100).toFixed(1),
+        battlesPerMatch: Math.round(battles / n),
+        warsPerMatch: +(wars / n).toFixed(1)
       });
     }
     rows.sort((a, b) => b.winRate - a.winRate);
