@@ -3,298 +3,463 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Bottle sort — generator + solver logic</title>
+<title>Bottle Sort</title>
 <style>
+  :root {
+    /* The room is laid out once at a fixed design size — the same 1242 x 2688
+       canvas the art was exported for — then uniformly scaled to whatever
+       screen it lands on, so every proportion survives the trip. */
+    --design-w: 1242px;
+    --design-h: 2688px;
+    --stage-scale: 1;
+    --bw: 132px;  /* bottle width  — the fitter owns these two */
+    --bh: 293px;  /* bottle height */
+  }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #05070f;
+    font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: #0d1116;
     color: #fff;
-    margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+    -webkit-user-select: none; user-select: none;
   }
-  .screen {
-    --bw: clamp(34px, 9vw, 56px); /* base bottle width — everything else derives from this */
-    width: 100%;
-    max-width: 480px;
-    min-height: 100vh;
-    min-height: 100dvh;
-    background: linear-gradient(180deg, #1a2a6c 0%, #142055 100%);
+  .viewport {
+    position: fixed; inset: 0;
+    height: 100%;
+    height: 100dvh;
     padding:
-      calc(env(safe-area-inset-top, 0px) + 18px)
-      calc(env(safe-area-inset-right, 0px) + clamp(14px, 4vw, 22px))
-      calc(env(safe-area-inset-bottom, 0px) + 14px)
-      calc(env(safe-area-inset-left, 0px) + clamp(14px, 4vw, 22px));
-    position: relative;
-    display: flex;
-    flex-direction: column;
+      env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+      env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    overflow: hidden;
+    background: #0d1116;
   }
-  .home-screen {
-    position: absolute; z-index: 30; inset: 0; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden; background: #061a4c;
-    opacity: 0; visibility: hidden; pointer-events: none;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
+  .stage-area { position: relative; width: 100%; height: 100%; }
+  .screen {
+    position: absolute; left: 50%; top: 50%;
+    width: var(--design-w); height: var(--design-h);
+    transform: translate(-50%, -50%) scale(var(--stage-scale));
+    transform-origin: center center;
+    overflow: hidden;
+    background: #9fb0be;
   }
-  .home-screen.visible { opacity: 1; visibility: visible; pointer-events: auto; }
-  .title-art-stage { position: relative; height: 100%; aspect-ratio: 941 / 1672; flex: 0 0 auto; }
-  .home-title-art {
-    display: block; width: 100%; height: 100%; object-fit: fill;
-    user-select: none; -webkit-user-drag: none;
+  .screen.framed { border-radius: 34px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
+
+  /* ---------- room ---------- */
+  .wall {
+    position: absolute; inset: 0; z-index: 0;
+    width: 100%; height: 100%; object-fit: cover; object-position: center;
   }
-  .title-hotspot {
-    position: absolute; z-index: 2; border: 0; padding: 0; background: transparent;
-    color: transparent; cursor: pointer; font-size: 0; -webkit-tap-highlight-color: transparent;
-  }
-  .title-hotspot:focus-visible {
-    outline: 4px solid #fff; outline-offset: 4px; box-shadow: 0 0 22px #29b6f6;
-  }
-  .title-play {
-    left: 22.4%; top: 79.2%; width: 55.2%; height: 10.2%; border-radius: 999px;
-  }
-  .title-play:hover { box-shadow: 0 0 28px rgba(255,210,63,0.5) inset; }
-  .title-settings {
-    left: 56.4%; top: 90.9%; width: 12.7%; aspect-ratio: 1; border-radius: 50%;
-  }
-  .title-settings:hover { box-shadow: 0 0 22px rgba(41,182,246,0.55); }
-  .title-menu {
-    position: absolute; z-index: 4; right: 9%; bottom: 4.5%; left: 9%;
-    padding: 20px; border: 1px solid rgba(255,255,255,0.28); border-radius: 22px;
-    background: rgba(7,24,69,0.96); box-shadow: 0 18px 45px rgba(0,0,0,0.5);
-    color: #fff; text-align: center; backdrop-filter: blur(12px);
-  }
-  .title-menu[hidden] { display: none; }
-  .title-menu-close {
-    position: absolute; top: 8px; right: 10px; width: 32px; height: 32px;
-    border: 0; border-radius: 50%; background: rgba(255,255,255,0.1);
-    color: #fff; cursor: pointer; font-size: 20px;
-  }
-  .title-menu h2 { margin: 0 0 15px; font-size: 20px; }
-  .home-progress { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
-  .home-stat {
-    padding: 10px; border: 1px solid rgba(255,255,255,0.12); border-radius: 13px;
-    background: rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 3px;
-  }
-  .home-stat span { color: rgba(255,255,255,0.55); font-size: 9px; letter-spacing: 1px; text-transform: uppercase; }
-  .home-stat strong { font-size: 17px; }
-  .score-rules {
-    margin: 0 0 14px; padding: 11px 12px; border-radius: 13px;
-    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.72);
-    display: grid; gap: 4px; font-size: 10px; line-height: 1.35; text-align: left;
-  }
-  .score-rules strong { color: #ffd23f; font-size: 11px; text-align: center; }
-  .home-secondary {
-    width: 100%; min-height: 48px; border: 1px solid rgba(255,255,255,0.16);
-    border-radius: 13px; background: linear-gradient(180deg, #ffe17b, #f5aa38);
-    box-shadow: 0 4px 0 #af7024; color: #65400f; cursor: pointer;
-    font-size: 13px; font-weight: 700;
-  }
-  .home-secondary[hidden] { display: none; }
-  @media (max-aspect-ratio: 941 / 1672) {
-    .title-art-stage { width: 100%; height: auto; }
-  }
-  /* On phone-width viewports the screen fills the device edge-to-edge.
-     Past that it becomes a centered, framed card instead of stretching
-     into an ungainly wide panel on tablets/desktops. */
-  @media (min-width: 520px) {
-    .screen {
-      border-radius: 24px;
-      box-shadow: 0 12px 30px rgba(0,0,0,0.45);
-      height: min(100vh, 840px);
-      height: min(100dvh, 840px);
-      min-height: 0;
-      margin: 24px 0;
-    }
-  }
-  .topbar { display: flex; align-items: center; justify-content: center; position: relative; margin-bottom: 8px; flex-shrink: 0; }
-  .home-btn {
-    position: absolute; left: 0; top: -2px; width: 40px; height: 40px; border-radius: 50%;
-    background: #fff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer;
-  }
-  .level-pill {
-    background: rgba(255,255,255,0.12); border-radius: 20px; padding: 6px 18px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .level-pill span { font-size: 14px; font-weight: 600; }
-  .timer-pill {
-    background: rgba(255,255,255,0.12); border-radius: 20px; padding: 6px 18px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .timer-pill span { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .timer-pill.urgent { background: rgba(224,80,58,0.35); }
-  .timer-pill.urgent span, .timer-pill.urgent svg { color: #ff8a7a; stroke: #ff8a7a; }
-  #status { text-align: center; font-size: 12px; color: #ffd23f; min-height: 16px; margin: 8px 0 4px; }
-  #bottles {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(var(--bw), max-content));
-    align-content: center;
-    justify-content: center;
-    justify-items: center;
-    row-gap: clamp(14px, 4vh, 30px);
-    column-gap: clamp(4px, 2vw, 12px);
-    width: 100%;
-    padding: 8px 2px;
+  /* Sized off the room's height, not its width: on a short screen a
+     width-based prop would grow tall enough to reach the shelves. */
+  .decor { position: absolute; z-index: 1; width: auto; pointer-events: none; }
+  .ottoman { height: 21%; left: -13%; bottom: -9%; }
+  .plant   { height: 30%; right: -9%; bottom: -3%; }
+
+  /* ---------- shelves + bottles ---------- */
+  #board { position: absolute; inset: 0; z-index: 2; }
+  .row { position: absolute; left: 0; right: 0; z-index: 2; }
+  .shelf { position: absolute; left: 0; width: 100%; z-index: 0; pointer-events: none; }
+  .row-bottles {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; align-items: flex-end; justify-content: center;
   }
   .bottle-wrap {
     appearance: none; -webkit-appearance: none; border: 0; padding: 0; margin: 0;
-    background: transparent; color: inherit; font: inherit; cursor: pointer;
-    display: flex; flex-direction: column; align-items: center; position: relative;
+    background: transparent; font: inherit; cursor: pointer;
+    position: relative; flex: 0 0 auto;
+    width: var(--bw); height: var(--bh);
+    transform-origin: 50% 50%;
+    -webkit-tap-highlight-color: transparent;
   }
   .bottle-wrap:disabled { cursor: default; }
-  .bottle-wrap:focus-visible { outline: none; }
-  .bottle-wrap:focus-visible .bottle {
-    box-shadow: 0 0 0 4px #ffd23f, 0 0 0 8px rgba(255,255,255,0.75), 0 6px 10px rgba(0,0,0,0.4);
+  .glass {
+    position: absolute; inset: 0; z-index: 2;
+    width: 100%; height: 100%; pointer-events: none;
   }
-  .collar {
-    width: calc(var(--bw) * 0.42); height: calc(var(--bw) * 0.15); border-radius: 4px;
-    background: linear-gradient(90deg, #fff 0%, #d7d9e2 30%, #f4f5f9 55%, #b7b9c4 85%, #eceef3 100%);
-    border: calc(var(--bw) * 0.055) solid #fff; z-index: 2;
+  /* Liquid is drawn behind the glass art, inside the measured cavity, so the
+     bottle's own highlights and rim fall on top of it. */
+  .liquid {
+    position: absolute; z-index: 1;
+    left: 11.7%; width: 74.9%;
+    top: 29%; height: 63.6%;
+    display: flex; flex-direction: column-reverse;
+    overflow: hidden;
+    border-radius: 0 0 16% 16% / 0 0 5% 5%;
   }
-  .neck {
-    width: calc(var(--bw) * 0.38); height: calc(var(--bw) * 0.22); background: rgba(255,255,255,0.15);
-    border-left: calc(var(--bw) * 0.07) solid #fff; border-right: calc(var(--bw) * 0.07) solid #fff; margin-top: -3px;
+  .seg {
+    position: relative; width: 100%; flex: 0 0 auto;
+    transition: height var(--pour-flow-ms, 230ms) linear;
   }
-  .bottle {
-    width: var(--bw); height: calc(var(--bw) * 2.05);
-    border-radius: calc(var(--bw) * 0.42) calc(var(--bw) * 0.42) calc(var(--bw) * 0.46) calc(var(--bw) * 0.46);
-    border: calc(var(--bw) * 0.075) solid #fff;
-    margin-top: -2px; position: relative; background: rgba(255,255,255,0.08);
-    display: flex; flex-direction: column-reverse; overflow: hidden; cursor: pointer;
-    box-shadow: 0 6px 10px rgba(0,0,0,0.4); transition: box-shadow 0.15s, transform 0.35s ease;
+  /* The cylinder's top face — an ellipse inscribed at the liquid line. */
+  .surface {
+    position: absolute; left: 0; right: 0; top: 0;
+    height: calc(var(--bw) * 0.15);
+    border-radius: 50%;
   }
-  .bottle.selected { box-shadow: 0 0 0 4px #fff, 0 6px 10px rgba(0,0,0,0.4); }
-  .bottle.hint-from { box-shadow: 0 0 0 4px #29B6F6, 0 6px 10px rgba(0,0,0,0.4); }
-  .bottle.hint-to { box-shadow: 0 0 0 4px #5cff8f, 0 6px 10px rgba(0,0,0,0.4); }
-  .screen.input-locked #bottles { pointer-events: none; }
-  .layer { width: 100%; position: relative; }
-  .shine {
-    position: absolute; top: 2px; bottom: 2px; left: calc(var(--bw) * 0.16); width: calc(var(--bw) * 0.14);
-    border-radius: 4px; background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0.15)); z-index: 3;
+  .bottle-wrap.lifted {
+    transform: translateY(calc(var(--bh) * -0.09));
+    animation: bottle-lift 180ms cubic-bezier(0.34, 1.3, 0.64, 1);
   }
-  .top-highlight { position: absolute; top: 0; left: 0; right: 0; height: 30%; background: rgba(255,255,255,0.3); border-radius: 0 0 50% 50%/0 0 8px 8px; }
-  .shadow-ellipse {
-    width: calc(var(--bw) * 0.84); height: 9px; border-radius: 50%;
-    background: radial-gradient(ellipse, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0) 75%); margin-top: -3px;
+  @keyframes bottle-lift {
+    from { transform: translateY(0); }
+    to   { transform: translateY(calc(var(--bh) * -0.09)); }
   }
-  .hint-badge { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); width: 22px; height: 22px; border-radius: 50%; background: #ffd23f; display: flex; align-items: center; justify-content: center; z-index: 4; }
+  .bottle-wrap.lifted .glass  { filter: drop-shadow(0 0 14px rgba(255,255,255,0.9)); }
 
-  .toolbar { display: flex; align-items: stretch; gap: 10px; margin-top: 12px; flex-shrink: 0; }
-  .toolbar button {
-    flex: 1; border: none; border-radius: 14px; padding: 10px 4px 8px; cursor: pointer;
-    display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+  /* ---------- hint: the suggested pour, rehearsed on a loop ----------
+     Everything but the two bottles involved drops back, and the source
+     mimes the real pour until the player makes the move. The poses come
+     from the same maths the real pour uses, so the rehearsal and the
+     move itself trace the same arc. */
+  #board.hint-active .bottle-wrap:not(.hint-from):not(.hint-to) {
+    filter: grayscale(0.9) brightness(0.62);
+    opacity: 0.5;
   }
-  .toolbar button:disabled { opacity: 0.45; cursor: default; }
-  #undoBtn { background: linear-gradient(180deg, #eceef5, #cdd0dd); color: #4a4d5e; box-shadow: 0 4px 0 #9a9db0; }
-  #scoreBox {
-    flex: 1; min-width: 0; background: rgba(255,255,255,0.1); color: #fff;
-    border-radius: 14px; padding: 7px 5px; display: flex; align-items: center; justify-content: space-evenly;
+  #board.hint-active .bottle-wrap { transition: opacity 220ms ease, filter 220ms ease; }
+  .bottle-wrap.hint-from { z-index: 9; }
+  .bottle-wrap.hint-demo {
+    animation: hint-pour var(--hint-cycle, 2400ms) cubic-bezier(0.4, 0.05, 0.25, 1) infinite;
   }
-  #scoreBox .metric { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-  #scoreBox .metric + .metric { border-left: 1px solid rgba(255,255,255,0.16); padding-left: 8px; }
-  #scoreBox span.label { font-size: 10px; color: rgba(255,255,255,0.65); letter-spacing: 0.3px; }
-  #scoreBox span.value { font-size: 16px; font-weight: 600; white-space: nowrap; }
-  #scoreBox.at-limit #moveValue { color: #ff8a7a; font-size: 13px; }
-  #hintBtn { background: linear-gradient(180deg, #ffd873, #f2a83c); color: #6b3f10; box-shadow: 0 4px 0 #b9762a; position: relative; }
-  #hintBtn .count {
-    position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%;
-    background: #2b3a67; color: #fff; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+  @keyframes hint-pour {
+    0%, 8%    { transform: translate(0px, 0px) rotate(0deg); }
+    24%       { transform: var(--hint-lift); }
+    40%, 64%  { transform: var(--hint-pose); }
+    80%       { transform: var(--hint-lift); }
+    92%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+  }
+  .bottle-wrap.hint-to .glass {
+    animation: hint-target var(--hint-cycle, 2400ms) ease-in-out infinite;
+  }
+  @keyframes hint-target {
+    0%, 34%   { filter: drop-shadow(0 0 10px rgba(92,255,143,0.7)); }
+    48%, 62%  { filter: drop-shadow(0 0 30px #5cff8f) drop-shadow(0 0 12px #5cff8f); }
+    76%, 100% { filter: drop-shadow(0 0 10px rgba(92,255,143,0.7)); }
+  }
+  .hint-stream {
+    position: absolute; z-index: 1; pointer-events: none;
+    border-radius: 0 0 40% 40% / 0 0 60% 60%;
+    transform-origin: 50% 0%;
+    animation: hint-stream var(--hint-cycle, 2400ms) ease-in-out infinite;
+  }
+  @keyframes hint-stream {
+    0%, 40%   { opacity: 0; transform: scaleY(0); }
+    47%, 60%  { opacity: 0.75; transform: scaleY(1); }
+    67%, 100% { opacity: 0; transform: scaleY(0); }
+  }
+  /* A looping rehearsal is exactly the motion some players need off. */
+  @media (prefers-reduced-motion: reduce) {
+    .bottle-wrap.hint-demo, .bottle-wrap.hint-to .glass, .hint-stream { animation: none; }
+    .hint-stream { opacity: 0.7; transform: scaleY(1); }
+    .bottle-wrap.hint-from .glass { filter: drop-shadow(0 0 18px #29b6f6); }
+    .bottle-wrap.hint-to .glass { filter: drop-shadow(0 0 18px #5cff8f); }
+  }
+  .bottle-wrap:focus-visible .glass { filter: drop-shadow(0 0 0 4px #ffd23f) drop-shadow(0 0 14px #ffd23f); }
+  .bottle-wrap.pouring {
+    z-index: 9;
+    transition: transform var(--pour-move-ms, 220ms) cubic-bezier(0.33, 0.02, 0.2, 1);
+  }
+  .pour-stream {
+    position: absolute; z-index: 1; pointer-events: none;
+    border-radius: 0 0 40% 40% / 0 0 60% 60%;
+    transform-origin: 50% 0%; transform: scaleY(0);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.22);
+  }
+  .pour-stream.flowing { transform: scaleY(1); }
+  .pour-splash {
+    position: absolute; z-index: 1; pointer-events: none; border-radius: 50%;
+    opacity: 0; transform: scale(0.4);
+  }
+  .pour-splash.flowing { opacity: 0.9; transform: scale(1); }
+  .screen.input-locked #board { pointer-events: none; }
+
+  /* ---------- top nav ---------- */
+  /* The plank is used oversized and centre-cropped, which is what gives the
+     bar its chunky depth at phone widths. */
+  .topnav-wood {
+    position: absolute; z-index: 10; top: 0; left: -17.5%; width: 135%;
+    pointer-events: none;
+  }
+  .topnav {
+    position: absolute; z-index: 11; top: 0; left: 0; right: 0; height: 389px;
+    display: flex; align-items: center; justify-content: center; gap: 34px;
+    padding-top: 118px;
+  }
+  .pill, .gear {
+    appearance: none; border: 4px solid rgba(255,255,255,0.22);
+    background: linear-gradient(180deg, #3d3d3f 0%, #17171a 58%, #0d0d0f 100%);
+    box-shadow:
+      0 8px 0 rgba(0,0,0,0.32),
+      0 12px 22px rgba(0,0,0,0.34),
+      inset 0 3px 0 rgba(255,255,255,0.18);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+  }
+  .pill {
+    min-width: 330px; height: 124px; border-radius: 999px; gap: 20px;
+    padding: 0 34px; font-size: 62px; font-weight: 800; letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pill svg { flex: 0 0 auto; }
+  .gear {
+    width: 134px; height: 134px; border-radius: 50%; padding: 0; cursor: pointer;
+  }
+  .gear:active { transform: translateY(4px); box-shadow: 0 4px 0 rgba(0,0,0,0.32), inset 0 3px 0 rgba(255,255,255,0.18); }
+  .timer-pill.urgent {
+    background: linear-gradient(180deg, #7d2a22 0%, #37100c 60%, #240a07 100%);
+    border-color: rgba(255,150,130,0.4);
+  }
+  .timer-pill.urgent .clock { stroke: #ff9a86; }
+  .timer-pill.urgent span { color: #ff9a86; }
+
+  /* ---------- readout + status ---------- */
+  .readout {
+    position: absolute; z-index: 5; top: 410px; left: 0; right: 0;
+    text-align: center; font-size: 34px; font-weight: 800; letter-spacing: 3px;
+    text-transform: uppercase; color: rgba(38,52,66,0.62);
+  }
+  #status {
+    position: absolute; z-index: 5; top: 468px; left: 8%; right: 8%;
+    text-align: center; font-size: 40px; font-weight: 700; line-height: 1.25;
+    color: #2b3d4d; min-height: 50px;
+    text-shadow: 0 2px 0 rgba(255,255,255,0.5);
+  }
+  #status.cheer { color: #1c7a52; }
+
+  /* ---------- tools ---------- */
+  .tools {
+    position: absolute; z-index: 6; left: 0; right: 0; bottom: 5.2%;
+    display: flex; align-items: flex-start; justify-content: center; gap: 92px;
+  }
+  .tool {
+    appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    color: #2b3d4d; font-size: 30px; font-weight: 800; letter-spacing: 2px;
+    text-transform: uppercase; text-shadow: 0 2px 0 rgba(255,255,255,0.45);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tool .knob {
+    position: relative;
+    width: 150px; height: 150px; border-radius: 50%;
+    border: 4px solid rgba(255,255,255,0.22);
+    background: linear-gradient(180deg, #3d3d3f 0%, #17171a 58%, #0d0d0f 100%);
+    box-shadow:
+      0 9px 0 rgba(0,0,0,0.32),
+      0 14px 24px rgba(0,0,0,0.32),
+      inset 0 3px 0 rgba(255,255,255,0.18);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .tool:active .knob { transform: translateY(5px); box-shadow: 0 4px 0 rgba(0,0,0,0.32), inset 0 3px 0 rgba(255,255,255,0.18); }
+  .tool:disabled { opacity: 0.4; cursor: default; }
+  .tool:disabled .knob { transform: none; }
+  .count {
+    position: absolute; top: -8px; right: -8px;
+    min-width: 52px; height: 52px; padding: 0 6px; border-radius: 999px;
+    background: linear-gradient(180deg, #ffd76b, #f0a028);
+    border: 4px solid #7a4a12; color: #5a3408;
+    font-size: 30px; font-weight: 900; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ---------- menu ---------- */
+  .scrim {
+    position: absolute; z-index: 60; inset: 0;
+    background: rgba(8,14,20,0.62);
+    display: flex; align-items: center; justify-content: center; padding: 8%;
+    /* Fades on opacity alone. Transitioning visibility would leave the panel
+       unfocusable at the instant it opens; the hidden attribute does the
+       taking-out-of-layout instead. */
+    opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+  }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .panel {
+    width: 100%; border-radius: 46px; padding: 54px 48px 48px;
+    background: linear-gradient(180deg, #3d3d3f 0%, #17171a 62%, #0d0d0f 100%);
+    border: 5px solid rgba(255,255,255,0.2);
+    box-shadow: 0 18px 0 rgba(0,0,0,0.3), 0 30px 60px rgba(0,0,0,0.5);
+    text-align: center; position: relative;
+  }
+  .panel h2 { margin: 0 0 34px; font-size: 62px; font-weight: 900; letter-spacing: 2px; }
+  .panel-close {
+    position: absolute; top: 26px; right: 30px; width: 76px; height: 76px;
+    border-radius: 50%; border: 3px solid rgba(255,255,255,0.22);
+    background: rgba(255,255,255,0.1); color: #fff; font-size: 44px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; line-height: 1;
+  }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 30px; }
+  .stat {
+    padding: 24px 18px; border-radius: 24px; background: rgba(255,255,255,0.08);
+    border: 2px solid rgba(255,255,255,0.1);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .stat span { font-size: 26px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.55); }
+  .stat strong { font-size: 52px; font-weight: 900; }
+  .rules {
+    margin: 0 0 34px; padding: 26px 24px; border-radius: 24px;
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.75);
+    display: grid; gap: 10px; font-size: 28px; line-height: 1.35;
+  }
+  .rules strong { color: #ffd23f; font-size: 30px; }
+  .panel-btn {
+    width: 100%; min-height: 120px; margin-top: 18px; border-radius: 28px;
+    border: 4px solid rgba(255,255,255,0.2); cursor: pointer;
+    background: linear-gradient(180deg, #ffe17b, #f0a028);
+    box-shadow: 0 9px 0 #9a6118, inset 0 3px 0 rgba(255,255,255,0.5);
+    color: #5a3408; font-size: 44px; font-weight: 900; letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .panel-btn.ghost {
+    background: rgba(255,255,255,0.1); box-shadow: 0 9px 0 rgba(0,0,0,0.3);
+    color: #fff;
+  }
+  .panel-btn:active { transform: translateY(5px); box-shadow: none; }
+  .scrim.open .panel { animation: panel-in 280ms cubic-bezier(0.2, 1.15, 0.4, 1); }
+  @keyframes panel-in {
+    from { transform: translateY(34px) scale(0.94); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+
+  /* ---------- end of run ---------- */
+  .end-kicker {
+    font-size: 28px; font-weight: 800; letter-spacing: 4px; text-transform: uppercase;
+    color: rgba(255,255,255,0.5); margin-bottom: 6px;
+  }
+  .end-score { display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 10px; }
+  .end-score-value {
+    font-size: 132px; font-weight: 900; line-height: 1; letter-spacing: -3px;
+    color: #ffd76b;
+  }
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    .end-score-value {
+      background: linear-gradient(180deg, #fff2c4 0%, #ffd23f 45%, #f0a028 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+  }
+  .end-best {
+    display: inline-block; margin-bottom: 26px; padding: 10px 30px; border-radius: 999px;
+    background: linear-gradient(180deg, #ffe17b, #f0a028); color: #5a3408;
+    box-shadow: 0 6px 0 #9a6118; font-size: 28px; font-weight: 900;
+    letter-spacing: 2px; text-transform: uppercase;
+    animation: best-pop 1.5s ease-in-out infinite;
+  }
+  .end-best[hidden] { display: none; }
+  @keyframes best-pop { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+  @media (prefers-reduced-motion: reduce) {
+    .scrim.open .panel, .end-best { animation: none; }
   }
 </style>
 </head>
 <body>
 
-<div class="screen">
-  <section class="home-screen visible" id="homeScreen" aria-label="Bottle Sort title screen">
-    <div class="title-art-stage">
-      <img
-        class="home-title-art"
-        src="bottle-sort-title.png"
-        alt="Evermore Arcade Bottle Sort — Pour, Match, Win"
-      >
-      <button class="title-hotspot title-play" id="playBtn" type="button">Start game</button>
-      <button
-        class="title-hotspot title-settings"
-        id="settingsBtn"
-        type="button"
-        aria-label="Open game menu"
-        aria-expanded="false"
-      ></button>
-      <div class="title-menu" id="titleMenu" hidden>
-        <button class="title-menu-close" id="menuCloseBtn" type="button" aria-label="Close game menu">×</button>
-        <h2>Game menu</h2>
-        <div class="home-progress" id="homeProgress">
-          <div class="home-stat"><span>Current board</span><strong id="homeLevel">—</strong></div>
-          <div class="home-stat"><span>Boards solved</span><strong id="homeBoards">0</strong></div>
-          <div class="home-stat"><span>Current score</span><strong id="homeScore">0</strong></div>
-          <div class="home-stat"><span>High score</span><strong id="homeBestScore">0</strong></div>
-          <div class="home-stat"><span>Flawless streak</span><strong id="homeStreak">0</strong></div>
-          <div class="home-stat"><span>Best streak</span><strong id="homeBestStreak">0</strong></div>
-        </div>
-        <div class="score-rules">
-          <strong>Flawless boards build your score streak</strong>
-          <span>Difficulty + time remaining + 500 flawless bonus</span>
-          <span>Undo −250 · incorrect pour −100 · hint −200 · each extra move −150</span>
-        </div>
-        <button class="home-secondary" id="newGameBtn" type="button" hidden>Start a new run</button>
-      </div>
-    </div>
-  </section>
+<div class="viewport">
+<div class="stage-area" id="stageArea">
+<div class="screen" id="screen">
 
-  <div class="topbar">
-    <button class="home-btn" id="homeBtn" type="button" aria-label="Open home screen">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2b3a67" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/>
+  <img class="wall" src="Background.png" alt="">
+  <img class="decor ottoman" src="Floor Ottoman.png" alt="">
+  <img class="decor plant" src="Floor Plant.png" alt="">
+
+  <div id="board" role="group" aria-label="Colour sorting bottles"></div>
+
+  <img class="topnav-wood" src="Top Nav.png" alt="">
+  <div class="topnav">
+    <div class="pill timer-pill" id="timerPill">
+      <span id="timerValue">01:30</span>
+      <svg class="clock" width="62" height="62" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4.2l2.8 1.9M9.2 2.2h5.6M12 2.2v2.4"/>
+      </svg>
+    </div>
+    <button class="gear" id="gearBtn" type="button" aria-label="Open menu" aria-expanded="false">
+      <svg width="70" height="70" viewBox="0 0 24 24" fill="#fff">
+        <path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm0 5a1.6 1.6 0 1 1 0-3.2 1.6 1.6 0 0 1 0 3.2Z"/>
+        <path d="M20.5 13.6a8.7 8.7 0 0 0 0-3.2l1.7-1.3-1.9-3.3-2 .8a8.6 8.6 0 0 0-2.8-1.6l-.3-2.1h-3.8l-.3 2.1a8.6 8.6 0 0 0-2.8 1.6l-2-.8-1.9 3.3 1.7 1.3a8.7 8.7 0 0 0 0 3.2l-1.7 1.3 1.9 3.3 2-.8a8.6 8.6 0 0 0 2.8 1.6l.3 2.1h3.8l.3-2.1a8.6 8.6 0 0 0 2.8-1.6l2 .8 1.9-3.3-1.7-1.3ZM12 17.2A5.2 5.2 0 1 1 12 6.8a5.2 5.2 0 0 1 0 10.4Z"/>
       </svg>
     </button>
-    <div class="level-pill">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffd23f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 3h6M10 3v6l-5.5 9a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3"/>
+    <div class="pill score-pill">
+      <span id="scoreValue">0</span>
+      <svg width="60" height="60" viewBox="0 0 24 24" fill="#fff">
+        <circle cx="12" cy="12" r="10.6" fill="none" stroke="#fff" stroke-width="1.9"/>
+        <path d="m12 6.3 1.8 3.7 4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.6z"/>
       </svg>
-      <span id="levelLabel">Board 1 / 10</span>
-    </div>
-    <div class="timer-pill" id="timerPill" style="margin-left: 8px;">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/>
-      </svg>
-      <span id="timerValue">1:30</span>
     </div>
   </div>
 
+  <div class="readout" id="readout">Board 1 / 10 · 0 / 0 moves</div>
   <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
-  <div id="bottles" role="group" aria-label="Color sorting bottles"></div>
 
-  <div class="toolbar">
-    <button id="undoBtn">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4a4d5e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
-      Undo −250
+  <div class="tools">
+    <button class="tool" id="undoBtn" type="button">
+      <span class="knob">
+        <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
+        </svg>
+      </span>
+      Undo
     </button>
-    <div id="scoreBox">
-      <div class="metric">
-        <span class="label">SCORE</span>
-        <span class="value" id="scoreValue">0</span>
-      </div>
-      <div class="metric">
-        <span class="label">MOVES</span>
-        <span class="value" id="moveValue">0 / —</span>
-      </div>
-    </div>
-    <button id="hintBtn">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6b3f10" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8 1 .8 1.7v.5h5.6v-.5c0-.7.3-1.3.8-1.7A6 6 0 0 0 12 3Z"/></svg>
+    <button class="tool" id="hintBtn" type="button">
+      <span class="knob">
+        <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.2 18.4h5.6M10.4 21.2h3.2"/>
+          <path d="M12 2.8a6.2 6.2 0 0 0-3.7 11.2c.5.4.9 1 .9 1.7v.4h5.6v-.4c0-.7.4-1.3.9-1.7A6.2 6.2 0 0 0 12 2.8Z"/>
+        </svg>
+        <span class="count" id="hintCount">3</span>
+      </span>
       <span id="hintLabel">Hint −200</span>
-      <span class="count" id="hintCount">3</span>
     </button>
   </div>
+
+  <div class="scrim" id="menuScrim" hidden>
+    <div class="panel" role="dialog" aria-modal="true" aria-label="Game menu">
+      <button class="panel-close" id="menuCloseBtn" type="button" aria-label="Close menu">×</button>
+      <h2>Menu</h2>
+      <div class="stats">
+        <div class="stat"><span>Board</span><strong id="mLevel">1 / 10</strong></div>
+        <div class="stat"><span>Boards solved</span><strong id="mBoards">0</strong></div>
+        <div class="stat"><span>Score</span><strong id="mScore">0</strong></div>
+        <div class="stat"><span>High score</span><strong id="mBestScore">0</strong></div>
+        <div class="stat"><span>Flawless streak</span><strong id="mStreak">0</strong></div>
+        <div class="stat"><span>Best streak</span><strong id="mBestStreak">0</strong></div>
+      </div>
+      <div class="rules">
+        <strong>Flawless boards build your streak</strong>
+        <span>Difficulty + time left + 500 flawless bonus</span>
+        <span>Undo −250 · wrong pour −100 · extra move −150</span>
+        <span>Hints cost more each time: −200, −400, −800</span>
+      </div>
+      <button class="panel-btn" id="resumeBtn" type="button">Resume</button>
+      <button class="panel-btn ghost" id="newRunBtn" type="button">New run</button>
+    </div>
+  </div>
+
+  <div class="scrim" id="endScrim" hidden>
+    <div class="panel" role="dialog" aria-modal="true" aria-labelledby="endTitle">
+      <h2 id="endTitle">Time's up!</h2>
+      <div class="end-kicker" id="endKicker">Final score</div>
+      <div class="end-score">
+        <span class="end-score-value" id="endScore">0</span>
+        <svg width="72" height="72" viewBox="0 0 24 24" fill="#ffd23f">
+          <circle cx="12" cy="12" r="10.6" fill="none" stroke="#ffd23f" stroke-width="1.9"/>
+          <path d="m12 6.3 1.8 3.7 4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.6z"/>
+        </svg>
+      </div>
+      <div class="end-best" id="endBest" hidden>New high score!</div>
+      <div class="stats">
+        <div class="stat"><span>Boards solved</span><strong id="endBoards">0</strong></div>
+        <div class="stat"><span>Reached</span><strong id="endReached">1 / 10</strong></div>
+        <div class="stat"><span>Best streak</span><strong id="endStreak">0</strong></div>
+        <div class="stat"><span>High score</span><strong id="endHigh">0</strong></div>
+      </div>
+      <button class="panel-btn" id="playAgainBtn" type="button">Play again</button>
+    </div>
+  </div>
+
+</div>
+</div>
 </div>
 
 <script>
 const CAPACITY = 4;
-const PALETTE = ['#FFD23F', '#29B6F6', '#5B2C8F', '#FF8C1A', '#1c9e8a', '#e0508a', '#8fce3a', '#e0733f'];
+const PALETTE = ['#F7C325', '#1F9EF0', '#7B3ED6', '#F7931E', '#00A97C', '#E6376E', '#8BC53F', '#EF7A3D'];
 const COLOR_NAMES = ['yellow', 'blue', 'purple', 'orange', 'teal', 'pink', 'green', 'coral'];
 const MAX_LEVELS = 10;
 const LEVEL_TIME = 90; // one continuous countdown for the whole run
@@ -304,12 +469,21 @@ const SCORE_RULES = Object.freeze({
   perMinimumMove: 75,
   perSecondRemaining: 10,
   flawlessBonus: 500,
-  streakStep: 0.25,
+  streakStep: 0.4,
   maximumMultiplier: 3,
   incorrectPourPenalty: 100,
   undoPenalty: 250,
-  hintPenalty: 200,
+  // Each hint on a board costs more than the last, so the flawless bonus and
+  // the streak are no longer the whole price of asking for help.
+  hintPenalties: Object.freeze([200, 400, 800]),
   overLimitMovePenalty: 150
+});
+
+// Lighter shade for each colour's top surface ellipse.
+const PALETTE_LIGHT = PALETTE.map(hex => {
+  const n = parseInt(hex.slice(1), 16);
+  const mix = c => Math.round(c + (255 - c) * 0.34);
+  return `rgb(${mix(n >> 16 & 255)}, ${mix(n >> 8 & 255)}, ${mix(n & 255)})`;
 });
 
 let state = [];
@@ -322,13 +496,24 @@ let flawlessStreak = 0;
 let bestStreak = loadRecord('bottleSortBestStreak');
 let boardIsFlawless = true;
 let bestScore = loadRecord('bottleSortBestScore');
-let hintsRemaining = 3;
+// Records as they stood when this run began. bestScore is updated live, so
+// without this the end screen could never tell the player they beat it.
+let bestScoreAtRunStart = bestScore;
+let runBestStreak = 0;
+const HINTS_PER_BOARD = SCORE_RULES.hintPenalties.length;
+let hintsRemaining = HINTS_PER_BOARD;
+
+// What the next hint on this board will cost.
+function nextHintPenalty() {
+  const used = HINTS_PER_BOARD - hintsRemaining;
+  return SCORE_RULES.hintPenalties[Math.min(used, HINTS_PER_BOARD - 1)];
+}
 let history = []; // stack of {state, moveCount} snapshots for undo
 let level = 1;
 let gamePhase = 'playing'; // playing | transitioning | complete
 let transitionTimeout = null;
 let levelLoadToken = 0;
-let homeOpen = true;
+let menuOpen = false;
 let gameStarted = false;
 let timeRemaining = LEVEL_TIME;
 let timerInterval = null;
@@ -395,7 +580,7 @@ function advanceDifficulty() {
 function formatTime(sec) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 function stopTimer() {
@@ -438,6 +623,7 @@ function endTimedRun() {
   levelLoadToken++;
   stopTimer();
   timeRemaining = 0;
+  updateTimerDisplay(); // the clock must read 00:00 behind the end card
   gamePhase = 'complete';
   solverBusy = false;
   selected = null;
@@ -446,15 +632,34 @@ function endTimedRun() {
   flawlessStreak = 0;
   saveRecords();
   render();
-  if (homeOpen) updateHomeScreen();
-  document.getElementById('status').textContent =
-    `Time's up! ${boardsSolved} board${boardsSolved === 1 ? '' : 's'} solved · ${score.toLocaleString()} points.`;
+  if (menuOpen) updateMenu();
+  setStatus(
+    `Time's up! ${boardsSolved} board${boardsSolved === 1 ? '' : 's'} solved · ${score.toLocaleString()} points.`
+  );
+  showEndScreen('timeout', 700);
 }
 
 function updateTimerDisplay() {
   const pill = document.getElementById('timerPill');
   document.getElementById('timerValue').textContent = formatTime(Math.max(timeRemaining, 0));
   pill.classList.toggle('urgent', timeRemaining <= 10);
+}
+
+// The status line survives re-renders (a rotation re-renders the whole board),
+// so it is held in state and repainted rather than rebuilt.
+let statusText = '';
+let statusCheer = false;
+
+function setStatus(text, cheer = false) {
+  statusText = text;
+  statusCheer = cheer;
+  paintStatus();
+}
+
+function paintStatus() {
+  const el = document.getElementById('status');
+  el.textContent = statusText;
+  el.classList.toggle('cheer', statusCheer);
 }
 
 // ---------- core solver logic ----------
@@ -691,90 +896,367 @@ function generateLevel(numColors, numEmpty, shuffleSteps, maxAttempts = 16) {
   return best;
 }
 
+// ---------- responsive stage ----------
+
+const DESIGN_W = 1242;      // the art was drawn for this width
+const DESIGN_MIN_H = 1750;  // squarer than this and the room letterboxes
+const DESIGN_MAX_H = 2688;  // taller than this and the room letterboxes
+const MAX_STAGE_SCALE = 1.3;
+
+// Bottle art geometry, measured from Bottle.png (171 x 379).
+const BOTTLE_AR = 379 / 171;     // wrap height per unit width
+const BOTTLE_BASE = 0.976;       // glass bottom, as a fraction of wrap height
+// Shelf art geometry, measured from Shelf.png (1369 x 368).
+const SHELF_AR = 368 / 1369;
+const SHELF_SURFACE = 0.35;      // where bottles stand, as a fraction of shelf height
+
+const NAV_H = 389;               // plank bottom edge at design width
+const BOARD_TOP = 560;           // below the nav, readout and status
+const FLOOR_RESERVE = 520;       // room for the tools and the floor props
+const MAX_PER_SHELF = 7;
+const MAX_BW = 140;              // the reference sets a bottle at ~11% of the wall
+const MIN_BW = 54;
+const PITCH_FILL = 0.74;         // bottle width as a share of its column pitch
+const USABLE_W = 0.87;           // share of the wall a full shelf of bottles uses
+const ROW_PITCH_K = 1.75;        // shelf spacing per bottle height, from the reference
+const STACK_BIAS = 0.42;         // shelves hang a little above centre, as in the reference
+const ROW_PREFERENCE = 0.78;     // how much size a layout may give up to save a shelf
+
+const rootStyle = document.documentElement.style;
+let stageScale = 1;
+let boardLayout = { cols: 1, bw: 132, bh: 293, rowPitch: 428, stackTop: 700, gap: 46 };
+
+function fitStage() {
+  const area = document.getElementById('stageArea');
+  const availW = area.clientWidth;
+  const availH = area.clientHeight;
+  if (availW <= 0 || availH <= 0) return;
+
+  // The design height tracks the screen's aspect ratio between the two bounds,
+  // so ordinary phones fill edge to edge while extreme shapes letterbox
+  // rather than stretch the room.
+  const designH = Math.round(
+    Math.min(DESIGN_MAX_H, Math.max(DESIGN_MIN_H, (DESIGN_W * availH) / availW))
+  );
+  const scale = Math.min(availW / DESIGN_W, availH / designH, MAX_STAGE_SCALE);
+  stageScale = scale;
+
+  rootStyle.setProperty('--design-w', `${DESIGN_W}px`);
+  rootStyle.setProperty('--design-h', `${designH}px`);
+  rootStyle.setProperty('--stage-scale', String(scale));
+  document.getElementById('screen').classList.toggle(
+    'framed',
+    DESIGN_W * scale < availW - 1 || designH * scale < availH - 1
+  );
+
+  fitBoard(designH);
+}
+
+// Chooses how many bottles stand on a shelf, how big they are, and where the
+// shelves hang. Boards grow from 5 bottles to 14, so a fixed arrangement would
+// either overflow the last levels or strand the first ones on a bare wall.
+function fitBoard(designH) {
+  const count = Math.max(state.length, 1);
+  const boardH = designH - FLOOR_RESERVE - BOARD_TOP;
+  const options = [];
+
+  for (let cols = Math.min(count, MAX_PER_SHELF); cols >= 1; cols--) {
+    const rows = Math.ceil(count / cols);
+    // Keep the shelves even — 7 + 7, never 13 + 1.
+    if (Math.ceil(count / rows) !== cols) continue;
+    const byWidth = ((DESIGN_W * USABLE_W) / cols) * PITCH_FILL;
+    const byHeight = boardH / (rows * ROW_PITCH_K * BOTTLE_AR);
+    options.push({ cols, rows, bw: Math.min(byWidth, byHeight, MAX_BW) });
+  }
+
+  const roomiest = options.reduce((max, o) => Math.max(max, o.bw), 0);
+  // Options run widest-first, so this takes the shallowest board that stays
+  // close to the largest bottle available.
+  const choice = options.find(o => o.bw >= roomiest * ROW_PREFERENCE) || options[0];
+
+  const bw = Math.max(MIN_BW, Math.round(choice.bw));
+  const bh = Math.round(bw * BOTTLE_AR);
+  const rowPitch = Math.round(bh * ROW_PITCH_K);
+  const stackH = (choice.rows - 1) * rowPitch + bh;
+  const stackTop = Math.round(BOARD_TOP + (boardH - stackH) * STACK_BIAS);
+  const gap = Math.round(bw * (1 / PITCH_FILL - 1));
+
+  boardLayout = { cols: choice.cols, rows: choice.rows, bw, bh, rowPitch, stackTop, gap };
+  rootStyle.setProperty('--bw', `${bw}px`);
+  rootStyle.setProperty('--bh', `${bh}px`);
+}
+
+// ---------- pour animation ----------
+
+const POUR_MOVE_MS = 230;   // lift, travel and tilt into place
+const POUR_FLOW_MS = 240;   // liquid actually crossing
+const POUR_RETURN_MS = 185; // settle back onto the shelf
+const POUR_TILT_DEG = 62;
+
+let animating = false;
+let bottleEls = [];
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Box of an element in design pixels, relative to another element. Undoing the
+// stage scale keeps the animation maths in the same units as the layout.
+function designRect(el, origin) {
+  const box = el.getBoundingClientRect();
+  const base = origin.getBoundingClientRect();
+  const s = stageScale || 1;
+  return {
+    x: (box.left - base.left) / s,
+    y: (box.top - base.top) / s,
+    w: box.width / s,
+    h: box.height / s
+  };
+}
+
+// Solves the pouring pose: the bottle rotates about its own centre, so the
+// translation is worked backwards from where the spout has to end up —
+// directly over the target's mouth. Shared by the real pour and the hint
+// rehearsal so the two trace the same arc.
+function pourPose(fromIdx, toIdx) {
+  const board = document.getElementById('board');
+  const src = bottleEls[fromIdx];
+  const tgt = bottleEls[toIdx];
+  if (!src || !tgt) return null;
+
+  const { bw, bh } = boardLayout;
+  const s = designRect(src, board);
+  const t = designRect(tgt, board);
+  const srcCentre = s.x + s.w / 2;
+  const tgtCentre = t.x + t.w / 2;
+  const angle = (tgtCentre < srcCentre ? -1 : 1) * POUR_TILT_DEG;
+  const radians = (angle * Math.PI) / 180;
+
+  const spoutX = srcCentre + Math.sin(radians) * (s.h / 2);
+  const spoutY = s.y + s.h / 2 - Math.cos(radians) * (s.h / 2);
+  const destX = tgtCentre;
+  const destY = t.y - bh * 0.22; // hangs clear of the target's neck
+
+  const streamW = Math.max(4, bw * 0.17);
+  const streamTop = destY + bh * 0.02;
+  const streamH = Math.max(t.y + bh * 0.34 - streamTop, bh * 0.12);
+
+  return {
+    board, src, tgt, bw, bh, destX, destY,
+    transform: `translate(${destX - spoutX}px, ${destY - spoutY}px) rotate(${angle}deg)`,
+    stream: { left: destX - streamW / 2, top: streamTop, width: streamW, height: streamH }
+  };
+}
+
+// Tilts the source bottle toward the bottle it is filling and pours into it.
+async function animatePour(fromIdx, toIdx, move) {
+  const pose = pourPose(fromIdx, toIdx);
+  if (!pose) return;
+  const { board, src, tgt, bw, bh, destX } = pose;
+
+  void src.offsetWidth; // settle the freshly rendered bottles before animating
+  src.classList.add('pouring');
+  src.style.setProperty('--pour-move-ms', `${POUR_MOVE_MS}ms`);
+  src.style.transform = pose.transform;
+  await wait(POUR_MOVE_MS);
+
+  const colour = PALETTE[move.color];
+  const stream = document.createElement('div');
+  stream.className = 'pour-stream';
+  stream.style.cssText =
+    `left:${pose.stream.left}px; top:${pose.stream.top}px; width:${pose.stream.width}px;` +
+    `height:${pose.stream.height}px; background:${colour}; transition: transform 110ms ease-out;`;
+  const splash = document.createElement('div');
+  splash.className = 'pour-splash';
+  splash.style.cssText =
+    `left:${destX - bw * 0.26}px; top:${pose.stream.top + pose.stream.height - bw * 0.09}px;` +
+    `width:${bw * 0.52}px; height:${bw * 0.18}px; background:${PALETTE_LIGHT[move.color]};` +
+    `transition: opacity 130ms ease-out, transform 130ms ease-out;`;
+  board.append(stream, splash);
+
+  // Drain the source's top slices while the same number fill the target.
+  rootStyle.setProperty('--pour-flow-ms', `${POUR_FLOW_MS}ms`);
+  const srcSegs = src.querySelectorAll('.seg');
+  const tgtSegs = tgt.querySelectorAll('.seg');
+  const srcLen = state[fromIdx].length;
+  const tgtLen = state[toIdx].length;
+  const srcSurface = src.querySelector('.surface');
+
+  for (let k = tgtLen; k < tgtLen + move.amount; k++) {
+    if (!tgtSegs[k]) continue;
+    tgtSegs[k].style.transition = 'none';
+    tgtSegs[k].style.height = '0%';
+    tgtSegs[k].style.background = colour;
+  }
+  const newSurface = document.createElement('div');
+  newSurface.className = 'surface';
+  newSurface.style.background = PALETTE_LIGHT[move.color];
+  if (tgtSegs[tgtLen + move.amount - 1]) tgtSegs[tgtLen + move.amount - 1].appendChild(newSurface);
+  void board.offsetWidth;
+
+  stream.classList.add('flowing');
+  splash.classList.add('flowing');
+  if (srcSurface) srcSurface.remove();
+  for (let k = srcLen - move.amount; k < srcLen; k++) {
+    if (srcSegs[k]) srcSegs[k].style.height = '0%';
+  }
+  if (srcLen - move.amount > 0 && srcSegs[srcLen - move.amount - 1]) {
+    const keptSurface = document.createElement('div');
+    keptSurface.className = 'surface';
+    keptSurface.style.background = PALETTE_LIGHT[state[fromIdx][srcLen - move.amount - 1]];
+    srcSegs[srcLen - move.amount - 1].appendChild(keptSurface);
+  }
+  for (let k = tgtLen; k < tgtLen + move.amount; k++) {
+    if (!tgtSegs[k]) continue;
+    tgtSegs[k].style.transition = '';
+    tgtSegs[k].style.height = '25%';
+  }
+  await wait(POUR_FLOW_MS);
+
+  stream.style.transformOrigin = '50% 100%';
+  stream.classList.remove('flowing');
+  splash.classList.remove('flowing');
+  src.style.setProperty('--pour-move-ms', `${POUR_RETURN_MS}ms`);
+  src.style.transform = '';
+  await wait(POUR_RETURN_MS);
+
+  stream.remove();
+  splash.remove();
+  src.classList.remove('pouring');
+}
+
+const HINT_CYCLE_MS = 2400;
+
+// Rehearses the suggested pour on a loop: the source bottle lifts, tilts over
+// its target and mimes the pour, with a ghost stream, over and over until the
+// player makes a move. No liquid actually moves — the board is untouched.
+function startHintDemo() {
+  if (!hintMove) return;
+  const pose = pourPose(hintMove.from, hintMove.to);
+  if (!pose) return;
+  const { board, src, bh } = pose;
+
+  src.style.setProperty('--hint-cycle', `${HINT_CYCLE_MS}ms`);
+  src.style.setProperty('--hint-pose', pose.transform);
+  src.style.setProperty('--hint-lift', `translate(0px, ${-bh * 0.12}px) rotate(0deg)`);
+  bottleEls[hintMove.to].style.setProperty('--hint-cycle', `${HINT_CYCLE_MS}ms`);
+
+  const ghost = document.createElement('div');
+  ghost.className = 'hint-stream';
+  ghost.style.cssText =
+    `left:${pose.stream.left}px; top:${pose.stream.top}px; width:${pose.stream.width}px;` +
+    `height:${pose.stream.height}px; background:${PALETTE[hintMove.color]};`;
+  ghost.style.setProperty('--hint-cycle', `${HINT_CYCLE_MS}ms`);
+  board.appendChild(ghost);
+}
+
 // ---------- rendering ----------
 
-function render() {
-  const wrap = document.getElementById('bottles');
-  const inputLocked = homeOpen || gamePhase !== 'playing' || solverBusy;
-  document.querySelector('.screen').classList.toggle('input-locked', inputLocked);
-  wrap.setAttribute('aria-busy', inputLocked ? 'true' : 'false');
-  wrap.innerHTML = '';
-  state.forEach((bottle, idx) => {
-    const outer = document.createElement('button');
-    outer.type = 'button';
-    outer.className = 'bottle-wrap';
-    outer.dataset.index = idx;
-    outer.disabled = inputLocked;
-    outer.setAttribute('aria-label', `Bottle ${idx + 1}: ${describeBottle(bottle)}`);
-    outer.setAttribute('aria-pressed', idx === selected ? 'true' : 'false');
-    outer.onclick = () => handleClick(idx);
+function makeBottle(idx, inputLocked) {
+  const bottle = state[idx];
+  const wrap = document.createElement('button');
+  wrap.type = 'button';
+  wrap.className = 'bottle-wrap';
+  wrap.dataset.index = idx;
+  wrap.disabled = inputLocked;
+  wrap.setAttribute('aria-label', `Bottle ${idx + 1}: ${describeBottle(bottle)}`);
+  wrap.setAttribute('aria-pressed', idx === selected ? 'true' : 'false');
+  wrap.onclick = () => handleClick(idx);
+  if (idx === selected) wrap.classList.add('lifted');
+  if (hintMove && idx === hintMove.from) {
+    wrap.classList.add('hint-from');
+    // Once the player has picked the bottle up, the rehearsal has done its
+    // job — it would fight the selection lift.
+    if (selected === null) wrap.classList.add('hint-demo');
+  }
+  if (hintMove && idx === hintMove.to) wrap.classList.add('hint-to');
 
-    const collar = document.createElement('div');
-    collar.className = 'collar';
-    const neck = document.createElement('div');
-    neck.className = 'neck';
-
-    const el = document.createElement('div');
-    el.className = 'bottle';
-    if (idx === selected) el.classList.add('selected');
-    if (hintMove && idx === hintMove.from) el.classList.add('hint-from');
-    if (hintMove && idx === hintMove.to) el.classList.add('hint-to');
-
-    const topIndex = bottle.length - 1;
-    for (let slot = 0; slot < CAPACITY; slot++) {
-      const seg = document.createElement('div');
-      seg.className = 'layer';
-      seg.style.height = '25%';
-      if (bottle[slot] !== undefined) {
-        seg.style.background = PALETTE[bottle[slot]];
-        if (slot === topIndex) {
-          const hi = document.createElement('div');
-          hi.className = 'top-highlight';
-          seg.appendChild(hi);
-        }
+  const liquid = document.createElement('div');
+  liquid.className = 'liquid';
+  for (let slot = 0; slot < CAPACITY; slot++) {
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.style.height = '25%';
+    if (bottle[slot] !== undefined) {
+      seg.style.background = PALETTE[bottle[slot]];
+      if (slot === bottle.length - 1) {
+        const surface = document.createElement('div');
+        surface.className = 'surface';
+        surface.style.background = PALETTE_LIGHT[bottle[slot]];
+        seg.appendChild(surface);
       }
-      el.appendChild(seg);
     }
-    const shine = document.createElement('div');
-    shine.className = 'shine';
-    el.appendChild(shine);
+    liquid.appendChild(seg);
+  }
 
-    const shadow = document.createElement('div');
-    shadow.className = 'shadow-ellipse';
+  const glass = document.createElement('img');
+  glass.className = 'glass';
+  glass.src = 'Bottle.png';
+  glass.alt = '';
+  wrap.append(liquid, glass);
+  return wrap;
+}
 
-    outer.appendChild(collar);
-    outer.appendChild(neck);
-    outer.appendChild(el);
-    outer.appendChild(shadow);
-    wrap.appendChild(outer);
-  });
+function render() {
+  const board = document.getElementById('board');
+  const inputLocked = menuOpen || gamePhase !== 'playing' || solverBusy || animating;
+  document.getElementById('screen').classList.toggle('input-locked', inputLocked);
+  board.setAttribute('aria-busy', inputLocked ? 'true' : 'false');
+  board.classList.toggle('hint-active', !!hintMove);
+  board.innerHTML = '';
+  bottleEls = [];
+
+  const { cols, bh, rowPitch, stackTop, gap } = boardLayout;
+  const rows = Math.ceil(state.length / cols) || 1;
+  const shelfH = DESIGN_W * SHELF_AR;
+
+  for (let r = 0; r < rows; r++) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.top = `${stackTop + r * rowPitch}px`;
+    row.style.height = `${bh}px`;
+
+    const shelf = document.createElement('img');
+    shelf.className = 'shelf';
+    shelf.src = 'Shelf.png';
+    shelf.alt = '';
+    // Line the plank's standing surface up with the bottoms of the bottles.
+    shelf.style.top = `${bh - shelfH * SHELF_SURFACE - bh * (1 - BOTTLE_BASE)}px`;
+    row.appendChild(shelf);
+
+    const holder = document.createElement('div');
+    holder.className = 'row-bottles';
+    holder.style.gap = `${gap}px`;
+    for (let i = r * cols; i < Math.min((r + 1) * cols, state.length); i++) {
+      const el = makeBottle(i, inputLocked);
+      bottleEls[i] = el;
+      holder.appendChild(el);
+    }
+    row.appendChild(holder);
+    board.appendChild(row);
+  }
 
   document.getElementById('scoreValue').textContent = score.toLocaleString();
   const extraMoves = Math.max(0, moveCount - minimumMoves);
-  document.getElementById('moveValue').textContent = minimumMoves > 0
+  const moveText = minimumMoves > 0
     ? extraMoves > 0
       ? `${moveCount} / ${minimumMoves} (+${extraMoves})`
       : `${moveCount} / ${minimumMoves}`
-    : `${moveCount} / —`;
-  document.getElementById('scoreBox').classList.toggle(
-    'at-limit',
-    minimumMoves > 0 && moveCount > minimumMoves
-  );
+    : `${moveCount}`;
+  const streakText = flawlessStreak > 0 ? ` · ${flawlessStreak} flawless` : '';
+  document.getElementById('readout').textContent =
+    `Board ${level} / ${MAX_LEVELS} · ${moveText} moves${streakText}`;
+
   document.getElementById('hintCount').textContent = hintsRemaining;
-  document.getElementById('hintBtn').disabled =
-    hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy;
-  document.getElementById('undoBtn').disabled =
-    history.length === 0 || gamePhase !== 'playing' || solverBusy;
   document.getElementById('hintLabel').textContent =
-    solverBusy ? 'Thinking…' : `Hint −${SCORE_RULES.hintPenalty}`;
+    hintsRemaining > 0 ? `Hint −${nextHintPenalty()}` : 'No hints';
+  document.getElementById('hintBtn').disabled =
+    hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy || animating;
+  document.getElementById('undoBtn').disabled =
+    history.length === 0 || gamePhase !== 'playing' || solverBusy || animating;
 
-  const streakText = flawlessStreak > 0 ? ` · 🔥 ${flawlessStreak}` : '';
-  document.getElementById('levelLabel').textContent =
-    `Board ${level} / ${MAX_LEVELS}${streakText}`;
-
-  if (gamePhase === 'playing' && !isSolved(state)) {
-    document.getElementById('status').textContent = '';
-  }
+  paintStatus();
+  if (hintMove && selected === null) startHintDemo();
 }
 
 function pushHistory() {
@@ -795,6 +1277,7 @@ function completeLevel() {
   if (wasFlawless) {
     flawlessStreak++;
     bestStreak = Math.max(bestStreak, flawlessStreak);
+    runBestStreak = Math.max(runBestStreak, flawlessStreak);
   } else {
     flawlessStreak = 0;
   }
@@ -820,8 +1303,11 @@ function completeLevel() {
   render();
 
   if (gamePhase === 'complete') {
-    document.getElementById('status').textContent =
-      `Run complete! ${boardsSolved} boards · ${score.toLocaleString()} points · best streak ${bestStreak}.`;
+    setStatus(
+      `Run complete! ${boardsSolved} boards · ${score.toLocaleString()} points · best streak ${runBestStreak}.`,
+      true
+    );
+    showEndScreen('complete', 1000);
     return;
   }
 
@@ -832,8 +1318,7 @@ function completeLevel() {
   const extraMoveMessage = extraMoves > 0
     ? ` · ${extraMoves} extra move${extraMoves === 1 ? '' : 's'}`
     : '';
-  document.getElementById('status').textContent =
-    `Board cleared — +${levelScore.toLocaleString()} pts${streakMessage}${extraMoveMessage}`;
+  setStatus(`Shelf cleared — +${levelScore.toLocaleString()} pts${streakMessage}${extraMoveMessage}`, true);
   advanceDifficulty();
   scheduleTransition(() => {
     level++;
@@ -846,33 +1331,50 @@ function completeLevel() {
 // First click selects a source bottle; a second click on a different
 // bottle attempts to pour into it.
 function handleClick(idx) {
-  if (gamePhase !== 'playing' || solverBusy) return;
-  hintMove = null;
+  if (gamePhase !== 'playing' || solverBusy || animating) return;
 
   if (selected === null) {
     if (state[idx].length === 0) return; // nothing to pour from an empty bottle
+    // Picking up the hinted bottle keeps the hint's target lit; picking up any
+    // other bottle means the player has gone their own way, so it clears.
+    if (!hintMove || hintMove.from !== idx) hintMove = null;
     selected = idx;
     render();
     return;
   }
   const from = selected;
   selected = null;
+  hintMove = null;
   if (from === idx) { render(); return; }
   attemptMove(from, idx);
 }
 
-function attemptMove(fromIdx, toIdx) {
+async function attemptMove(fromIdx, toIdx) {
   hintMove = null;
   const moves = getValidMoves(state).filter(m => m.from === fromIdx && m.to === toIdx);
   if (moves.length === 0) {
     recordFault(SCORE_RULES.incorrectPourPenalty);
     render();
-    document.getElementById('status').textContent =
-      `Incorrect pour — −${SCORE_RULES.incorrectPourPenalty} points. Streak reset.`;
+    setStatus(`Wrong pour — −${SCORE_RULES.incorrectPourPenalty} points. Streak reset.`);
     return;
   }
   pushHistory();
   const move = moves[0];
+
+  // The board is only committed once the liquid has landed, so the animation
+  // plays against the pre-move state it was measured from.
+  const token = levelLoadToken;
+  animating = true;
+  render();
+  await animatePour(fromIdx, toIdx, move);
+  animating = false;
+
+  // The countdown can expire, or a new board can load, mid-pour.
+  if (token !== levelLoadToken || gamePhase !== 'playing') {
+    render();
+    return;
+  }
+
   state = applyMove(state, move);
   moveCount++;
 
@@ -883,13 +1385,13 @@ function attemptMove(fromIdx, toIdx) {
 
   if (isSolved(state)) {
     completeLevel();
-  } else {
+  } else if (isExtraMove) {
+    const extraMoves = moveCount - minimumMoves;
+    setStatus(`Extra move ${extraMoves} — −${SCORE_RULES.overLimitMovePenalty} points.`);
     render();
-    if (isExtraMove) {
-      const extraMoves = moveCount - minimumMoves;
-      document.getElementById('status').textContent =
-        `Extra move ${extraMoves} — −${SCORE_RULES.overLimitMovePenalty} points.`;
-    }
+  } else {
+    setStatus(''); // a clean pour clears whatever the last message was
+    render();
   }
 }
 
@@ -904,8 +1406,7 @@ async function startLevel() {
   selected = null;
   hintMove = null;
   render();
-  document.getElementById('status').textContent =
-    'Calculating the minimum move challenge…';
+  setStatus('Setting the shelf…');
 
   let scrambleSteps = Math.min(12, Math.max(6, numColors + 4));
 
@@ -926,7 +1427,7 @@ async function startLevel() {
       minimumMoves = optimalSolution.length;
       cacheGeneratedSolution(state, optimalSolution);
       moveCount = 0;
-      hintsRemaining = 3;
+      hintsRemaining = HINTS_PER_BOARD;
       history = [];
       boardIsFlawless = true;
       selected = null;
@@ -934,21 +1435,16 @@ async function startLevel() {
       solverBusy = false;
       gamePhase = 'playing';
       gameStarted = true;
-      if (!homeOpen) {
-        startTimer(false);
-      } else {
-        updateTimerDisplay();
-      }
+      fitBoard(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--design-h')));
+      if (!menuOpen) startTimer(false); else updateTimerDisplay();
       render();
-      if (homeOpen) updateHomeScreen();
-      document.getElementById('status').textContent =
-        `Target: ${minimumMoves} moves. Each extra move costs ${SCORE_RULES.overLimitMovePenalty} points.`;
+      if (menuOpen) updateMenu();
+      setStatus(`Target: ${minimumMoves} moves. Each extra move costs ${SCORE_RULES.overLimitMovePenalty}.`);
       return;
     }
 
     scrambleSteps = Math.max(5, scrambleSteps - 1);
-    document.getElementById('status').textContent =
-      'Simplifying the board so its minimum can be verified…';
+    setStatus('Simplifying the shelf…');
   }
 
   // An extremely defensive retry. Generation remains asynchronous and the
@@ -957,55 +1453,103 @@ async function startLevel() {
   scheduleTransition(startLevel, 50);
 }
 
-function updateHomeScreen() {
-  document.getElementById('homeLevel').textContent =
-    gameStarted ? `${level} / ${MAX_LEVELS}` : '—';
-  document.getElementById('homeScore').textContent = score.toLocaleString();
-  document.getElementById('homeBoards').textContent = boardsSolved.toLocaleString();
-  document.getElementById('homeBestScore').textContent = bestScore.toLocaleString();
-  document.getElementById('homeStreak').textContent = flawlessStreak.toLocaleString();
-  document.getElementById('homeBestStreak').textContent = bestStreak.toLocaleString();
-  document.getElementById('playBtn').textContent = !gameStarted
-    ? 'Start game'
-    : gamePhase === 'complete'
-      ? 'View completed run'
-      : `Resume level ${level}`;
-  document.getElementById('newGameBtn').hidden = !gameStarted;
+// ---------- panels ----------
+
+const scrimHideTimers = {};
+
+function showScrim(id, focusId) {
+  const scrim = document.getElementById(id);
+  clearTimeout(scrimHideTimers[id]);
+  scrim.hidden = false;
+  void scrim.offsetWidth; // settle the pre-transition style without a frame
+  scrim.classList.add('open');
+  if (focusId) document.getElementById(focusId).focus();
 }
 
-function closeTitleMenu() {
-  document.getElementById('titleMenu').hidden = true;
-  document.getElementById('settingsBtn').setAttribute('aria-expanded', 'false');
+function hideScrim(id) {
+  const scrim = document.getElementById(id);
+  scrim.classList.remove('open');
+  clearTimeout(scrimHideTimers[id]);
+  // Guarded, so a restart that re-opens the panel mid-fade cannot hide it.
+  scrimHideTimers[id] = setTimeout(() => {
+    if (!scrim.classList.contains('open')) scrim.hidden = true;
+  }, 240);
 }
 
-function showHome() {
-  homeOpen = true;
+// ---------- end of run ----------
+
+let endScreenTimeout = null;
+
+// Held back for a beat so the final board — or the last pour landing — is the
+// last thing the player sees before the card covers it.
+function showEndScreen(kind, delay) {
+  clearTimeout(endScreenTimeout);
+  endScreenTimeout = setTimeout(() => {
+    endScreenTimeout = null;
+    if (gamePhase !== 'complete') return; // a new run began in the meantime
+
+    const cleared = kind === 'complete';
+    document.getElementById('endTitle').textContent = cleared ? 'Every shelf sorted!' : "Time's up!";
+    document.getElementById('endKicker').textContent =
+      cleared ? `All ${MAX_LEVELS} boards cleared` : 'Final score';
+    document.getElementById('endScore').textContent = score.toLocaleString();
+    document.getElementById('endBoards').textContent = boardsSolved.toLocaleString();
+    document.getElementById('endReached').textContent = `${level} / ${MAX_LEVELS}`;
+    document.getElementById('endStreak').textContent = runBestStreak.toLocaleString();
+    document.getElementById('endHigh').textContent = bestScore.toLocaleString();
+    document.getElementById('endBest').hidden = score <= bestScoreAtRunStart;
+
+    showScrim('endScrim', 'playAgainBtn');
+  }, delay);
+}
+
+function hideEndScreen() {
+  clearTimeout(endScreenTimeout);
+  endScreenTimeout = null;
+  hideScrim('endScrim');
+}
+
+// ---------- menu ----------
+
+function updateMenu() {
+  document.getElementById('mLevel').textContent = `${level} / ${MAX_LEVELS}`;
+  document.getElementById('mScore').textContent = score.toLocaleString();
+  document.getElementById('mBoards').textContent = boardsSolved.toLocaleString();
+  document.getElementById('mBestScore').textContent = bestScore.toLocaleString();
+  document.getElementById('mStreak').textContent = flawlessStreak.toLocaleString();
+  document.getElementById('mBestStreak').textContent = bestStreak.toLocaleString();
+}
+
+function openMenu() {
+  menuOpen = true;
   stopTimer();
   selected = null;
   hintMove = null;
-  closeTitleMenu();
-  document.getElementById('homeScreen').classList.add('visible');
-  document.getElementById('homeScreen').setAttribute('aria-hidden', 'false');
-  updateHomeScreen();
+  updateMenu();
+  showScrim('menuScrim', 'resumeBtn');
+  document.getElementById('gearBtn').setAttribute('aria-expanded', 'true');
   render();
-  document.getElementById('playBtn').focus();
 }
 
-function closeHome() {
-  homeOpen = false;
-  closeTitleMenu();
-  document.getElementById('homeScreen').classList.remove('visible');
-  document.getElementById('homeScreen').setAttribute('aria-hidden', 'true');
+function closeMenu() {
+  menuOpen = false;
+  hideScrim('menuScrim');
+  document.getElementById('gearBtn').setAttribute('aria-expanded', 'false');
+  render();
+  if (gamePhase === 'playing') startTimer(false);
 }
 
 function startNewRun() {
   clearPendingTransition();
   stopTimer();
+  hideEndScreen();
   levelLoadToken++;
   level = 1;
   score = 0;
   boardsSolved = 0;
   flawlessStreak = 0;
+  runBestStreak = 0;
+  bestScoreAtRunStart = bestScore;
   boardIsFlawless = true;
   timeRemaining = LEVEL_TIME;
   updateTimerDisplay();
@@ -1017,42 +1561,18 @@ function startNewRun() {
   history = [];
   gamePhase = 'transitioning';
   gameStarted = true;
-  closeHome();
+  if (menuOpen) closeMenu();
   return startLevel();
 }
 
-document.getElementById('homeBtn').onclick = showHome;
-
-document.getElementById('settingsBtn').onclick = () => {
-  const menu = document.getElementById('titleMenu');
-  const willOpen = menu.hidden;
-  menu.hidden = !willOpen;
-  document.getElementById('settingsBtn').setAttribute(
-    'aria-expanded',
-    willOpen ? 'true' : 'false'
-  );
-  if (willOpen) document.getElementById('menuCloseBtn').focus();
-};
-
-document.getElementById('menuCloseBtn').onclick = () => {
-  closeTitleMenu();
-  document.getElementById('settingsBtn').focus();
-};
-
-document.getElementById('playBtn').onclick = () => {
-  if (!gameStarted) {
-    return startNewRun();
-  }
-
-  closeHome();
-  render();
-  if (gamePhase === 'playing') startTimer(false);
-};
-
-document.getElementById('newGameBtn').onclick = startNewRun;
+document.getElementById('gearBtn').onclick = () => (menuOpen ? closeMenu() : openMenu());
+document.getElementById('menuCloseBtn').onclick = closeMenu;
+document.getElementById('resumeBtn').onclick = closeMenu;
+document.getElementById('newRunBtn').onclick = startNewRun;
+document.getElementById('playAgainBtn').onclick = startNewRun;
 
 document.getElementById('undoBtn').onclick = () => {
-  if (history.length === 0 || gamePhase !== 'playing' || solverBusy) return;
+  if (history.length === 0 || gamePhase !== 'playing' || solverBusy || animating) return;
   const prev = history.pop();
   state = prev.state;
   moveCount = prev.moveCount;
@@ -1060,29 +1580,28 @@ document.getElementById('undoBtn').onclick = () => {
   selected = null;
   hintMove = null;
   render();
-  document.getElementById('status').textContent =
-    `Undo used — −${SCORE_RULES.undoPenalty} points. Streak reset.`;
+  setStatus(`Undo used — −${SCORE_RULES.undoPenalty} points. Streak reset.`);
 };
 
 document.getElementById('hintBtn').onclick = async () => {
-  if (hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy) return;
+  if (hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy || animating) return;
 
   hintMove = null;
 
   const cachedPath = solutionCache.get(serializeExact(state));
   if (cachedPath && cachedPath.length > 0) {
+    const penalty = nextHintPenalty();
     hintsRemaining--;
-    recordFault(SCORE_RULES.hintPenalty);
+    recordFault(penalty);
     hintMove = cachedPath[0];
     render();
-    document.getElementById('status').textContent =
-      `−${SCORE_RULES.hintPenalty} points · try bottle ${hintMove.from + 1} → bottle ${hintMove.to + 1}.`;
+    setStatus(`−${penalty} points · pour bottle ${hintMove.from + 1} into ${hintMove.to + 1}.`);
     return;
   }
 
   solverBusy = true;
   render();
-  document.getElementById('status').textContent = 'Finding a helpful pour…';
+  setStatus('Finding a helpful pour…');
 
   const searchedState = serialize(state);
   const result = await solveAsync(state);
@@ -1096,15 +1615,13 @@ document.getElementById('hintBtn').onclick = async () => {
 
   if (result.status === 'limit') {
     render();
-    document.getElementById('status').textContent =
-      'This position is complex — try a move or Undo, then ask again.';
+    setStatus('This position is tangled — make a move or undo, then ask again.');
     return;
   }
 
   if (result.status === 'unsolvable') {
     render();
-    document.getElementById('status').textContent =
-      'No solution was found from here — try Undo.';
+    setStatus('No solution from here — try undo.');
     return;
   }
 
@@ -1113,15 +1630,30 @@ document.getElementById('hintBtn').onclick = async () => {
     return;
   }
 
+  const penalty = nextHintPenalty();
   hintsRemaining--;
-  recordFault(SCORE_RULES.hintPenalty);
+  recordFault(penalty);
   hintMove = result.path[0];
   render();
-  document.getElementById('status').textContent =
-    `−${SCORE_RULES.hintPenalty} points · try bottle ${hintMove.from + 1} → bottle ${hintMove.to + 1}.`;
+  setStatus(`−${penalty} points · pour bottle ${hintMove.from + 1} into ${hintMove.to + 1}.`);
 };
 
-showHome();
+// Re-fit on anything that changes the available space: rotation, browser
+// chrome sliding away, or a resized ad container. Rebuilding the board would
+// tear down a pour that is mid-flight, so a resize during one only resizes
+// the art — attemptMove re-renders as soon as the liquid lands.
+function refit() {
+  fitStage();
+  if (!animating) render();
+}
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(refit).observe(document.getElementById('stageArea'));
+}
+window.addEventListener('resize', refit);
+window.addEventListener('orientationchange', refit);
+
+fitStage();
+startNewRun();
 </script>
 </body>
 </html>
