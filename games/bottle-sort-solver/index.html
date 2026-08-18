@@ -92,10 +92,10 @@
     overflow: hidden;
     border-radius: 0 0 16% 16% / 0 0 5% 5%;
   }
-  .seg {
-    position: relative; width: 100%; flex: 0 0 auto;
-    transition: height var(--pour-flow-ms, 230ms) linear;
-  }
+  /* Only slices actively being poured animate. Everything else snaps, so a
+     repaint of the board never smears liquid around. */
+  .seg { position: relative; width: 100%; flex: 0 0 auto; }
+  .seg.pouring { transition: height var(--pour-flow-ms, 240ms) linear; }
   /* The cylinder's top face — an ellipse inscribed at the liquid line. */
   .surface {
     position: absolute; left: 0; right: 0; top: 0;
@@ -111,6 +111,15 @@
     to   { transform: translateY(calc(var(--bh) * -0.09)); }
   }
   .bottle-wrap.lifted .glass  { filter: drop-shadow(0 0 14px rgba(255,255,255,0.9)); }
+  /* A tap that landed while the bottle was busy — waiting its turn. */
+  .bottle-wrap.queued .glass { animation: queued-pulse 900ms ease-in-out infinite; }
+  @keyframes queued-pulse {
+    0%, 100% { filter: drop-shadow(0 0 6px rgba(255,255,255,0.5)); }
+    50%      { filter: drop-shadow(0 0 16px rgba(255,255,255,0.95)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bottle-wrap.queued .glass { animation: none; filter: drop-shadow(0 0 12px rgba(255,255,255,0.8)); }
+  }
 
   /* ---------- hint: the suggested pour, rehearsed on a loop ----------
      Everything but the two bottles involved drops back, and the source
@@ -630,6 +639,7 @@ function endTimedRun() {
   updateTimerDisplay(); // the clock must read 00:00 behind the end card
   gamePhase = 'complete';
   solverBusy = false;
+  cancelPours(); // drop anything mid-air or queued so the board freezes honest
   selected = null;
   hintMove = null;
   boardIsFlawless = false;
@@ -904,7 +914,7 @@ function generateLevel(numColors, numEmpty, shuffleSteps, maxAttempts = 16) {
 
 const DESIGN_W = 1242;      // the art was drawn for this width
 const DESIGN_MIN_H = 1750;  // squarer than this and the room letterboxes
-const DESIGN_MAX_H = 2688;  // taller than this and the room letterboxes
+const DESIGN_MAX_H = 2900;  // covers 21:9; taller than this letterboxes
 const MAX_STAGE_SCALE = 1.3;
 
 // Bottle art geometry, measured from Bottle.png (171 x 379).
@@ -997,8 +1007,22 @@ const POUR_FLOW_MS = 240;   // liquid actually crossing
 const POUR_RETURN_MS = 185; // settle back onto the shelf
 const POUR_TILT_DEG = 62;
 
-let animating = false;
+// Pours are cosmetic replays of a move the board has already committed, so
+// several can be in the air at once. Only the two bottles a pour is using are
+// locked; every other bottle stays live. A rebuild of the board bumps the
+// generation, which makes any pour still running abandon its stale elements.
+const busyBottles = new Set();
+let boardGeneration = 0;
+let boardKey = '';
 let bottleEls = [];
+
+// Four out of five consecutive optimal moves reuse a bottle, so locking alone
+// would still stall a fast player. Taps on a busy bottle are queued instead of
+// dropped and fire the instant their bottles free up, in the order tapped.
+const pourQueue = [];
+// A pour takes ~0.6s, so even a very fast player stays 2-3 moves ahead. Eight
+// is far past any human tap rate while still bounding runaway input.
+const MAX_QUEUED_POURS = 8;
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -1052,17 +1076,57 @@ function pourPose(fromIdx, toIdx) {
   };
 }
 
-// Tilts the source bottle toward the bottle it is filling and pours into it.
-async function animatePour(fromIdx, toIdx, move) {
+// Releases a finished pour's bottles back to the board and syncs them to the
+// state that was committed when the move was made.
+function releasePour(fromIdx, toIdx) {
+  busyBottles.delete(fromIdx);
+  busyBottles.delete(toIdx);
+  paintBottle(fromIdx);
+  paintBottle(toIdx);
+  dispatchQueue(); // whatever the player tapped while this was in the air
+  render();
+}
+
+// Abandons every pour still in the air and snaps the board to its true state.
+// Used when something needs the board to hold still — an undo, a hint.
+function cancelPours() {
+  pourQueue.length = 0;
+  if (busyBottles.size === 0) return;
+  boardGeneration++; // in-flight pours bail at their next step
+  const held = [...busyBottles];
+  busyBottles.clear();
+  document.querySelectorAll('.pour-stream, .pour-splash').forEach(el => el.remove());
+  held.forEach(idx => {
+    const wrap = bottleEls[idx];
+    if (!wrap) return;
+    wrap.classList.remove('pouring');
+    wrap.style.transform = '';
+    wrap.style.removeProperty('--pour-move-ms');
+    paintBottle(idx);
+  });
+  hintDemoKey = '';
+}
+
+// Replays a move that the board has already committed: the source tilts over
+// its target, the liquid crosses, and it settles back. Reads nothing from the
+// live state — it works from the before/after snapshots it was handed — which
+// is what lets several pours run at once without fighting each other.
+async function animatePour(fromIdx, toIdx, move, beforeFrom, beforeTo) {
+  const generation = boardGeneration;
   const pose = pourPose(fromIdx, toIdx);
-  if (!pose) return;
+  if (!pose) { releasePour(fromIdx, toIdx); return; }
   const { board, src, tgt, bw, bh, destX } = pose;
 
-  void src.offsetWidth; // settle the freshly rendered bottles before animating
+  // Roll the two bottles back to how they looked before the move.
+  paintBottle(fromIdx, beforeFrom);
+  paintBottle(toIdx, beforeTo);
+
+  void src.offsetWidth; // settle the freshly painted bottles before animating
   src.classList.add('pouring');
   src.style.setProperty('--pour-move-ms', `${POUR_MOVE_MS}ms`);
   src.style.transform = pose.transform;
   await wait(POUR_MOVE_MS);
+  if (generation !== boardGeneration) return; // the board was rebuilt under us
 
   const colour = PALETTE[move.color];
   const stream = document.createElement('div');
@@ -1082,40 +1146,40 @@ async function animatePour(fromIdx, toIdx, move) {
   rootStyle.setProperty('--pour-flow-ms', `${POUR_FLOW_MS}ms`);
   const srcSegs = src.querySelectorAll('.seg');
   const tgtSegs = tgt.querySelectorAll('.seg');
-  const srcLen = state[fromIdx].length;
-  const tgtLen = state[toIdx].length;
-  const srcSurface = src.querySelector('.surface');
+  const srcLen = beforeFrom.length;
+  const tgtLen = beforeTo.length;
 
+  // Prime the slices about to fill: coloured, but collapsed to nothing.
   for (let k = tgtLen; k < tgtLen + move.amount; k++) {
     if (!tgtSegs[k]) continue;
-    tgtSegs[k].style.transition = 'none';
+    tgtSegs[k].classList.remove('pouring');
     tgtSegs[k].style.height = '0%';
     tgtSegs[k].style.background = colour;
   }
-  const newSurface = document.createElement('div');
-  newSurface.className = 'surface';
-  newSurface.style.background = PALETTE_LIGHT[move.color];
-  if (tgtSegs[tgtLen + move.amount - 1]) tgtSegs[tgtLen + move.amount - 1].appendChild(newSurface);
+  setSurface(tgtSegs[tgtLen - 1] || tgtSegs[0], null);
+  if (tgtSegs[tgtLen + move.amount - 1]) {
+    setSurface(tgtSegs[tgtLen + move.amount - 1], move.color);
+  }
   void board.offsetWidth;
 
   stream.classList.add('flowing');
   splash.classList.add('flowing');
-  if (srcSurface) srcSurface.remove();
   for (let k = srcLen - move.amount; k < srcLen; k++) {
-    if (srcSegs[k]) srcSegs[k].style.height = '0%';
+    if (!srcSegs[k]) continue;
+    setSurface(srcSegs[k], null);
+    srcSegs[k].classList.add('pouring');
+    srcSegs[k].style.height = '0%';
   }
-  if (srcLen - move.amount > 0 && srcSegs[srcLen - move.amount - 1]) {
-    const keptSurface = document.createElement('div');
-    keptSurface.className = 'surface';
-    keptSurface.style.background = PALETTE_LIGHT[state[fromIdx][srcLen - move.amount - 1]];
-    srcSegs[srcLen - move.amount - 1].appendChild(keptSurface);
-  }
+  // Whatever the pour uncovers becomes the source's new liquid line.
+  const uncovered = srcLen - move.amount - 1;
+  if (uncovered >= 0 && srcSegs[uncovered]) setSurface(srcSegs[uncovered], beforeFrom[uncovered]);
   for (let k = tgtLen; k < tgtLen + move.amount; k++) {
     if (!tgtSegs[k]) continue;
-    tgtSegs[k].style.transition = '';
+    tgtSegs[k].classList.add('pouring');
     tgtSegs[k].style.height = '25%';
   }
   await wait(POUR_FLOW_MS);
+  if (generation !== boardGeneration) return;
 
   stream.style.transformOrigin = '50% 100%';
   stream.classList.remove('flowing');
@@ -1123,21 +1187,33 @@ async function animatePour(fromIdx, toIdx, move) {
   src.style.setProperty('--pour-move-ms', `${POUR_RETURN_MS}ms`);
   src.style.transform = '';
   await wait(POUR_RETURN_MS);
+  if (generation !== boardGeneration) return;
 
   stream.remove();
   splash.remove();
   src.classList.remove('pouring');
+  releasePour(fromIdx, toIdx);
 }
 
 const HINT_CYCLE_MS = 2400;
+let hintDemoKey = '';
 
 // Rehearses the suggested pour on a loop: the source bottle lifts, tilts over
 // its target and mimes the pour, with a ghost stream, over and over until the
 // player makes a move. No liquid actually moves — the board is untouched.
+// Idempotent: re-running for the same move leaves the loop undisturbed, so a
+// repaint mid-rehearsal cannot restart or desync it.
 function startHintDemo() {
-  if (!hintMove) return;
+  const key = hintMove && selected === null
+    ? `${hintMove.from}>${hintMove.to}|${boardGeneration}`
+    : '';
+  if (key === hintDemoKey) return;
+  hintDemoKey = key;
+  document.querySelectorAll('.hint-stream').forEach(el => el.remove());
+  if (!key) return;
+
   const pose = pourPose(hintMove.from, hintMove.to);
-  if (!pose) return;
+  if (!pose) { hintDemoKey = ''; return; }
   const { board, src, bh } = pose;
 
   src.style.setProperty('--hint-cycle', `${HINT_CYCLE_MS}ms`);
@@ -1156,24 +1232,12 @@ function startHintDemo() {
 
 // ---------- rendering ----------
 
-function makeBottle(idx, inputLocked) {
-  const bottle = state[idx];
+function makeBottle(idx) {
   const wrap = document.createElement('button');
   wrap.type = 'button';
   wrap.className = 'bottle-wrap';
   wrap.dataset.index = idx;
-  wrap.disabled = inputLocked;
-  wrap.setAttribute('aria-label', `Bottle ${idx + 1}: ${describeBottle(bottle)}`);
-  wrap.setAttribute('aria-pressed', idx === selected ? 'true' : 'false');
   wrap.onclick = () => handleClick(idx);
-  if (idx === selected) wrap.classList.add('lifted');
-  if (hintMove && idx === hintMove.from) {
-    wrap.classList.add('hint-from');
-    // Once the player has picked the bottle up, the rehearsal has done its
-    // job — it would fight the selection lift.
-    if (selected === null) wrap.classList.add('hint-demo');
-  }
-  if (hintMove && idx === hintMove.to) wrap.classList.add('hint-to');
 
   const liquid = document.createElement('div');
   liquid.className = 'liquid';
@@ -1181,15 +1245,6 @@ function makeBottle(idx, inputLocked) {
     const seg = document.createElement('div');
     seg.className = 'seg';
     seg.style.height = '25%';
-    if (bottle[slot] !== undefined) {
-      seg.style.background = PALETTE[bottle[slot]];
-      if (slot === bottle.length - 1) {
-        const surface = document.createElement('div');
-        surface.className = 'surface';
-        surface.style.background = PALETTE_LIGHT[bottle[slot]];
-        seg.appendChild(surface);
-      }
-    }
     liquid.appendChild(seg);
   }
 
@@ -1201,12 +1256,44 @@ function makeBottle(idx, inputLocked) {
   return wrap;
 }
 
-function render() {
+function setSurface(seg, colorIndex) {
+  const existing = seg.querySelector('.surface');
+  if (colorIndex === undefined || colorIndex === null) {
+    if (existing) existing.remove();
+    return;
+  }
+  const surface = existing || seg.appendChild(document.createElement('div'));
+  surface.className = 'surface';
+  surface.style.background = PALETTE_LIGHT[colorIndex];
+}
+
+// Paints one bottle's liquid. `contents` defaults to the committed state; a
+// pour passes the pre-move snapshot so it can show the board as it was while
+// it replays the move.
+function paintBottle(idx, contents) {
+  const wrap = bottleEls[idx];
+  if (!wrap) return;
+  const bottle = contents || state[idx] || [];
+  const segs = wrap.querySelectorAll('.seg');
+  for (let slot = 0; slot < CAPACITY; slot++) {
+    const seg = segs[slot];
+    if (!seg) continue;
+    seg.classList.remove('pouring');
+    seg.style.height = '25%';
+    seg.style.background = bottle[slot] !== undefined ? PALETTE[bottle[slot]] : '';
+    setSurface(seg, slot === bottle.length - 1 ? bottle[slot] : null);
+  }
+  wrap.setAttribute('aria-label', `Bottle ${idx + 1}: ${describeBottle(bottle)}`);
+}
+
+// Rebuilds shelves and bottles from scratch. Only runs when the board's shape
+// changes — a new level or a resize — because it invalidates every pour.
+function buildBoard() {
   const board = document.getElementById('board');
-  const inputLocked = menuOpen || gamePhase !== 'playing' || solverBusy || animating;
-  document.getElementById('screen').classList.toggle('input-locked', inputLocked);
-  board.setAttribute('aria-busy', inputLocked ? 'true' : 'false');
-  board.classList.toggle('hint-active', !!hintMove);
+  boardGeneration++;
+  busyBottles.clear();
+  pourQueue.length = 0;
+  hintDemoKey = '';
   board.innerHTML = '';
   bottleEls = [];
 
@@ -1232,13 +1319,47 @@ function render() {
     holder.className = 'row-bottles';
     holder.style.gap = `${gap}px`;
     for (let i = r * cols; i < Math.min((r + 1) * cols, state.length); i++) {
-      const el = makeBottle(i, inputLocked);
+      const el = makeBottle(i);
       bottleEls[i] = el;
       holder.appendChild(el);
     }
     row.appendChild(holder);
     board.appendChild(row);
   }
+}
+
+function render() {
+  const board = document.getElementById('board');
+  const inputLocked = menuOpen || gamePhase !== 'playing' || solverBusy;
+  document.getElementById('screen').classList.toggle('input-locked', inputLocked);
+  board.setAttribute('aria-busy', inputLocked ? 'true' : 'false');
+  board.classList.toggle('hint-active', !!hintMove);
+
+  const { cols, bw, bh, rowPitch, stackTop, gap } = boardLayout;
+  const key = [state.length, cols, bw, bh, rowPitch, stackTop, gap].join('|');
+  if (key !== boardKey) {
+    buildBoard();
+    boardKey = key;
+  }
+
+  const queued = new Set(pourQueue.flatMap(q => [q.from, q.to]));
+  state.forEach((bottle, idx) => {
+    const wrap = bottleEls[idx];
+    if (!wrap) return;
+    // A bottle mid-pour belongs to its animation until the liquid lands.
+    if (!busyBottles.has(idx)) paintBottle(idx);
+    // Busy bottles stay tappable — the tap queues rather than being dropped.
+    wrap.disabled = inputLocked;
+    wrap.classList.toggle('queued', queued.has(idx));
+    wrap.setAttribute('aria-pressed', idx === selected ? 'true' : 'false');
+    wrap.classList.toggle('lifted', idx === selected);
+    wrap.classList.toggle('hint-from', !!hintMove && idx === hintMove.from);
+    wrap.classList.toggle('hint-to', !!hintMove && idx === hintMove.to);
+    wrap.classList.toggle(
+      'hint-demo',
+      !!hintMove && idx === hintMove.from && selected === null
+    );
+  });
 
   document.getElementById('scoreValue').textContent = score.toLocaleString();
   const extraMoves = Math.max(0, moveCount - minimumMoves);
@@ -1255,12 +1376,12 @@ function render() {
   document.getElementById('hintLabel').textContent =
     hintsRemaining > 0 ? `Hint −${nextHintPenalty()}` : 'No hints';
   document.getElementById('hintBtn').disabled =
-    hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy || animating;
+    hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy;
   document.getElementById('undoBtn').disabled =
-    history.length === 0 || gamePhase !== 'playing' || solverBusy || animating;
+    history.length === 0 || gamePhase !== 'playing' || solverBusy;
 
   paintStatus();
-  if (hintMove && selected === null) startHintDemo();
+  startHintDemo();
 }
 
 function pushHistory() {
@@ -1274,7 +1395,10 @@ function completeLevel() {
   gamePhase = runFinished ? 'complete' : 'transitioning';
   selected = null;
   hintMove = null;
-  if (runFinished) stopTimer();
+  // The clock stops for the whole hand-over. The player cannot act while the
+  // cleared board sits there and the next one is generated, so charging them
+  // time for it reads as the game hanging.
+  stopTimer();
 
   const wasFlawless = boardIsFlawless;
   boardsSolved++;
@@ -1324,10 +1448,7 @@ function completeLevel() {
     : '';
   setStatus(`Shelf cleared — +${levelScore.toLocaleString()} pts${streakMessage}${extraMoveMessage}`, true);
   advanceDifficulty();
-  scheduleTransition(() => {
-    level++;
-    startLevel();
-  }, 1200);
+  scheduleTransition(() => startLevel(level + 1), 1200);
 }
 
 // ---------- manual play: tap to select, tap again to pour ----------
@@ -1335,10 +1456,12 @@ function completeLevel() {
 // First click selects a source bottle; a second click on a different
 // bottle attempts to pour into it.
 function handleClick(idx) {
-  if (gamePhase !== 'playing' || solverBusy || animating) return;
+  if (gamePhase !== 'playing' || solverBusy) return;
 
   if (selected === null) {
-    if (state[idx].length === 0) return; // nothing to pour from an empty bottle
+    // Judged against the queue's outcome, so a bottle that a queued pour will
+    // fill can still be picked up right now.
+    if (projectedState()[idx].length === 0) return;
     // Picking up the hinted bottle keeps the hint's target lit; picking up any
     // other bottle means the player has gone their own way, so it clears.
     if (!hintMove || hintMove.from !== idx) hintMove = null;
@@ -1353,57 +1476,86 @@ function handleClick(idx) {
   attemptMove(from, idx);
 }
 
-async function attemptMove(fromIdx, toIdx) {
+// The board as it will stand once every queued tap has played out. New taps
+// are judged against this, so a queued move never makes the next one look
+// illegal — and a genuinely wrong tap is still called out immediately.
+function projectedState() {
+  let projected = state;
+  for (const queued of pourQueue) {
+    const move = getValidMoves(projected)
+      .find(m => m.from === queued.from && m.to === queued.to);
+    if (move) projected = applyMove(projected, move);
+  }
+  return projected;
+}
+
+function attemptMove(fromIdx, toIdx) {
   hintMove = null;
-  const moves = getValidMoves(state).filter(m => m.from === fromIdx && m.to === toIdx);
+  const moves = getValidMoves(projectedState())
+    .filter(m => m.from === fromIdx && m.to === toIdx);
   if (moves.length === 0) {
     recordFault(SCORE_RULES.incorrectPourPenalty);
     render();
     setStatus(`Wrong pour — −${SCORE_RULES.incorrectPourPenalty} points. Streak reset.`);
     return;
   }
-  pushHistory();
-  const move = moves[0];
-
-  // The board is only committed once the liquid has landed, so the animation
-  // plays against the pre-move state it was measured from.
-  const token = levelLoadToken;
-  animating = true;
-  render();
-  await animatePour(fromIdx, toIdx, move);
-  animating = false;
-
-  // The countdown can expire, or a new board can load, mid-pour.
-  if (token !== levelLoadToken || gamePhase !== 'playing') {
+  // Queue behind anything already waiting, so taps play out in the order made.
+  if (pourQueue.length > 0 || busyBottles.has(fromIdx) || busyBottles.has(toIdx)) {
+    if (pourQueue.length < MAX_QUEUED_POURS) pourQueue.push({ from: fromIdx, to: toIdx });
     render();
     return;
   }
+  commitPour(moves[0], fromIdx, toIdx);
+}
 
+// Plays the next queued taps that no longer have to wait.
+function dispatchQueue() {
+  // A queued tap must never land after the run ends or once the board has
+  // been cleared — it would score moves onto a game that is already over.
+  if (gamePhase !== 'playing') { pourQueue.length = 0; return; }
+  while (pourQueue.length > 0) {
+    const next = pourQueue[0];
+    if (busyBottles.has(next.from) || busyBottles.has(next.to)) return;
+    pourQueue.shift();
+    const move = getValidMoves(state).find(m => m.from === next.from && m.to === next.to);
+    if (move) commitPour(move, next.from, next.to);
+    // A move that an earlier queued pour made impossible is simply dropped.
+  }
+}
+
+function commitPour(move, fromIdx, toIdx) {
+  pushHistory();
+  const beforeFrom = state[fromIdx].slice();
+  const beforeTo = state[toIdx].slice();
+
+  // The move lands on the board immediately and the pour is replayed over the
+  // top of it. That is what frees the player from waiting: the rest of the
+  // shelf stays live while these two bottles finish their animation.
   state = applyMove(state, move);
   moveCount++;
+  busyBottles.add(fromIdx);
+  busyBottles.add(toIdx);
 
   const isExtraMove = moveCount > minimumMoves;
   if (isExtraMove) {
     recordFault(SCORE_RULES.overLimitMovePenalty);
-  }
-
-  if (isSolved(state)) {
-    completeLevel();
-  } else if (isExtraMove) {
-    const extraMoves = moveCount - minimumMoves;
-    setStatus(`Extra move ${extraMoves} — −${SCORE_RULES.overLimitMovePenalty} points.`);
-    render();
+    setStatus(`Extra move ${moveCount - minimumMoves} — −${SCORE_RULES.overLimitMovePenalty} points.`);
   } else {
     setStatus(''); // a clean pour clears whatever the last message was
-    render();
   }
+
+  render();
+  animatePour(fromIdx, toIdx, move, beforeFrom, beforeTo);
+
+  if (isSolved(state)) completeLevel();
 }
 
 // Creates a responsive candidate, then uses BFS to prove its exact minimum.
 // If proof is too expensive, scramble depth is reduced and another candidate
 // is tried rather than allowing a long search to block level loading.
-async function startLevel() {
+async function startLevel(nextLevel = level) {
   clearPendingTransition();
+  cancelPours(); // nothing from the last board may still be in the air
   const loadToken = ++levelLoadToken;
   gamePhase = 'transitioning';
   solverBusy = true;
@@ -1425,6 +1577,7 @@ async function startLevel() {
     if (loadToken !== levelLoadToken) return;
 
     if (verification.status === 'solved' && verification.path.length > 0) {
+      level = nextLevel; // the board number turns over with the board itself
       state = cloneState(candidate.state);
       originalState = cloneState(candidate.state);
       optimalSolution = verification.path;
@@ -1454,7 +1607,7 @@ async function startLevel() {
   // An extremely defensive retry. Generation remains asynchronous and the
   // previous load token prevents an older attempt from replacing a new level.
   solverBusy = false;
-  scheduleTransition(startLevel, 50);
+  scheduleTransition(() => startLevel(nextLevel), 50);
 }
 
 // ---------- panels ----------
@@ -1576,7 +1729,8 @@ document.getElementById('newRunBtn').onclick = startNewRun;
 document.getElementById('playAgainBtn').onclick = startNewRun;
 
 document.getElementById('undoBtn').onclick = () => {
-  if (history.length === 0 || gamePhase !== 'playing' || solverBusy || animating) return;
+  if (history.length === 0 || gamePhase !== 'playing' || solverBusy) return;
+  cancelPours(); // an undo has to be able to reshape bottles that are mid-pour
   const prev = history.pop();
   state = prev.state;
   moveCount = prev.moveCount;
@@ -1588,7 +1742,8 @@ document.getElementById('undoBtn').onclick = () => {
 };
 
 document.getElementById('hintBtn').onclick = async () => {
-  if (hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy || animating) return;
+  if (hintsRemaining <= 0 || gamePhase !== 'playing' || solverBusy) return;
+  cancelPours(); // the rehearsal needs the bottles standing still to aim at
 
   hintMove = null;
 
@@ -1643,18 +1798,25 @@ document.getElementById('hintBtn').onclick = async () => {
 };
 
 // Re-fit on anything that changes the available space: rotation, browser
-// chrome sliding away, or a resized ad container. Rebuilding the board would
-// tear down a pour that is mid-flight, so a resize during one only resizes
-// the art — attemptMove re-renders as soon as the liquid lands.
+// chrome sliding away, or a resized ad container. A resize that changes the
+// board's shape rebuilds it and drops any pour mid-flight — harmless now that
+// the state is already committed, so the bottles simply repaint correct.
 function refit() {
   fitStage();
-  if (!animating) render();
+  render();
 }
 if (typeof ResizeObserver === 'function') {
   new ResizeObserver(refit).observe(document.getElementById('stageArea'));
 }
 window.addEventListener('resize', refit);
 window.addEventListener('orientationchange', refit);
+
+// Backgrounding the page freezes the timers a pour rides on, so it can come
+// back mid-tilt with its bottles still locked. The move itself was committed
+// long ago, so the safe move is to drop the animation and show the truth.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) cancelPours();
+});
 
 fitStage();
 startNewRun();
