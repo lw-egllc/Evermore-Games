@@ -254,10 +254,10 @@ const EVERMORE = {
   rewards: { low: 1, med: 2, high: 3 },
 
   /* SCORE goals — DERIVED, not invented. 1,500 simulated first-contact runs
-     through the real update loop and the real scoring gave 4500 / 2700 / 1000,
-     clearing 10.7% / 32.5% / 83.1%. Full derivation, including the floor test
+     through the real update loop and the real scoring gave 5200 / 3400 / 1400,
+     clearing 10.5% / 31.5% / 82.9%. Full derivation, including the floor test
      against seven ways of not playing properly, is at the foot of this file. */
-  thresholds: { low: 1000, med: 2700, high: 4500 },
+  thresholds: { low: 1400, med: 3400, high: 5200 },
 
   band(score) {
     if (score >= this.thresholds.high) return 'high';
@@ -514,9 +514,17 @@ function testSegment(ax, ay, bx, by, ux, uy){
     if (o.dead || o.delay > 0) continue;
     const r = o.kind === 'bomb' ? RAD * 0.80 : RAD;
     const d = segDist(ax, ay, bx, by, o.x, o.y);
-    if (d < 0 || d > r) continue;
-    if (o.kind === 'bomb') hitBomb(o);
-    else                   hitSweet(o, ux, uy, d / r);
+    if (d > r) continue;
+    if (o.kind === 'bomb'){ hitBomb(o); continue; }
+    /* Accuracy is the offset of the centre from the swipe's LINE, not from the
+       one frame-segment that happened to register the hit. A blade enters a
+       circle edge-first, so the first segment to come within r almost always
+       grazes: measured over 731 real slices, that biased the accuracy toward
+       the rim (median 0.61 against the 0.5 a chord should give, 30% of slices
+       in the outer fifth against 20%) and PERFECT fired on 16.6% of cuts where
+       PERFECT_D of 0.26 says it should fire on ~26%. */
+    const lineD = Math.abs((o.x - ax) * uy - (o.y - ay) * ux);
+    hitSweet(o, ux, uy, Math.min(1, lineD / r));
   }
 }
 
@@ -1252,35 +1260,36 @@ function boot(){
    attention, bomb recognition, and whether they try to line two desserts up.
 
      skill band   median score   sliced   missed   bombs hit
-       0.0-0.2        1145         37       33        2.2
-       0.2-0.4        1741         49       20        2.7
-       0.4-0.6        2796         60        7        3.3
-       0.6-0.8        3914         67        1        3.3
-       0.8-1.0        5793         73        0        2.5
+       0.0-0.2        1569         37       33        2.2
+       0.2-0.4        2314         49       20        2.7
+       0.4-0.6        3401         60        7        3.3
+       0.6-0.8        4629         67        1        3.3
+       0.8-1.0        6434         73        0        2.5
 
    Monotone in skill across the whole range, which is the thing worth checking:
    a threshold set on a distribution that does not track skill is a lottery.
+   The 15th-to-90th percentile spread is 4.1x.
 
-     high 4500  clears 10.7%   (brief: the top prize should be the top ~10%)
-     med  2700  clears 32.5%
-     low  1000  clears 83.1%   (brief: ~80-85%)
+     high 5200  clears 10.5%   (brief: the top prize should be the top ~10%)
+     med  3400  clears 31.5%
+     low  1400  clears 82.9%   (brief: ~80-85%)
 
    FLOOR TEST — seven ways of not playing properly, 400 runs each:
 
-     strategy                 median   p90    p95   worst run   % clearing 1000
-     idle (never swipes)           0     0      0        0            0
-     tap without dragging          0     0      0        0            0
-     scribble, small strokes     159   751   1017     2412          5.3
-     camp in one spot            190   765   1007     2115          5.3
-     flail, fast + wide          223   834   1017     1874          5.8
-     lazy blind sweeps           232   842   1086     1726          6.0
-     slow blind sweeps           238   943   1147     2176          8.0
-     flail at a human rate       244   857   1057     3301          6.0
+     strategy                 median   p90    p95   worst run
+     idle (never swipes)           0     0      0        0
+     tap without dragging          0     0      0        0
+     lazy blind sweeps           328  1057   1250     2086
+     slow blind sweeps           329  1156   1403     2816
+     scribble, small strokes     387  1260   1571     3596
+     flail, fast + wide          389  1107   1383     2546
+     camp in one spot            393  1124   1396     2611
+     flail at a human rate       436  1340   1539     4357
 
-   Pooled, 5.2% of bad-play runs clear the bronze goal against 83.1% of real
+   Pooled, 5.0% of bad-play runs clear the bronze goal against 82.9% of real
    players, and every strategy's 90th percentile lands below it. Tapping without
    dragging scores exactly nothing, because the blade needs real movement to cut.
-   The honest caveat is the tail: the single best of 400 flail runs reached 3301,
+   The honest caveat is the tail: the single best of 400 flail runs reached 4357,
    because a blind sweep does sometimes catch four desserts and sometimes draws
    a run with few bombs. No stochastic game can put its absolute maximum
    bad-play run under its floor.
@@ -1303,9 +1312,11 @@ function boot(){
        free while every slice still pays;
      - the tiers are x1 / x1.4 / x1.8 at 0 / 3 / 10. A multiplier compounds with
        an already skill-correlated slice count: the first draft ran to x4 and
-       blew the 15th-to-90th percentile spread out to 9.1x. Landing the first
-       tier after only three slices — so nearly every engaged player feels it —
-       and capping at x1.8 brings it to 5.0x.
+       blew the spread out to 9.1x. Landing the first tier after only three
+       slices — so nearly every engaged player feels it — and capping at x1.8
+       brought it to 5.0x, and measuring PERFECT against the swipe line rather
+       than the entry segment (see testSegment) took it to 4.1x, because a flat
+       bonus is worth proportionally more to a low scorer.
    ------------------------------------------------------------------------ */
 window.__SIM__ = (function(){
   function run(bot, seed){
