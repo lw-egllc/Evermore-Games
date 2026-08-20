@@ -1,0 +1,3437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#150E3A">
+<title>SUMMIT — tri-peaks in ninety seconds</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   SUMMIT — the whole look. No images, no web fonts, no fetches: every
+   card, filigree, snowflake and firefly here is CSS or canvas, which is
+   what lets the build be one file you can email.
+
+   The picture is a storybook night in an alpine kingdom — three painted
+   peaks under an aurora, a castle on a far spire, a cloud sea, drifting
+   snow. Gold is the scoring family, warm red is the cost family, the
+   cool violets are neutral (bible §11.6), and every semantic carries on
+   at least two channels: a covered card is dimmed AND smaller AND
+   shadowless; a peak card is warmer AND gold-cornered.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root{
+  /* night */
+  --night-0:#080520;  --night-1:#150E3A;  --night-2:#241659;  --night-3:#3B2378;
+  --ink:#F3EEFF;      --ink-dim:#AFA3DC;  --ink-faint:#6B5FA2;
+
+  /* gold — the scoring family: pots, crowns, score, the multiplier */
+  --gold:#F5C96A;
+  --gold-hi:#FFE9A8;  --gold-mid:#F3C25A;  --gold-lo:#B27E22;  --gold-deep:#6E4A11;
+
+  /* warm red — the cost family: misses, a dying board, the last seconds */
+  --red:#FF6B57;      --red-lo:#8E2B1D;
+
+  /* aurora accents */
+  --aur-a:#57E9C6;    --aur-b:#8FA6FF;    --aur-c:#FF8FDA;
+
+  /* card */
+  --ivory:#FFF7E9;    --ivory-2:#F4E7CF;  --ivory-cool:#F2F0FF;
+  --pip-red:#CE3327;  --pip-black:#2A2140;
+
+  --cw:40px;                /* card width  — JS writes the exact fit */
+  --cwv:42px;               /* ...and the slightly wider VISUAL card */
+  --chh:57px;               /* card height */
+  --r:14px;
+
+  --ease:cubic-bezier(.22,1,.36,1);
+  --ease-in:cubic-bezier(.55,.06,.68,.19);
+
+  --sx:0px; --sy:0px; --sr:0deg;      /* shake, driven from JS */
+}
+
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ margin:0; padding:0; height:100%; overflow:hidden; background:#050317; }
+body{
+  color:var(--ink);
+  font:500 16px/1.3 ui-rounded,-apple-system,BlinkMacSystemFont,"Avenir Next",
+       Avenir,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  user-select:none; -webkit-user-select:none;
+  touch-action:manipulation;
+}
+
+/* the storybook page: portrait, always */
+#app{
+  position:relative;
+  width:min(100vw, 480px);
+  height:100dvh; max-height:100dvh;
+  margin-inline:auto;
+  overflow:hidden;
+  background:var(--night-1);
+  box-shadow:0 0 0 1px #00000066, 0 30px 90px #000a;
+}
+/* a hairline gilt frame, like the edge of an illustrated plate */
+#app::after{
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:60;
+  box-shadow:inset 0 0 0 1px #f5c96a26, inset 0 0 42px #0b0722aa,
+             inset 0 -90px 90px -60px #08052199;
+}
+
+.screen{
+  position:absolute; inset:0; z-index:2;
+  display:none; flex-direction:column;
+}
+.screen.is-on{ display:flex; animation:screenIn .42s var(--ease) both; }
+@keyframes screenIn{ from{ opacity:0; transform:scale(1.03) } to{ opacity:1; transform:none } }
+
+canvas.sky{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+/* ═══════════ TITLE + RESULT ═══════════ */
+.title-inner{
+  position:relative; z-index:2;
+  display:flex; flex-direction:column; align-items:center;
+  height:100%;
+  padding:max(26px,env(safe-area-inset-top)) 22px max(22px,env(safe-area-inset-bottom));
+  text-align:center;
+}
+.crest{ display:flex; align-items:flex-end; gap:5px; margin-top:6vh; opacity:.95;
+        filter:drop-shadow(0 3px 10px #f5c96a55); }
+.crest-peak{ font-size:15px; color:var(--gold-mid); line-height:1; }
+.crest-peak.mid{ font-size:23px; color:var(--gold-hi); }
+
+.wordmark{
+  margin:4px 0 0; font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",
+  Palatino,Georgia,serif;
+  font-size:clamp(46px,15vw,68px); font-weight:700; letter-spacing:.14em; text-indent:.14em;
+  line-height:1;
+  background:linear-gradient(180deg,#FFF6DC 0%,var(--gold-hi) 26%,var(--gold-mid) 52%,
+             var(--gold-lo) 74%,#FFE9A8 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 2px 0 #5c3c0c) drop-shadow(0 4px 18px #f5c96a4d);
+}
+.tagline{
+  margin:8px 0 0; font-size:12px; letter-spacing:.28em; text-transform:uppercase;
+  color:var(--ink-dim);
+}
+
+.rules{
+  list-style:none; margin:5.5vh 0 auto; padding:0; display:flex; flex-direction:column; gap:13px;
+  max-width:330px; text-align:left;
+}
+.rules li{ display:flex; gap:11px; align-items:flex-start;
+  font-size:13.5px; line-height:1.42; color:#DCD3F5; }
+.rules b{ color:var(--gold-hi); font-weight:800; }
+.ri{
+  flex:0 0 26px; height:26px; border-radius:8px; display:grid; place-items:center;
+  font-style:normal; font-size:14px; color:var(--gold-hi);
+  background:linear-gradient(180deg,#ffffff1c,#ffffff08);
+  box-shadow:inset 0 0 0 1px #f5c96a3d, 0 2px 8px #0006;
+}
+
+.plaque{
+  position:relative; font:inherit; font-weight:800; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; gap:3px;
+  width:min(300px,86%); padding:15px 20px 16px; border:none; border-radius:16px;
+  color:#3A2606;
+  background:linear-gradient(180deg,#FFEFC0 0%,var(--gold-hi) 16%,var(--gold-mid) 58%,var(--gold-lo) 100%);
+  box-shadow:0 2px 0 #7a5312, 0 7px 0 #4a3009, 0 14px 26px #0009,
+             inset 0 1px 0 #fffdf0, inset 0 -2px 0 #00000026;
+  transition:transform .12s var(--ease), box-shadow .12s var(--ease), filter .12s;
+}
+.plaque:active{ transform:translateY(5px);
+  box-shadow:0 1px 0 #7a5312, 0 2px 0 #4a3009, 0 6px 14px #0009, inset 0 1px 0 #fffdf0; }
+.plaque-k{ font-size:16px; letter-spacing:.14em; }
+.plaque-sub{ font-size:10.5px; letter-spacing:.13em; font-weight:700; opacity:.72; }
+.ghost{
+  margin-top:10px; font:inherit; font-size:11.5px; font-weight:800; letter-spacing:.18em;
+  color:var(--ink-dim); background:#0b0726a8; border:none; border-radius:10px;
+  padding:9px 20px; cursor:pointer; box-shadow:inset 0 0 0 1px #ffffff1a;
+}
+.ghost:active{ color:var(--ink-dim); }
+
+.over-inner{ justify-content:flex-start; padding-top:13vh; gap:2px; }
+.over-k{ margin:0; font-size:11px; letter-spacing:.34em; color:var(--ink-faint); }
+.over-score{
+  font-family:"Iowan Old Style",Palatino,Georgia,serif;
+  font-size:clamp(56px,19vw,86px); font-weight:700; line-height:1.02; margin:2px 0 0;
+  background:linear-gradient(180deg,#FFF6DC,var(--gold-hi) 38%,var(--gold-mid) 70%,var(--gold-lo));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 2px 0 #5c3c0c) drop-shadow(0 6px 22px #f5c96a4d);
+}
+.over-gap{ margin:6px 0 0; font-size:13px; font-weight:700; letter-spacing:.05em; color:var(--aur-a); min-height:18px; }
+.over-lines{ display:flex; flex-wrap:wrap; justify-content:center; gap:7px; margin:22px 0 24px; max-width:330px; }
+.over-lines span{
+  font-size:11.5px; letter-spacing:.08em; color:#D6CDF2; padding:7px 11px; border-radius:9px;
+  background:#ffffff0f; box-shadow:inset 0 0 0 1px #ffffff17;
+}
+.over-lines span b{ color:var(--gold-hi); font-weight:800; }
+
+/* ═══════════ HUD ═══════════ */
+#screen-game{ transform:translate(var(--sx),var(--sy)) rotate(var(--sr)); }
+
+#hud{
+  position:relative; z-index:6; flex:0 0 auto;
+  display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+  gap:8px; padding:max(9px,env(safe-area-inset-top)) 13px 8px;
+  background:linear-gradient(180deg,#1d1150ee 0%,#180e42cc 62%,#150e3a00 100%);
+}
+.hud-side{ display:flex; flex-direction:column; min-width:0; }
+.hud-right{ align-items:flex-end; }
+.hud-k{ font-size:8.5px; letter-spacing:.24em; color:var(--ink-faint); font-weight:800; }
+.hud-k-dim{ color:var(--gold-lo); min-height:11px; }
+.hud-score{
+  font:800 27px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums; color:var(--gold-hi);
+  text-shadow:0 1px 0 #6b4a12, 0 3px 14px #f5c96a3d;
+  transition:transform .1s var(--ease);
+}
+.hud-score.pop{ transform:scale(1.16); }
+.hud-mid{ display:flex; flex-direction:column; align-items:center; }
+.hud-clock{
+  font:700 31px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  font-variant-numeric:tabular-nums; letter-spacing:.02em; color:var(--ink);
+  text-shadow:0 2px 12px #8fa6ff4d;
+}
+.hud-clock.hot{ color:#FFD9A0; text-shadow:0 0 18px #ff8a5cb3; }
+.hud-clock.pulse{ animation:tickPulse .5s var(--ease); }
+@keyframes tickPulse{ 0%{transform:scale(1.2); color:#fff} 100%{transform:scale(1)} }
+.hud-clock.bite{ animation:clockBite .42s var(--ease-in); }
+@keyframes clockBite{
+  0%{ color:var(--red); transform:translateX(0) scale(1.1) }
+  25%{ transform:translateX(-5px) }
+  55%{ transform:translateX(4px) }
+  100%{ transform:none }
+}
+.chain-row{ display:flex; align-items:baseline; gap:5px; }
+.hud-chain{
+  font:800 27px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums; color:var(--ink);
+  transition:color .2s, transform .12s var(--ease);
+}
+.hud-chain.t1{ color:#B6E7FF } .hud-chain.t2{ color:var(--aur-a) }
+.hud-chain.t3{ color:var(--gold-mid) }
+.hud-chain.t4{ color:#FFF0BE; text-shadow:0 0 16px #f5c96acc }
+.hud-chain.pop{ transform:scale(1.3); }
+.hud-mult{
+  font:800 15px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  color:var(--ink-faint); transition:color .2s, transform .12s var(--ease);
+}
+/* the AT-RISK pool. Bible C6: never the same colour as committed score, and
+   never counted into it until it is banked. */
+.hud-risk{
+  margin-top:3px; font:800 13px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;
+  color:#0B2A24; background:linear-gradient(180deg,#8CF3D6,var(--aur-a));
+  padding:2px 8px; border-radius:99px;
+  box-shadow:0 0 12px #57e9c666, inset 0 1px 0 #ffffffa6;
+}
+.hud-risk.big{ animation:riskThrob 1.1s ease-in-out infinite; }
+@keyframes riskThrob{ 50%{ transform:scale(1.09); box-shadow:0 0 20px #57e9c6cc, inset 0 1px 0 #ffffffa6 } }
+.hud-risk.banked{ animation:riskGo .4s var(--ease) both; }
+@keyframes riskGo{ 0%{transform:scale(1.2)} 100%{transform:scale(.4); opacity:0} }
+.hud-mult.pop{ transform:scale(1.22); }
+.hud-mult.broke{ animation:shatter .42s var(--ease-in) both; }
+@keyframes shatter{
+  0%{ transform:scale(1.1); color:var(--red) }
+  30%{ transform:scale(.86) rotate(-7deg) }
+  100%{ transform:scale(1) rotate(0); color:var(--ink-dim) }
+}
+.pips{ display:flex; gap:2.5px; margin-top:3px; height:5px; }
+.pips i{ width:5px; height:5px; border-radius:99px; background:#ffffff24; }
+.pips i.on{ background:var(--gold-mid); box-shadow:0 0 6px #f5c96a; }
+
+.meter{
+  position:relative; z-index:6; flex:0 0 auto; height:3px; margin:0 13px 3px;
+  background:#ffffff12; border-radius:99px; overflow:visible;
+}
+.meter i{
+  position:absolute; inset:0 auto 0 0; width:0; border-radius:99px;
+  background:linear-gradient(90deg,var(--gold-lo),var(--gold-hi));
+  box-shadow:0 0 10px #f5c96a80; transition:width .3s var(--ease);
+}
+.meter b{
+  position:absolute; top:-4px; width:2px; height:11px; border-radius:2px;
+  background:var(--aur-a); box-shadow:0 0 8px var(--aur-a);
+}
+
+/* ═══════════ FIELD ═══════════ */
+#field{ position:relative; z-index:3; flex:1 1 auto; min-height:0; }
+.cards,.badges,.floats,.hint,.banner{ position:absolute; inset:0; }
+.cards{ z-index:3; }
+.badges{ z-index:4; pointer-events:none; }
+canvas.fx{ position:absolute; inset:0; width:100%; height:100%; z-index:5; pointer-events:none; }
+.floats{ z-index:6; pointer-events:none; }
+.hint{ z-index:7; pointer-events:none; }
+.banner{ z-index:8; pointer-events:none; display:grid; place-items:center; }
+
+/* ── the card ── */
+.card{
+  position:absolute; left:0; top:0;
+  width:var(--cw); height:var(--chh);
+  margin-left:calc(var(--cw) / -2); margin-top:calc(var(--chh) / -2);
+  will-change:transform; z-index:1;
+}
+.cd{
+  position:absolute; inset:0; border-radius:calc(var(--cw) * .14);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  background:
+    radial-gradient(120% 80% at 50% 0%,#FFFDF6 0%,var(--ivory) 46%,var(--ivory-2) 100%);
+  box-shadow:
+    0 1px 0 #ffffffcc inset,
+    0 0 0 1px #00000026,
+    0 calc(var(--cw)*.045) calc(var(--cw)*.13) #0b072270,
+    0 calc(var(--cw)*.10) calc(var(--cw)*.24) #08052147;
+  transition:filter .22s var(--ease), transform .22s var(--ease), box-shadow .22s var(--ease);
+  overflow:hidden;
+}
+/* the filigree: a hairline inner rule plus four gilt corner ticks */
+.cd::before{
+  content:''; position:absolute; inset:calc(var(--cw)*.055);
+  border-radius:calc(var(--cw)*.095);
+  box-shadow:inset 0 0 0 1px #b8892e40;
+}
+.cd::after{
+  content:''; position:absolute; inset:0; pointer-events:none;
+  background:
+    radial-gradient(circle at 8% 7%,  #d7a94a55 0 1.5px,transparent 2px),
+    radial-gradient(circle at 92% 7%, #d7a94a55 0 1.5px,transparent 2px),
+    radial-gradient(circle at 8% 93%, #d7a94a55 0 1.5px,transparent 2px),
+    radial-gradient(circle at 92% 93%,#d7a94a55 0 1.5px,transparent 2px),
+    repeating-linear-gradient(58deg,#00000005 0 1px,transparent 1px 4px);
+}
+/* THE INDEX LIVES IN THE TOP BAND, and that is not decoration: a covered
+   card in tri-peaks only ever shows the top ~50% of itself, so a centred
+   rank is a rank cut in half. Everything you must read to play sits above
+   the fold; the watermark below it is what gets buried. */
+.cd{ justify-content:flex-start; }
+.idx{
+  position:relative; z-index:3; display:flex; align-items:baseline; justify-content:center;
+  gap:calc(var(--cw)*.055); width:100%; height:46%; padding-top:calc(var(--cw)*.055);
+}
+.ct{
+  font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+  font-weight:700; font-size:calc(var(--cw) * .485); line-height:1;
+  letter-spacing:-.03em;
+}
+.cs{ font-size:calc(var(--cw) * .265); line-height:1; }
+/* the watermark: big, low, and expendable — it is the half that gets covered */
+.wm{
+  position:absolute; left:0; right:0; bottom:calc(var(--cw)*-.055);
+  text-align:center; font-size:calc(var(--cw)*.72); line-height:.86;
+  opacity:.17; z-index:1; pointer-events:none;
+}
+.card.red .ct,.card.red .cs,.card.red .wm{ color:var(--pip-red); }
+.card.blk .ct,.card.blk .cs,.card.blk .wm{ color:var(--pip-black); }
+.court{ position:absolute; left:0; right:0; bottom:calc(var(--cw)*.10); text-align:center;
+  font-size:calc(var(--cw)*.30); color:#b8892e; opacity:.75; z-index:2; }
+
+/* peak cards are warmer and gilt-cornered; base-row cards are cooler and
+   plainer — you can see at a glance which cards feed a pot */
+.card.peak .cd{
+  background:radial-gradient(120% 80% at 50% 0%,#FFFDF6 0%,#FFF6E4 44%,#F6E9CE 100%);
+}
+.card.peak .cd::before{ box-shadow:inset 0 0 0 1px #c1902f6b, inset 0 0 0 2.5px #ffffff5c; }
+.card.base .cd{
+  background:radial-gradient(120% 80% at 50% 0%,#FFFFFF 0%,var(--ivory-cool) 52%,#DFDCF2 100%);
+}
+.card.base .cd::before{ box-shadow:inset 0 0 0 1px #6b5fa240; }
+
+/* covered: dimmer AND smaller AND shadowless — three channels, so it never
+   depends on colour alone */
+.card.cov .cd{
+  filter:brightness(.80) saturate(.62) hue-rotate(-6deg);
+  transform:scale(.972);
+  box-shadow:0 0 0 1px #0000002e, 0 1px 3px #08052159;
+}
+.card.cov .cd::after{ background-image:linear-gradient(180deg,#2b2a5e2e,#1a1a4a40); }
+.card.free .cd{ transform:translateY(calc(var(--cw) * -.02)); }
+
+/* the back, for the stock */
+.cd.back{
+  background:
+    radial-gradient(circle at 50% 42%, #4a2f8f 0%, #2c1b63 46%, #1b1046 100%);
+  overflow:hidden;
+}
+.cd.back::before{ box-shadow:inset 0 0 0 1px #f5c96a4d; }
+.cd.back::after{
+  background:
+    radial-gradient(circle at 50% 44%, #f5c96a2e 0 22%, transparent 34%),
+    repeating-conic-gradient(from 0deg at 50% 44%, #f5c96a1a 0deg 6deg, transparent 6deg 12deg);
+}
+.backcrest{
+  position:relative; z-index:2; color:var(--gold-mid); font-size:calc(var(--cw)*.32);
+  letter-spacing:-.06em; text-shadow:0 0 10px #f5c96a80;
+}
+
+/* a wrong tap: the card refuses, in red */
+.card.no .cd{ animation:refuse .34s var(--ease-in); box-shadow:0 0 0 2px var(--red), 0 6px 18px #ff6b5750; }
+@keyframes refuse{
+  0%,100%{ transform:translateX(0) }
+  18%{ transform:translateX(-5px) rotate(-2deg) }
+  42%{ transform:translateX(5px) rotate(2deg) }
+  68%{ transform:translateX(-3px) rotate(-1deg) }
+}
+
+/* slots that hold the pile and the stock */
+.slot{
+  position:absolute; left:0; top:0; border-radius:calc(var(--cw)*.14);
+  margin-left:calc(var(--cw) / -2); margin-top:calc(var(--chh) / -2);
+  box-shadow:inset 0 0 0 1.5px #ffffff1f, inset 0 0 22px #0b072266;
+  background:#1a1046a8;
+}
+.slot .lbl{
+  position:absolute; left:0; right:0; bottom:-17px; text-align:center;
+  font-size:8.5px; letter-spacing:.2em; font-weight:800; color:var(--ink-faint);
+}
+.count{
+  position:absolute; right:calc(var(--cw)*-.14); top:calc(var(--cw)*-.16);
+  min-width:20px; height:20px; padding:0 5px; border-radius:99px;
+  display:grid; place-items:center; font-size:11px; font-weight:800;
+  color:#3A2606; background:linear-gradient(180deg,var(--gold-hi),var(--gold-mid));
+  box-shadow:0 2px 6px #0008, inset 0 1px 0 #fffdf0; z-index:9;
+}
+.count.low{ background:linear-gradient(180deg,#FFB49C,var(--red)); color:#3a0f07;
+  animation:lowPulse 1s ease-in-out infinite; }
+@keyframes lowPulse{ 50%{ transform:scale(1.14) } }
+
+/* ── the pot badge over each peak ── */
+.badge{
+  position:absolute; left:0; top:0; transform:translate(-50%,-50%);
+  display:flex; flex-direction:column; align-items:center; gap:1px;
+  transition:opacity .3s var(--ease), transform .3s var(--ease);
+}
+.badge .bk{ font-size:7.5px; letter-spacing:.2em; font-weight:800; color:#b99be0; }
+.badge .bv{
+  font:800 15px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums; color:var(--gold-hi);
+  padding:2.5px 9px; border-radius:99px;
+  background:linear-gradient(180deg,#2a1a5fdd,#170e42dd);
+  box-shadow:inset 0 0 0 1px #f5c96a5c, 0 3px 10px #08052180, 0 0 14px #f5c96a1f;
+  text-shadow:0 0 10px #f5c96a80;
+  transition:transform .16s var(--ease), box-shadow .3s;
+}
+.badge.hot .bv{ box-shadow:inset 0 0 0 1px #f5c96ab3, 0 3px 10px #080521, 0 0 22px #f5c96a66; }
+.badge.pop .bv{ transform:scale(1.22); }
+.badge.risk .bv{ animation:riskPulse .8s ease-in-out infinite;
+  box-shadow:inset 0 0 0 1px #ff6b57cc, 0 0 20px #ff6b5766; }
+@keyframes riskPulse{ 50%{ transform:scale(1.07) } }
+.badge.gone{ opacity:0; transform:translate(-50%,-50%) scale(.6); }
+.badge .crown{ font-size:27px; line-height:1; color:var(--gold-hi);
+  text-shadow:0 0 6px #fff8e0, 0 0 18px #f5c96a, 0 2px 4px #0009;
+  animation:crownDrop .6s var(--ease) both; }
+@keyframes crownDrop{
+  0%{ transform:translateY(-26px) scale(.4) rotate(-18deg); opacity:0 }
+  62%{ transform:translateY(3px) scale(1.16) rotate(4deg); opacity:1 }
+  100%{ transform:none; opacity:1 }
+}
+
+/* ── floating numbers ── */
+.float{
+  position:absolute; transform:translate(-50%,-50%);
+  font:800 15px/1 ui-rounded,-apple-system,"Avenir Next",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+  color:var(--gold-hi); text-shadow:0 2px 6px #08052199, 0 0 14px #f5c96a66;
+  animation:floatUp .95s var(--ease) both;
+}
+.float.pot{ color:#FFE9A8; font-size:13px; }
+.float.risk{ color:#8CF3D6; text-shadow:0 2px 6px #08052199, 0 0 16px #57e9c680; }
+.float.bad{ color:var(--red); text-shadow:0 2px 6px #08052199, 0 0 14px #ff6b5766; }
+.float.big{ font-size:24px; }
+@keyframes floatUp{
+  0%{ transform:translate(-50%,-50%) scale(.5); opacity:0 }
+  22%{ transform:translate(-50%,-62%) scale(1.14); opacity:1 }
+  100%{ transform:translate(-50%,-136%) scale(1); opacity:0 }
+}
+
+/* ── the shout banner: CROWN / CLEARED / the peaks close ── */
+.shout{
+  position:absolute; left:50%; top:44%; transform:translate(-50%,-50%);
+  text-align:center; animation:shoutIn 1.25s var(--ease) both;
+}
+.shout .sk{
+  display:block;
+  font-family:"Iowan Old Style",Palatino,Georgia,serif;
+  font-size:clamp(30px,10.5vw,44px); font-weight:700; letter-spacing:.1em;
+  background:linear-gradient(180deg,#FFF9E6,var(--gold-hi) 40%,var(--gold-mid) 72%,var(--gold-lo));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 2px 0 #5c3c0c) drop-shadow(0 4px 22px #f5c96a80);
+}
+.shout .ss{ display:block; margin-top:2px; font-size:11px; letter-spacing:.26em;
+  color:#E9DFFF; text-shadow:0 2px 10px #080521; }
+.shout.cold .sk{
+  background:linear-gradient(180deg,#FFD9CF,var(--red) 52%,var(--red-lo));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 2px 0 #4a1109) drop-shadow(0 4px 22px #ff6b5766);
+}
+@keyframes shoutIn{
+  0%{ opacity:0; transform:translate(-50%,-50%) scale(.62) }
+  16%{ opacity:1; transform:translate(-50%,-50%) scale(1.08) }
+  26%{ transform:translate(-50%,-50%) scale(1) }
+  74%{ opacity:1; transform:translate(-50%,-56%) scale(1) }
+  100%{ opacity:0; transform:translate(-50%,-64%) scale(.98) }
+}
+
+/* ── the zero-text hint: a finger that taps the card it means ── */
+.finger{
+  position:absolute; transform:translate(-50%,-50%);
+  font-size:26px; filter:drop-shadow(0 3px 8px #000a);
+  animation:tapTap 1.5s ease-in-out infinite;
+}
+@keyframes tapTap{
+  0%,100%{ transform:translate(-50%,-42%) scale(1) }
+  42%{ transform:translate(-50%,-56%) scale(1.06) }
+  56%{ transform:translate(-50%,-40%) scale(.96) }
+}
+.ring{
+  position:absolute; transform:translate(-50%,-50%);
+  border-radius:calc(var(--cw)*.16); pointer-events:none;
+  box-shadow:0 0 0 2px #FFE9A8cc, 0 0 22px #f5c96a80;
+  animation:ringPulse 1.5s ease-in-out infinite;
+}
+@keyframes ringPulse{ 50%{ box-shadow:0 0 0 3px #FFE9A8, 0 0 30px #f5c96acc } }
+
+/* ── full-screen flash / wash ── */
+.flash{
+  position:absolute; inset:0; z-index:40; pointer-events:none; opacity:0;
+  background:radial-gradient(120% 80% at 50% 45%,#fff8e0 0%,#f5c96a55 42%,transparent 72%);
+}
+.flash.on{ animation:washOut .5s var(--ease) both; }
+.flash.cold{ background:radial-gradient(120% 80% at 50% 45%,#ffd9cf 0%,#ff6b5744 44%,transparent 74%); }
+@keyframes washOut{ 0%{opacity:.85} 100%{opacity:0} }
+
+/* __SM.freeze(true) parks the EFFECT keyframes as well as the sim, so a
+   verification pass can photograph a burst instead of its aftermath.
+   Scoped deliberately: pausing every animation caught .screen.is-on too,
+   and screenIn has fill:both, so the whole page held at opacity 0. */
+#app.hold .float,
+#app.hold .shout,
+#app.hold .finger,
+#app.hold .ring,
+#app.hold .badge .crown,
+#app.hold .count.low,
+#app.hold .badge.risk .bv,
+#app.hold .card .cd,
+#app.hold .hud-clock,
+#app.hold .hud-mult{ animation-play-state:paused !important; }
+
+/* ═══════════ reduced motion — a first-class path, not a broken one ═══════════ */
+@media (prefers-reduced-motion:reduce){
+  .screen.is-on,.float,.shout,.badge .crown,.card.no .cd{ animation-duration:.01ms !important; }
+  .finger,.ring,.count.low,.badge.risk .bv{ animation:none !important; }
+  #screen-game{ transform:none !important; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ════════════════ TITLE ════════════════ -->
+  <section id="screen-title" class="screen is-on">
+    <canvas id="title-sky" class="sky" aria-hidden="true"></canvas>
+    <div class="title-inner">
+      <div class="crest" aria-hidden="true">
+        <span class="crest-peak">&#9650;</span><span class="crest-peak mid">&#9650;</span><span class="crest-peak">&#9650;</span>
+      </div>
+      <h1 class="wordmark">SUMMIT</h1>
+      <p class="tagline">Tri&#8209;Peaks &middot; ninety seconds</p>
+
+      <ul class="rules">
+        <li><i class="ri">&#9827;</i><span>Tap a free card <b>one rank above or below</b> the pile. The ace turns both ways.</span></li>
+        <li><i class="ri">&#9830;</i><span>Peak cards pay into that peak&rsquo;s <b>pot</b> &mdash; take the top card to <b>crown</b> it and bank the pot <b>doubled</b>.</span></li>
+        <li><i class="ri">&#9829;</i><span>Let a peak die uncrowned and its pot is <b>gone</b>. So is every pot at the bell.</span></li>
+      </ul>
+
+      <button id="btn-play" class="plaque" type="button">
+        <span class="plaque-k">BEGIN THE CLIMB</span>
+        <span class="plaque-sub" id="title-best">90 seconds &middot; one thumb</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ════════════════ GAME ════════════════ -->
+  <section id="screen-game" class="screen">
+
+    <header id="hud">
+      <div class="hud-side hud-left">
+        <span class="hud-k">SCORE</span>
+        <span class="hud-score" id="hud-score">0</span>
+      </div>
+      <div class="hud-mid">
+        <span class="hud-clock" id="hud-clock">0:00</span>
+        <span class="hud-k hud-k-dim" id="hud-phase">&nbsp;</span>
+      </div>
+      <div class="hud-side hud-right">
+        <span class="hud-k">CHAIN</span>
+        <div class="chain-row">
+          <span class="hud-chain" id="hud-chain">0</span>
+          <span class="hud-mult" id="hud-mult">&times;1</span>
+        </div>
+        <div class="pips" id="hud-pips" aria-hidden="true"></div>
+        <span class="hud-risk" id="hud-risk" hidden>0</span>
+      </div>
+    </header>
+    <div class="meter"><i id="meter-fill"></i><b id="meter-pb" hidden></b></div>
+
+    <main id="field">
+      <canvas id="sky" class="sky" aria-hidden="true"></canvas>
+      <div id="cards" class="cards"></div>
+      <div id="badges" class="badges" aria-hidden="true"></div>
+      <canvas id="fx" class="fx" aria-hidden="true"></canvas>
+      <div id="floats" class="floats" aria-hidden="true"></div>
+      <div id="hint" class="hint" hidden aria-hidden="true"></div>
+      <div id="banner" class="banner" aria-hidden="true"></div>
+    </main>
+
+    <div id="flash" class="flash" aria-hidden="true"></div>
+  </section>
+
+  <!-- ════════════════ RESULT ════════════════ -->
+  <section id="screen-over" class="screen">
+    <canvas id="over-sky" class="sky" aria-hidden="true"></canvas>
+    <div class="title-inner over-inner">
+      <p class="over-k">THE BELL</p>
+      <div class="over-score" id="over-score">0</div>
+      <p class="over-gap" id="over-gap">&nbsp;</p>
+      <div class="over-lines" id="over-lines"></div>
+      <button id="btn-again" class="plaque" type="button">
+        <span class="plaque-k">CLIMB AGAIN</span>
+      </button>
+      <button id="btn-home" class="ghost" type="button">HOME</button>
+    </div>
+  </section>
+
+</div>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   SUMMIT — tri-peaks solitaire as a 90-second score attack.
+
+   ONE VERB: tap a card.
+
+   · Tap any FREE tableau card one rank above or below the card on the pile
+     (ace wraps to both king and two) and it flies to the pile.
+   · Tap either of the TWO WELLS to bring its top card down instead. That
+     costs you your chain — but both well tops are FACE UP, so you always
+     see exactly two futures and choosing between them is the game.
+   · Tap something you cannot play and it costs 0.35 s off the clock.
+   · Nothing else ends the run. 90 seconds, then the siren.
+
+   Two things make this a game rather than a patience layout:
+
+     1. THE POT. The base row pays you immediately. The three PEAKS do not
+        — a peak card's points go into that peak's pot, which is AT RISK.
+        Taking the apex CROWNS the peak and banks the pot DOUBLED. If the
+        board dies with a peak uncrowned, that pot is gone, and so is every
+        pot at the siren. So every card you lift off a peak raises the
+        stakes on finishing it, and at 0:08 holding a fat pot you have a
+        real decision against a visible deadline (bible C14).
+
+     2. THE SECOND WELL. Measured on the single-stock version: 60.6% of
+        play-decisions had exactly one legal card and the mean branching
+        factor was 1.52 — the board plays itself, and a five-ply search
+        scored the same as a one-ply one. A second face-up well turns every
+        draw into an informed choice of which rank to bring down, which is
+        the difference between reading the board and reacting to it.
+
+   Everything here is pure logic and pure geometry — no DOM, no timers, no
+   audio. The UI and the headless bot fleet drive it through the same
+   play()/draw()/tapAt() calls, so the two cannot disagree about what a game
+   is; the LAYOUT lives here too, so the picture and the number cannot
+   disagree about where a card is.
+
+       node -e "require('./engine.js'); console.table(SM.fleet(300))"
+   ═══════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+
+/* ───────────────────────────── RNG ─────────────────────────────
+   Deterministic and replayable (bible §11.2). Every board draws from a
+   stream seeded by (runSeed, boardIndex), so board 3 of seed 7 is the same
+   board for everybody and a run replays from seed + input trace alone.
+   ─────────────────────────────────────────────────────────────── */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hash32(a, b) {
+  let h = (a ^ 0x9E3779B9) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85EBCA6B) >>> 0;
+  h = (h + Math.imul(b | 0, 0xC2B2AE35)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x27D4EB2F) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x9E3779B1) >>> 0;
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+/* ───────────────────────── THE BOARDS ─────────────────────────
+   Not one layout — TWELVE, authored by hand (bible §15: per-object
+   randomness is unlearnable; authored chunks are not). The classic
+   tri-peaks pyramid is board one because it teaches the shape; after that
+   the range changes every board, and it gets meaner as the clock runs.
+
+   THE LATTICE. Cards sit on a half-card grid: hx is in HALF card widths,
+   rows alternate parity, and A CARD IS COVERED BY THE TWO CARDS ONE ROW
+   DOWN AT hx±1. That single rule generates every shape below, including
+   the classic one, and it is why a card can be held by two different
+   clusters at once.
+
+   AUTHORING FORMAT. One string per row, 19 characters, index = hx.
+     '.'     nothing
+     '0'-'3' a card belonging to that cluster
+     'A'-'D' the CROWN of cluster 0-3 — the card you must reach to bank it
+   The parser derives the covering relation, each card's DEPTH (how many
+   cards deep it is buried), and checks that every crown really is the
+   deepest card of its cluster. A layout that fails is a build error, not
+   a surprise at run time.
+
+   DEPTH IS THE CURRENCY. A card that starts face-up and free pays you
+   immediately; anything you had to dig for pays into its cluster's pot,
+   worth more the deeper it was. That rule is layout-independent, which is
+   the whole reason the shapes can vary at all.
+   ─────────────────────────────────────────────────────────────── */
+const CH       = 1.42;   // card height, in card widths
+const ROW_DY   = 0.52;   // row pitch, as a fraction of card height
+const BIG      = 1.44;   // pile / stock card scale — these are thumb targets
+const FIELD_W  = 10;     // board width, in card widths
+const NROW     = 4;
+const TAB_BOT  = CH / 2 + (NROW - 1) * ROW_DY * CH + CH / 2;
+
+const RAW = [
+/* ── 1. the classic. Three peaks, two shared base cards. ── */
+{ n: 'TRI-PEAKS', hard: 0, g: [
+  '...A.....B.....C...',
+  '..0.0...1.1...2.2..',
+  '.0.0.0.1.1.1.2.2.2.',
+  '0.0.0.0.1.1.2.2.2.2' ] },
+
+/* ── 2. one broad massif with three summits along its crest ── */
+{ n: 'THE RIDGE', hard: 1, g: [
+  '.....A...B...C.....',
+  '....0.0.1.1.2.2....',
+  '...0.0.0.1.2.2.2...',
+  '0.0.0.0.1.1.2.2.2.2' ] },
+
+/* ── 3. two towers and a lintel, with a real archway punched through ── */
+{ n: 'THE GATE', hard: 2, g: [
+  '...A.....C.....B...',
+  '..0.0.2.2.2.2.1.1..',
+  '.0.0.0.2...2.1.1.1.',
+  '0.0.0.0.....1.1.1.1' ] },
+
+/* ── 4. wide and shallow — a lot starts open, so the chain is the game ── */
+{ n: 'THE FAN', hard: 0, g: [
+  '.....A.......B.....',
+  '....0.0.....1.1....',
+  '...0.0.0...1.1.1...',
+  '0.0.0.0.0.1.1.1.1.1' ] },
+
+/* ── 5. two deep peaks over one solid skirt: fat pots, few of them ── */
+{ n: 'TWIN SUMMITS', hard: 2, g: [
+  '...A...........B...',
+  '..0.0.0.....1.1.1..',
+  '.0.0.0.0...1.1.1.1.',
+  '0.0.0.0.0.1.1.1.1.1' ] },
+
+/* ── 6. two piers you have to undercut before either will fall ── */
+{ n: 'THE ARCH', hard: 2, g: [
+  '...A...........B...',
+  '..0.0.........1.1..',
+  '.0.0.0.0...1.1.1.1.',
+  '0.0.0.0.0.1.1.1.1.1' ] },
+
+/* ── 7. three terraces, each shorter than the last ── */
+{ n: 'THE FALLS', hard: 1, g: [
+  '...A.....B.........',
+  '..0.0...1.1.....C..',
+  '.0.0.0.1.1.1...2.2.',
+  '0.0.0.0.1.1.1.2.2.2' ] },
+
+/* ── 8. one enormous peak between two fields of scree ── */
+{ n: 'THE MONARCH', hard: 2, g: [
+  '.........A.........',
+  '..B.....0.0.....C..',
+  '.1.1.1.0.0.0.2.2.2.',
+  '1.1.1.0.0.0.0.2.2.2' ] },
+
+/* ── 9. two towers and a gatehouse held up by BOTH of them ── */
+{ n: 'THE KEEP', hard: 2, g: [
+  '.....A...C...B.....',
+  '....0.0.2.2.1.1....',
+  '...0.0.0.2.1.1.1...',
+  '0.0.0.0.2.2.1.1.1.1' ] },
+
+/* ── 10. four spires, four pots, the biggest board in the deck ── */
+{ n: 'THE CROWN', hard: 3, g: [
+  '...A...B...C...D...',
+  '..0.0.1.1.2.2.3.3..',
+  '.0.0.0.1.1.2.2.3.3.',
+  '0.0.0.1.1.2.2.3.3.3' ] },
+
+/* ── 11. four shallow mounds — quick pots, a low ceiling ── */
+{ n: 'THE CREST', hard: 0, g: [
+  '...................',
+  '..A...B.....C...D..',
+  '.0.0.1.1...2.2.3.3.',
+  '0.0.0.1.1.2.2.2.3.3' ] },
+
+/* ── 12. a solid face in three bands: fat pots, nowhere to hide ── */
+{ n: 'THE WALL', hard: 3, g: [
+  '...A.....B.....C...',
+  '..0.0.1.1.1.2.2.2..',
+  '.0.0.0.1.1.1.2.2.2.',
+  '0.0.0.0.1.1.1.2.2.2' ] }
+];
+
+/* ── the parser: shape in, playable board out ── */
+function parseLayout(raw) {
+  const slots = [];
+  let nclust = 0;
+  const crowns = {};
+  for (let r = 0; r < raw.g.length; r++) {
+    const row = raw.g[r];
+    for (let hx = 0; hx < row.length; hx++) {
+      const ch = row.charAt(hx);
+      if (ch === '.') continue;
+      let cl;
+      let isCrown = false;
+      if (ch >= '0' && ch <= '9') cl = ch.charCodeAt(0) - 48;
+      else if (ch >= 'A' && ch <= 'Z') { cl = ch.charCodeAt(0) - 65; isCrown = true; }
+      else continue;
+      if (cl + 1 > nclust) nclust = cl + 1;
+      const id = slots.length;
+      if (isCrown) {
+        if (crowns[cl] !== undefined) throw new Error(raw.n + ': cluster ' + cl + ' has two crowns');
+        crowns[cl] = id;
+      }
+      slots.push({ id: id, row: r, hx: hx, cluster: cl, crown: isCrown,
+                   cx: (hx + 1) / 2, cy: CH / 2 + r * ROW_DY * CH,
+                   under: [], over: [], depth: 0 });
+    }
+  }
+  const at = {};
+  for (let i = 0; i < slots.length; i++) at[slots[i].row + ':' + slots[i].hx] = slots[i];
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    const a = at[(s.row + 1) + ':' + (s.hx - 1)], b = at[(s.row + 1) + ':' + (s.hx + 1)];
+    if (a) { s.under.push(a.id); a.over.push(s.id); }
+    if (b) { s.under.push(b.id); b.over.push(s.id); }
+  }
+  /* depth = how many cards deep this one is buried. 0 means it starts free,
+     and a card that starts free pays committed rather than into a pot. */
+  for (let r = slots.length - 1; r >= 0; r--) {
+    for (let i = slots.length - 1; i >= 0; i--) {
+      const s = slots[i];
+      let d = 0;
+      for (let j = 0; j < s.under.length; j++) d = Math.max(d, slots[s.under[j]].depth + 1);
+      s.depth = d;
+    }
+  }
+  const crownIds = [];
+  for (let c = 0; c < nclust; c++) {
+    if (crowns[c] === undefined) throw new Error(raw.n + ': cluster ' + c + ' has no crown');
+    const cid = crowns[c];
+    for (let i = 0; i < slots.length; i++)
+      if (slots[i].cluster === c && slots[i].depth > slots[cid].depth)
+        throw new Error(raw.n + ': cluster ' + c + ' crown is not its deepest card ('
+                        + slots[cid].depth + ' vs ' + slots[i].depth + ')');
+    crownIds.push(cid);
+  }
+  let free0 = 0, maxDepth = 0;
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i].depth === 0) free0++;
+    if (slots[i].depth > maxDepth) maxDepth = slots[i].depth;
+  }
+  return { name: raw.n, hard: raw.hard, slots: slots, n: slots.length,
+           nclust: nclust, crowns: crownIds, free0: free0, maxDepth: maxDepth };
+}
+
+const LAYOUT_ERRORS = [];
+const LAYOUTS = [];
+for (let i = 0; i < RAW.length; i++) {
+  try { LAYOUTS.push(parseLayout(RAW[i])); }
+  catch (e) { LAYOUT_ERRORS.push(e.message); }
+}
+if (LAYOUT_ERRORS.length && typeof process !== 'undefined' && process.env && process.env.SUMMIT_LAX)
+  console.warn('LAYOUT ERRORS:\n  ' + LAYOUT_ERRORS.join('\n  '));
+else if (LAYOUT_ERRORS.length)
+  throw new Error('layout errors:\n  ' + LAYOUT_ERRORS.join('\n  '));
+const MAX_CARDS = LAYOUTS.reduce(function (a, L) { return Math.max(a, L.n); }, 0);
+
+/* Which board you get, and when. Board one is always the classic; after
+   that the pool opens up by difficulty as the clock runs down, which is
+   escalation that depends only on elapsed time (C8-legal) and on nothing
+   about the player. */
+function layoutFor(board, t, seed) {
+  if (board === 0) return LAYOUTS[0];
+  const u = Math.max(0, Math.min(1, t / 70000));
+  const cap = u < 0.30 ? 1 : (u < 0.62 ? 2 : 3);
+  const pool = [];
+  for (let i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].hard <= cap) pool.push(LAYOUTS[i]);
+  const rnd = mulberry32(hash32(seed, (board * 0x9E3779B1) | 0));
+  rnd();
+  return pool[(rnd() * pool.length) | 0];
+}
+
+/* Pile and stock sit low, inside the thumb arc (bible §8.2). Their y
+   depends on how tall the playfield is in card units, so one call gives
+   the UI its pixels and the masher bot its dartboard. */
+function deckRow(unitsTall) {
+  const h = CH * BIG, w = BIG;
+  const cy = Math.max(TAB_BOT + 0.45 + h / 2, unitsTall - 1.05 - h / 2);
+  if (K.WELLS === 1) {
+    return {
+      pile:  { cx: 3.42, cy: cy, w: w, h: h },
+      well0: { cx: 6.58, cy: cy, w: w, h: h },
+      well1: null, h: h, cy: cy
+    };
+  }
+  return {
+    well0: { cx: 2.28, cy: cy,        w: w, h: h },
+    pile:  { cx: 5.00, cy: cy - 0.18, w: w, h: h },
+    well1: { cx: 7.72, cy: cy,        w: w, h: h },
+    h: h, cy: cy
+  };
+}
+
+/* ───────────────────────── TUNING ─────────────────────────
+   Every number the balance depends on, in one block. tools/kcheck.js
+   verifies that every K.NAME the code reads exists — a renamed constant
+   reads undefined, and undefined arithmetic is a silent NaN.
+   ────────────────────────────────────────────────────────── */
+const K = {
+  SESSION_MS:   90000,   // C3 — the clock is the only thing that ends a run
+  DEAL_MS:        520,   // a fresh board deals in; input is ignored, and free
+  DEAD_MS:       2000,   // ...but a board that DIES on you deals in slow. This
+                         // is the cost a shallow-card farmer also has to pay:
+                         // it never crowns anything, so it kills a board every
+                         // few seconds. MEASURED — without it, thinning the
+                         // stock enough to make sequencing matter put the
+                         // farmer above `careless` (1233 vs 922).
+  MISS_MS:        250,   // clock damage for tapping something unplayable
+  MISS_CHAIN:       0,   // 1 = a miss also breaks the chain
+
+  BASE_ROW:         2,   // a card that started FREE — paid straight to score
+  POT_DEPTH: [0, 5, 8, 13],     // a card you had to dig for, by how deep it was
+  CROWN_MUL:        2,   // crowning a cluster banks its pot, at least doubled
+  CROWN_CHAIN:      4,   // ...and MORE if you crowned it at the top of a long
+  CROWN_CHAIN_MAX:1.5,   // chain: bank = pot x (2 + min(1.5, chain/4)), so a
+                         // crown taken cold pays 2x and one taken as the tail
+                         // of a 6-chain pays 3.5x.
+                         //
+                         // This one line is where the thinking lives. MEASURED:
+                         // with a flat 2x bank, a six-ply planner beat a
+                         // random-legal bot AT THE SAME TAP SPEED by only
+                         // 1.41x, and neither the multiplier shape, the stock
+                         // size nor the crown value moved that by more than a
+                         // few percent — reaching a crown is mostly the deal.
+                         // Reaching it AT THE RIGHT MOMENT is not, and pricing
+                         // that took the plan premium to 1.48x.
+  CLEAR:          120,   // the whole board gone
+
+  /* An open card is deliberately worth a fifth of a deep one. MEASURED: at
+     BASE_ROW 6 with a flat pot table, a bot that only ever ate the open
+     cards and never dug scored 1.03x `careless` — a complete, riskless,
+     thought-free strategy. Pricing the approach that far under the summit
+     put it at 0.55x and lifted the plan gate from 1.35x to 1.53x at the
+     same time. The peaks are the game; the open cards are how you reach
+     them. */
+
+  MULT_STEP:        2,   // +1x per this many chained cards
+  MULT_MAX:        12,
+
+  /* THE HEADLINE. A chain pays out when it BREAKS, superlinearly in its
+     length: CHAIN_PAY x (L - CHAIN_MIN + 1)^CHAIN_EXP.
+
+     MEASURED, and the reason it is shaped this way: mean chain length is
+     almost flat across skill (careless 2.52, expert 2.92) — pay the mean and
+     you pay everyone the same. What actually separates play is how many LONG
+     chains you find: chains of 6+ run 2.45 a run for `careless` and 9.12 for
+     `expert`, and chains of 10+ run 0.24 against 1.56. A superlinear payout
+     reads those tails instead of the average, so the number that goes up is
+     the number that skill moves. */
+  CHAIN_MIN:        3,   // shorter than this pays nothing beyond the cards
+  CHAIN_PAY:       14,
+  CHAIN_EXP:     1.85,
+
+  /* ...and a chain is AT RISK until you cash it. Drawing banks it. A board
+     that dies under you takes it, and so does the bell.
+
+     This is where the greed decision lives, and it has to live somewhere:
+     MEASURED, the pot was never one. Sweeping the searcher's pot weight from
+     0.0 to 1.2 moved its score by 0.2% — less than one standard error — in
+     BOTH the old economy and the new one. The pot is a stake (visible,
+     losable, and the story the result screen tells), but an optimiser is
+     indifferent to it, because chasing chains digs clusters out anyway.
+     Depth of lookahead is the real axis: 4,303 at one ply against 6,633 at
+     nine, in that same economy.
+
+     Making the chain itself the at-risk pool puts a real bank-or-push
+     question in front of the player every few seconds, and the superlinear
+     payout is what stops it being farmed at the minimum increment (bible
+     §9.2C): cashing three-chains all run pays 40 a time, where one nine-chain
+     pays 836. */
+  CHAIN_DEAD:       0,   // fraction of a chain paid when the BOARD kills it
+  CHAIN_BELL:       0,   // ...and when the bell catches you still holding it
+
+  LATE_AT:      75000,   // C14 — the closing phase, last 15 s
+  LATE_LIFT:      1.5,   // base values lift; the multiplier CAP does not
+
+  STOCK_HI:        16,   // escalation: later boards are dealt a thinner stock
+  STOCK_LO:        10,
+  STOCK_RAMP_MS: 75000,
+
+  WELLS:            1    // 1 = the classic single stock, and the shipping
+                         // value. 2 puts a second face-up well on the table.
+                         // MEASURED (§3 of SUMMIT_DESIGN.md): the second well
+                         // is worth nothing to the skill gate — plan spread
+                         // 1.377x with one well, 1.362x with two — so it does
+                         // not earn the extra rule. The switch stays because
+                         // the measurement is the reason, not taste.
+};
+
+function multFor(chain) {
+  return Math.min(K.MULT_MAX, 1 + Math.floor(chain / K.MULT_STEP));
+}
+function liftAt(t) {
+  return t >= K.LATE_AT ? K.LATE_LIFT : 1;
+}
+function stockFor(t) {
+  const u = Math.max(0, Math.min(1, t / K.STOCK_RAMP_MS));
+  return Math.round(K.STOCK_HI - (K.STOCK_HI - K.STOCK_LO) * u);
+}
+/* Unified streak tiers (bible §9.5) — audio, particles and shake all read
+   this one table rather than inventing their own thresholds. */
+function tierFor(chain) {
+  return chain >= 40 ? 4 : chain >= 24 ? 3 : chain >= 12 ? 2 : chain >= 5 ? 1 : 0;
+}
+function crownMulFor(chain) {
+  return K.CROWN_MUL + Math.min(K.CROWN_CHAIN_MAX, chain / K.CROWN_CHAIN);
+}
+function valueOf(card) {
+  return card.depth === 0 ? K.BASE_ROW : K.POT_DEPTH[Math.min(card.depth, K.POT_DEPTH.length - 1)];
+}
+
+/* ───────────────────────── CARDS ───────────────────────── */
+const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const SUITS = ['S', 'H', 'D', 'C'];
+
+/* Ace wraps: A–2 and A–K are both one apart. */
+function adjacent(a, b) {
+  const d = Math.abs(a - b);
+  return d === 1 || d === 12;
+}
+
+/* ───────────────────────── GAME ───────────────────────── */
+function newGame(seed, opts) {
+  opts = opts || {};
+  const G = {
+    seed: seed >>> 0,
+    t: 0,
+    over: false,
+    board: -1,
+    dealAt: -1,            // >= 0 while a board is dealing in
+    dealMs: 0,
+    dealWhy: 'first',
+    L: null,               // the layout this board is using
+    score: 0,
+    chain: 0,
+    mult: 1,
+    bestChain: 0,
+    pots: [],
+    crowned: [],
+    cards: [],
+    wells: [[], []],
+    pile: [],
+    ev: [],                // events for the UI to animate; it drains this
+    stats: {
+      plays: 0, draws: 0, misses: 0, crowns: 0, clears: 0,
+      deaths: 0, boards: 0, potLost: 0, potBanked: 0, baseScore: 0,
+      clearScore: 0, chainScore: 0, chainLost: 0, longest: 0, missMs: 0, dealMs: 0, seen: {}
+    }
+  };
+  if (opts.layout !== undefined) G.forceLayout = opts.layout;
+  dealBoard(G);
+  return G;
+}
+
+function dealBoard(G, why) {
+  G.board++;
+  const L = G.forceLayout !== undefined
+    ? LAYOUTS[G.forceLayout % LAYOUTS.length]
+    : layoutFor(G.board, G.t, G.seed);
+  G.L = L;
+  G.stats.seen[L.name] = (G.stats.seen[L.name] || 0) + 1;
+
+  const rnd = mulberry32(hash32(G.seed, (G.board * 2654435761) | 0));
+  const deck = [];
+  for (let s = 0; s < 4; s++) for (let r = 0; r < 13; r++) deck.push({ rank: r, suit: s });
+  for (let i = 51; i > 0; i--) {                    // Fisher–Yates
+    const j = (rnd() * (i + 1)) | 0;
+    const tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+  }
+  G.cards = [];
+  for (let i = 0; i < L.n; i++) {
+    const s = L.slots[i], c = deck[i];
+    G.cards.push({
+      id: i, row: s.row, cluster: s.cluster, depth: s.depth, crown: s.crown,
+      cx: s.cx, cy: s.cy, rank: c.rank, suit: c.suit, gone: false
+    });
+  }
+  const n = Math.min(stockFor(G.t), 51 - L.n);
+  const a = K.WELLS === 1 ? n : Math.ceil(n / 2), b = n - a;
+  G.pile = [deck[L.n]];
+  G.wells = [
+    deck.slice(L.n + 1, L.n + 1 + a),
+    deck.slice(L.n + 1 + a, L.n + 1 + a + b)
+  ];
+  G.pots = new Array(L.nclust).fill(0);
+  G.crowned = new Array(L.nclust).fill(false);
+  G.dealAt = G.t;
+  G.dealWhy = why || 'first';
+  G.dealMs = G.dealWhy === 'dead' ? K.DEAD_MS : K.DEAL_MS;
+  G.stats.boards++;
+  G.stats.dealMs += G.dealMs;
+  G.ev.push({ k: 'deal', board: G.board, stock: n, why: G.dealWhy,
+              ms: G.dealMs, layout: L.name, nclust: L.nclust });
+}
+
+function dealing(G) { return G.dealAt >= 0 && G.t - G.dealAt < G.dealMs; }
+function pileRank(G) { return G.pile[G.pile.length - 1].rank; }
+function wellTop(G, w) {
+  const a = G.wells[w];
+  return a.length ? a[a.length - 1] : null;
+}
+function stockLeft(G) { return G.wells[0].length + G.wells[1].length; }
+function nCards(G) { return G.L.n; }
+
+function isFree(G, id) {
+  const c = G.cards[id];
+  if (!c || c.gone) return false;
+  const u = G.L.slots[id].under;
+  for (let i = 0; i < u.length; i++) if (!G.cards[u[i]].gone) return false;
+  return true;
+}
+function isLegal(G, id) {
+  return isFree(G, id) && adjacent(G.cards[id].rank, pileRank(G));
+}
+function legalIds(G) {
+  const out = [];
+  for (let i = 0; i < G.L.n; i++) if (isLegal(G, i)) out.push(i);
+  return out;
+}
+function freeIds(G) {
+  const out = [];
+  for (let i = 0; i < G.L.n; i++) if (isFree(G, i)) out.push(i);
+  return out;
+}
+function cardsLeft(G) {
+  let n = 0;
+  for (let i = 0; i < G.L.n; i++) if (!G.cards[i].gone) n++;
+  return n;
+}
+
+/* The clock. Everything else is event-driven; this is the only thing that
+   moves on its own, and the only thing that can end the run. */
+function tick(G, dtMs) {
+  if (G.over) return;
+  G.t += dtMs;
+  if (G.t >= K.SESSION_MS) {
+    G.t = K.SESSION_MS;
+    G.over = true;
+    payChain(G, 'bell');      /* the chain you were holding still counts */
+    let lost = 0;
+    for (let i = 0; i < G.pots.length; i++) lost += G.pots[i];
+    if (lost > 0) {
+      G.stats.potLost += lost;
+      G.ev.push({ k: 'siren-lost', pots: G.pots.slice(), lost: lost });
+    }
+    G.pots = G.pots.map(function () { return 0; });
+    G.ev.push({ k: 'siren' });
+  }
+}
+
+/* Play a card. Returns null if that was not a legal play — the caller
+   decides whether that counts as a miss (tapAt does). */
+function play(G, id) {
+  if (G.over || dealing(G) || !isLegal(G, id)) return null;
+  const c = G.cards[id];
+  c.gone = true;
+  G.pile.push({ rank: c.rank, suit: c.suit });
+  G.chain++;
+  G.mult = multFor(G.chain);
+  if (G.chain > G.bestChain) G.bestChain = G.chain;
+  G.stats.plays++;
+
+  const lift = liftAt(G.t);
+  const r = { k: 'play', id: id, row: c.row, depth: c.depth, cluster: c.cluster,
+              chain: G.chain, mult: G.mult, tier: tierFor(G.chain), gain: 0, pot: 0,
+              crown: false, crownGain: 0, clear: false, clearGain: 0,
+              dead: false, freed: [] };
+
+  if (c.depth === 0) {
+    r.gain = Math.round(K.BASE_ROW * lift * G.mult);
+    G.score += r.gain;
+    G.stats.baseScore += r.gain;
+  } else {
+    r.pot = Math.round(valueOf(c) * lift * G.mult);
+    G.pots[c.cluster] += r.pot;
+  }
+  const ov = G.L.slots[id].over;
+  for (let i = 0; i < ov.length; i++) if (isFree(G, ov[i])) r.freed.push(ov[i]);
+  G.ev.push(r);
+
+  if (c.crown) {                                  // the deepest card — CROWN
+    const cm = crownMulFor(G.chain);
+    const bank = Math.round(G.pots[c.cluster] * cm);
+    G.pots[c.cluster] = 0;
+    G.crowned[c.cluster] = true;
+    G.score += bank;
+    G.stats.crowns++;
+    G.stats.potBanked += bank;
+    r.crown = true; r.crownGain = bank; r.crownMul = cm;
+    G.ev.push({ k: 'crown', cluster: c.cluster, gain: bank, id: id,
+                cx: c.cx, cy: c.cy, mul: cm, chain: G.chain });
+  }
+
+  if (cardsLeft(G) === 0) {
+    const bonus = Math.round(K.CLEAR * lift);
+    G.score += bonus;
+    G.stats.clears++;
+    G.stats.clearScore += bonus;
+    r.clear = true; r.clearGain = bonus;
+    G.ev.push({ k: 'clear', gain: bonus });
+    dealBoard(G, 'clear');
+  } else {
+    r.dead = checkDead(G);
+  }
+  return r;
+}
+
+/* A chain ends: on a draw, on a board dying, and at the bell. Pay it out
+   here and nowhere else, so every one of those three paths is identical.
+   A board CLEAR deliberately does not break the chain — carrying it onto the
+   next board is the reward for finishing one. */
+function chainWorth(L, t) {
+  if (L < K.CHAIN_MIN) return 0;
+  return Math.round(K.CHAIN_PAY * Math.pow(L - K.CHAIN_MIN + 1, K.CHAIN_EXP) * liftAt(t));
+}
+function payChain(G, why) {
+  const L = G.chain;
+  G.chain = 0;
+  G.mult = 1;
+  const full = chainWorth(L, G.t);
+  if (!full) return 0;
+  const keep = why === 'dead' ? K.CHAIN_DEAD : (why === 'bell' ? K.CHAIN_BELL : 1);
+  const pay = Math.round(full * keep);
+  if (L > G.stats.longest) G.stats.longest = L;
+  if (pay > 0) {
+    G.score += pay;
+    G.stats.chainScore += pay;
+  } else {
+    G.stats.chainLost += full;
+  }
+  G.ev.push({ k: 'chainpay', len: L, gain: pay, lost: full - pay, why: why, tier: tierFor(L) });
+  return pay;
+}
+
+/* Turn a stock card. The chain is the price — and the payout. */
+function draw(G, w) {
+  if (G.over || dealing(G)) return null;
+  if (w !== 0 && w !== 1) return null;
+  if (!G.wells[w].length) return null;
+  const c = G.wells[w].pop();
+  G.pile.push(c);
+  const broke = G.chain;
+  payChain(G, 'draw');
+  G.stats.draws++;
+  const r = { k: 'draw', well: w, card: c, broke: broke, left: stockLeft(G), dead: false };
+  G.ev.push(r);
+  r.dead = checkDead(G);
+  return r;
+}
+
+/* No legal move and no stock left: the board is finished with you. Pots on
+   uncrowned clusters evaporate — that is the whole risk in the game — and a
+   fresh board deals. None of this ends the run (C13). */
+function checkDead(G) {
+  if (stockLeft(G) > 0) return false;
+  if (legalIds(G).length > 0) return false;
+  let lost = 0;
+  for (let i = 0; i < G.pots.length; i++) lost += G.pots[i];
+  if (lost > 0) G.stats.potLost += lost;
+  G.stats.deaths++;
+  payChain(G, 'dead');
+  G.ev.push({ k: 'dead', lost: lost, pots: G.pots.slice(), left: cardsLeft(G) });
+  dealBoard(G, 'dead');
+  return true;
+}
+
+/* A tap on something you cannot play. Costs clock, never the run. */
+function miss(G) {
+  if (G.over || dealing(G)) return null;
+  G.stats.misses++;
+  G.stats.missMs += K.MISS_MS;
+  if (K.MISS_CHAIN) { G.chain = 0; G.mult = 1; }
+  G.ev.push({ k: 'miss', cost: K.MISS_MS });
+  tick(G, K.MISS_MS);
+  return { k: 'miss' };
+}
+
+/* ───────────────────────── HIT TEST ─────────────────────────
+   The single source of truth for "what did that tap land on", in card-width
+   units. The UI scales pixels into this space; the masher bot throws darts
+   in it. Both therefore hit exactly what the picture shows.
+
+   SLOP widens every target on each side so a 37 dp card still clears the
+   48 dp minimum touch target (bible §8.2). Overlaps resolve by stacking
+   order first and nearest centre second, so slop can never make a tap
+   ambiguous.
+   ───────────────────────────────────────────────────────── */
+const SLOP = 0.09;
+
+function inBox(b, x, y) {
+  return x >= b.cx - b.w / 2 - SLOP && x <= b.cx + b.w / 2 + SLOP &&
+         y >= b.cy - b.h / 2 - SLOP && y <= b.cy + b.h / 2 + SLOP;
+}
+
+function cardAt(G, x, y) {
+  let best = -1, bestD = 1e9;
+  for (let i = 0; i < G.L.n; i++) {
+    const c = G.cards[i];
+    if (c.gone) continue;
+    const dx = Math.abs(x - c.cx), dy = Math.abs(y - c.cy);
+    if (dx > 0.5 + SLOP || dy > CH / 2 + SLOP) continue;
+    const s = dx * dx + dy * dy - c.row * 10;   // a card drawn on top wins
+    if (s < bestD) { bestD = s; best = i; }
+  }
+  return best;
+}
+
+function tapAt(G, x, y, unitsTall) {
+  if (G.over || dealing(G)) return { k: 'ignored' };
+  const dr = deckRow(unitsTall);
+  if (dr.well0 && inBox(dr.well0, x, y)) return G.wells[0].length ? draw(G, 0) : { k: 'empty' };
+  if (dr.well1 && inBox(dr.well1, x, y)) return G.wells[1].length ? draw(G, 1) : { k: 'empty' };
+  if (inBox(dr.pile, x, y)) return { k: 'empty' };
+  const best = cardAt(G, x, y);
+  if (best < 0) return { k: 'empty' };
+  if (isLegal(G, best)) return play(G, best);
+  return miss(G);
+}
+
+/* ───────────────────────── BOT FLEET ─────────────────────────
+   Bible §11.5. Not optional: a fixed clock with no fail state has no
+   automatic punishment for a degenerate line, so the maths has to be
+   measured rather than assumed.
+
+   Every bot is (a) a decision POLICY and (b) a decision LATENCY, because in
+   a tap-to-match game under a clock those are two different skills. The
+   plan gate compares policies at EQUAL latency; the hands gate moves the
+   latency with the policy fixed. Conflating them measures neither.
+
+   The search is honest about information: a bot can see the stock TOP and
+   nothing under it, so a line may spend each well at most once before it
+   runs out of things it is allowed to know.
+   ───────────────────────────────────────────────────────── */
+
+function snap(G) {
+  const n = G.L.n;
+  const gone = new Uint8Array(n);
+  for (let i = 0; i < n; i++) gone[i] = G.cards[i].gone ? 1 : 0;
+  const t0 = wellTop(G, 0), t1 = wellTop(G, 1);
+  return {
+    gone: gone, top: pileRank(G),
+    pots: G.pots.slice(), chain: G.chain,
+    wtop: [t0 ? t0.rank : -1, t1 ? t1.rank : -1],
+    wleft: [G.wells[0].length, G.wells[1].length],
+    left: cardsLeft(G)
+  };
+}
+function sFree(G, s, id) {
+  if (s.gone[id]) return false;
+  const u = G.L.slots[id].under;
+  for (let i = 0; i < u.length; i++) if (!s.gone[u[i]]) return false;
+  return true;
+}
+function sMoves(G, s) {
+  const out = [];
+  for (let i = 0; i < G.L.n; i++) {
+    if (s.gone[i]) continue;
+    if (!sFree(G, s, i)) continue;
+    if (adjacent(G.cards[i].rank, s.top)) out.push(i);
+  }
+  return out;
+}
+
+/* The value of the best line from here. potWeight is the bot's risk
+   appetite — what an at-risk pot point is worth to it against a banked
+   one — and that single number is the greed axis the fleet sweeps. */
+function rec(G, s, depth, pw, budget) {
+  const moves = sMoves(G, s);
+  const canDraw0 = s.wtop[0] >= 0, canDraw1 = s.wtop[1] >= 0;
+  if (depth <= 0 || budget.n <= 0 || (!moves.length && !canDraw0 && !canDraw1)) {
+    const alive = moves.length || canDraw0 || canDraw1 || s.wleft[0] || s.wleft[1];
+    let pot = 0;
+    for (let i = 0; i < s.pots.length; i++) pot += s.pots[i];
+    /* a chain in hand is worth what it would pay if cashed — and worth
+       nothing at all if the board just died holding it */
+    const held = (alive && s.chain >= K.CHAIN_MIN)
+      ? K.CHAIN_PAY * Math.pow(s.chain - K.CHAIN_MIN + 1, K.CHAIN_EXP) : 0;
+    return { v: (alive ? 0.35 * pot : 0) + held, a: null };
+  }
+  let bv = -1e9, ba = null;
+
+  for (let i = 0; i < moves.length; i++) {
+    budget.n--;
+    const id = moves[i], c = G.cards[id];
+    const chain = s.chain + 1, mult = multFor(chain);
+    let dv = 0;
+    if (c.depth === 0) dv += K.BASE_ROW * mult;
+    else               dv += valueOf(c) * mult * pw;
+
+    const savedTop = s.top, savedChain = s.chain, savedPot = s.pots[c.cluster];
+    s.gone[id] = 1;
+    s.left--;
+    if (c.depth !== 0) s.pots[c.cluster] += valueOf(c) * mult;
+    if (c.crown) { dv += s.pots[c.cluster] * (crownMulFor(chain) - pw); s.pots[c.cluster] = 0; }
+    const ov = G.L.slots[id].over;
+    for (let j = 0; j < ov.length; j++) if (sFree(G, s, ov[j])) dv += 1.1;
+    s.top = c.rank;
+    s.chain = chain;
+
+    let v;
+    if (s.left === 0) v = dv + K.CLEAR;                 // a board clear ends the line
+    else v = dv + rec(G, s, depth - 1, pw, budget).v;
+
+    s.gone[id] = 0;
+    s.left++;
+    s.top = savedTop;
+    s.chain = savedChain;
+    s.pots[c.cluster] = savedPot;
+    if (v > bv) { bv = v; ba = { t: 'p', id: id }; }
+  }
+
+  for (let w = 0; w < 2; w++) {
+    if (s.wtop[w] < 0) continue;
+    budget.n--;
+    const savedTop = s.top, savedChain = s.chain, savedW = s.wtop[w];
+    /* drawing cashes the chain you were on — the bot has to see that price
+       AND that payout, or it plays a different game from the one that ships */
+    const cash = s.chain >= K.CHAIN_MIN
+      ? K.CHAIN_PAY * Math.pow(s.chain - K.CHAIN_MIN + 1, K.CHAIN_EXP) : 0;
+    s.top = s.wtop[w];
+    s.wtop[w] = -1;                 // the card under it is not ours to know
+    s.chain = 0;
+    const v = cash + rec(G, s, depth - 1, pw, budget).v;
+    s.top = savedTop;
+    s.chain = savedChain;
+    s.wtop[w] = savedW;
+    if (v > bv) { bv = v; ba = { t: 'd', w: w }; }
+  }
+  return { v: bv, a: ba };
+}
+
+const STRATS = {};
+function defStrat(name, o) {
+  STRATS[name] = Object.assign({ tapMs: 420, blind: 0, mistap: 0, depth: 1, pot: 0.8, kind: 'search' }, o);
+}
+
+/* — honest play, four rungs of the ladder — */
+defStrat('expert',   { tapMs: 240, depth: 9, pot: 0.95 });
+defStrat('good',     { tapMs: 380, depth: 6, pot: 0.80 });
+defStrat('casual',   { tapMs: 560, depth: 3, pot: 0.55, blind: 0.22, mistap: 0.05 });
+defStrat('careless', { tapMs: 640, depth: 1, pot: 0.35, blind: 0.34, mistap: 0.10 });
+
+/* — a first run: slow, misses most of the board, taps the wrong card often — */
+defStrat('novice',   { tapMs: 900, depth: 1, pot: 0.20, blind: 0.50, mistap: 0.18 });
+
+/* — the hands axis: `good`'s plan, a real 180 ms of extra lag — */
+defStrat('laggy',    { tapMs: 560, depth: 6, pot: 0.80 });
+
+/* — the plan axis: all four run at 380 ms, so any gap is the PLAN — */
+defStrat('planA_deep',   { tapMs: 380, depth: 6, pot: 0.80 });
+defStrat('planB_greedy', { tapMs: 380, depth: 1, pot: 0.80 });
+defStrat('planC_first',  { tapMs: 380, kind: 'first' });
+defStrat('planD_rand',   { tapMs: 380, kind: 'rand' });
+
+/* — degenerate lines, which must all lose to `careless` — */
+defStrat('firstLegal', { tapMs: 380, kind: 'first' });   // the shallowest first
+defStrat('deepOnly',   { tapMs: 380, kind: 'deep' });    // always the deepest
+defStrat('openOnly',   { tapMs: 380, kind: 'open' });    // never digs at all
+defStrat('chainOnly',  { tapMs: 380, depth: 6, pot: 0.0 });  // chases chains, ignores pots
+defStrat('minCash',    { tapMs: 380, depth: 6, pot: 0.8, cashAt: 3 });  // banks the instant it can
+defStrat('randLegal',  { tapMs: 380, kind: 'rand' });
+defStrat('drawSpam',   { tapMs: 260, kind: 'draw' });
+defStrat('masher',     { tapMs: 110, kind: 'mash' });
+defStrat('jackhammer', { tapMs: 100, kind: 'jack' });    // one spot, forever
+defStrat('idle',       { tapMs: 500, kind: 'idle' });
+
+function anyDraw(G, rnd) {
+  const a = G.wells[0].length, b = G.wells[1].length;
+  if (!a && !b) return false;
+  if (a && b) return !!draw(G, rnd() < 0.5 ? 0 : 1);
+  return !!draw(G, a ? 0 : 1);
+}
+
+/* One decision. Every bot goes through play()/draw()/tapAt() — the same
+   calls the UI makes. A synthetic side door would let an exploit hide in
+   the input handling, which is the exact failure §11.5 warns about. */
+function act(G, S, rnd) {
+  if (S.kind === 'idle') return;
+  if (S.kind === 'jack') {
+    /* the 'never-release' analogue for a tap game: hammer one point. It
+       sits on the stock, the single most rewarding fixed target there is —
+       if any fixed point can farm this game, that one can. */
+    const dr = deckRow(16);
+    tapAt(G, dr.well0.cx, dr.well0.cy, 16);
+    return;
+  }
+  if (S.kind === 'mash') {
+    const dr = deckRow(16);
+    tapAt(G, rnd() * FIELD_W, rnd() * (dr.cy + dr.h / 2), 16);
+    return;
+  }
+  if (S.kind === 'draw') { if (!anyDraw(G, rnd)) tapAt(G, 5, 0.7, 16); return; }
+
+  let moves = legalIds(G);
+
+  /* a sloppy player does not see every legal card on the board */
+  if (S.blind > 0 && moves.length > 1) {
+    const seen = [];
+    for (let i = 0; i < moves.length; i++) if (rnd() > S.blind) seen.push(moves[i]);
+    if (seen.length) moves = seen;
+  }
+  /* ...and sometimes taps one that is not legal at all */
+  if (S.mistap > 0 && rnd() < S.mistap) { miss(G); return; }
+
+  if (S.kind === 'open') {
+    const b = [];
+    for (let i = 0; i < moves.length; i++) if (G.cards[moves[i]].depth === 0) b.push(moves[i]);
+    if (b.length) { play(G, b[(rnd() * b.length) | 0]); return; }
+    if (anyDraw(G, rnd)) return;
+    if (moves.length) play(G, moves[0]);
+    return;
+  }
+  if (moves.length) {
+    if (S.kind === 'deep') {
+      let best = moves[0];
+      for (let i = 1; i < moves.length; i++)
+        if (G.cards[moves[i]].depth > G.cards[best].depth) best = moves[i];
+      play(G, best);
+      return;
+    }
+    if (S.kind === 'first') {
+      let best = moves[0];                       // the shallowest — the way a
+      for (let i = 1; i < moves.length; i++)     // hurried eye reads a board
+        if (G.cards[moves[i]].depth < G.cards[best].depth) best = moves[i];
+      play(G, best);
+      return;
+    }
+    if (S.kind === 'rand') { play(G, moves[(rnd() * moves.length) | 0]); return; }
+  }
+  if (!moves.length && (S.kind === 'deep' || S.kind === 'first' || S.kind === 'rand')) {
+    if (!anyDraw(G, rnd)) tapAt(G, 5, 0.7, 16);
+    return;
+  }
+  if (!moves.length && !stockLeft(G)) { tapAt(G, 5, 0.7, 16); return; }
+
+  /* the §9.2C laddering exploit: bank at the smallest increment, every time */
+  if (S.cashAt && G.chain >= S.cashAt && stockLeft(G) > 0) { if (draw(G, G.wells[0].length ? 0 : 1)) return; }
+
+  /* search — plays and the stock are all on the table together */
+  const s = snap(G);
+  const r = rec(G, s, S.depth, S.pot, { n: 24000 });
+  if (r.a && r.a.t === 'p') { play(G, r.a.id); return; }
+  if (r.a && r.a.t === 'd') { if (draw(G, r.a.w)) return; }
+  if (moves.length) { play(G, moves[0]); return; }
+  if (!anyDraw(G, rnd)) tapAt(G, 5, 0.7, 16);
+}
+
+function simRun(seed, name) {
+  const S = STRATS[name];
+  const rnd = mulberry32(hash32(seed, 0x53554D31));
+  const G = newGame(seed, {});
+  let guard = 0;
+  while (!G.over && guard++ < 20000) {
+    tick(G, S.tapMs);
+    if (G.over) break;
+    if (dealing(G)) continue;
+    G.ev.length = 0;
+    act(G, S, rnd);
+  }
+  return {
+    score: G.score, boards: G.stats.boards, clears: G.stats.clears,
+    crowns: G.stats.crowns, plays: G.stats.plays, draws: G.stats.draws,
+    misses: G.stats.misses, deaths: G.stats.deaths,
+    potLost: G.stats.potLost, potBanked: G.stats.potBanked,
+    baseScore: G.stats.baseScore, clearScore: G.stats.clearScore,
+    chainScore: G.stats.chainScore, chainLost: G.stats.chainLost,
+    bestChain: G.bestChain, seen: G.stats.seen
+  };
+}
+
+function pct(sorted, p) {
+  if (!sorted.length) return 0;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
+  return sorted[i];
+}
+
+/* The score distribution the leaderboard actually sees (bible §5.3) is a
+   POPULATION, not one bot repeated — pooling one strategy across seeds
+   measures seed variance instead of skill. This mixes the ladder in
+   roughly the proportions a live player base has. */
+const POPULATION = [
+  ['novice',   0.14],
+  ['careless', 0.24],
+  ['casual',   0.30],
+  ['laggy',    0.10],
+  ['good',     0.16],
+  ['expert',   0.06]
+];
+
+function population(n) {
+  n = n || 400;
+  const xs = [];
+  for (let i = 0; i < POPULATION.length; i++) {
+    const name = POPULATION[i][0];
+    const share = Math.max(1, Math.round(n * POPULATION[i][1]));
+    for (let j = 0; j < share; j++) xs.push(simRun(4000 + j * 6151 + i * 17, name).score);
+  }
+  xs.sort(function (a, b) { return a - b; });
+  const p = function (q) { return pct(xs, q); };
+  return {
+    n: xs.length,
+    p10: p(0.10), p25: p(0.25), p50: p(0.50), p75: p(0.75), p90: p(0.90), p99: p(0.99),
+    'p90/p10': +(p(0.90) / Math.max(1, p(0.10))).toFixed(2),
+    'p10/p50': +(p(0.10) / p(0.50)).toFixed(2),
+    'p90/p50': +(p(0.90) / p(0.50)).toFixed(2),
+    'p99/p50': +(p(0.99) / p(0.50)).toFixed(2)
+  };
+}
+
+function fleet(n, only) {
+  n = n || 200;
+  const names = only || Object.keys(STRATS);
+  const rows = [];
+  for (let k = 0; k < names.length; k++) {
+    const name = names[k];
+    const xs = [];
+    const acc = { boards: 0, clears: 0, crowns: 0, plays: 0, draws: 0, misses: 0,
+                  lost: 0, banked: 0, base: 0, clr: 0, chain: 0, chainScore: 0, chainLost: 0 };
+    for (let i = 0; i < n; i++) {
+      const r = simRun(1000 + i * 7919, name);
+      xs.push(r.score);
+      acc.boards += r.boards; acc.clears += r.clears; acc.crowns += r.crowns;
+      acc.plays += r.plays; acc.draws += r.draws; acc.misses += r.misses;
+      acc.lost += r.potLost; acc.banked += r.potBanked; acc.base += r.baseScore;
+      acc.clr += r.clearScore; acc.chain += r.bestChain;
+      acc.chainScore += r.chainScore; acc.chainLost += r.chainLost;
+    }
+    const mean = xs.reduce(function (a, b) { return a + b; }, 0) / n;
+    const sd = Math.sqrt(xs.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / Math.max(1, n - 1));
+    const srt = xs.slice().sort(function (a, b) { return a - b; });
+    rows.push({
+      strategy: name,
+      mean: Math.round(mean),
+      se: +(sd / Math.sqrt(n)).toFixed(1),
+      p10: pct(srt, 0.10), p50: pct(srt, 0.50), p90: pct(srt, 0.90), p99: pct(srt, 0.99),
+      boards: +(acc.boards / n).toFixed(1),
+      clears: +(acc.clears / n).toFixed(2),
+      crowns: +(acc.crowns / n).toFixed(2),
+      plays: +(acc.plays / n).toFixed(1),
+      draws: +(acc.draws / n).toFixed(1),
+      miss: +(acc.misses / n).toFixed(1),
+      chainPts: Math.round(acc.chainScore / n),
+      chainLost: Math.round(acc.chainLost / n),
+      banked: Math.round(acc.banked / n),
+      lost: Math.round(acc.lost / n),
+      chain: +(acc.chain / n).toFixed(1)
+    });
+  }
+  rows.sort(function (a, b) { return b.mean - a.mean; });
+  return rows;
+}
+
+/* every authored board, and what it is made of */
+function boards() {
+  return LAYOUTS.map(function (L) {
+    const byDepth = [0, 0, 0, 0, 0];
+    L.slots.forEach(function (s) { byDepth[Math.min(4, s.depth)]++; });
+    return { name: L.name, hard: L.hard, cards: L.n, clusters: L.nclust,
+             openAtDeal: L.free0, maxDepth: L.maxDepth,
+             depth0: byDepth[0], depth1: byDepth[1], depth2: byDepth[2], depth3: byDepth[3],
+             crownDepths: L.crowns.map(function (i) { return L.slots[i].depth; }).join('/') };
+  });
+}
+
+/* ───────────────────────── EXPORTS ───────────────────────── */
+const API = {
+  K: K, LAYOUTS: LAYOUTS, RAW: RAW, LAYOUT_ERRORS: LAYOUT_ERRORS, MAX_CARDS: MAX_CARDS, RANKS: RANKS, SUITS: SUITS,
+  CH: CH, ROW_DY: ROW_DY, BIG: BIG, FIELD_W: FIELD_W, TAB_BOT: TAB_BOT,
+  NROW: NROW, SLOP: SLOP,
+  deckRow: deckRow, layoutFor: layoutFor, parseLayout: parseLayout,
+  mulberry32: mulberry32, hash32: hash32, adjacent: adjacent,
+  multFor: multFor, crownMulFor: crownMulFor, payChain: payChain, chainWorth: chainWorth, liftAt: liftAt, stockFor: stockFor, tierFor: tierFor, valueOf: valueOf,
+
+  newGame: newGame, tick: tick, play: play, draw: draw, miss: miss, tapAt: tapAt,
+  isFree: isFree, isLegal: isLegal, legalIds: legalIds, freeIds: freeIds,
+  cardsLeft: cardsLeft, nCards: nCards, dealing: dealing, pileRank: pileRank,
+  wellTop: wellTop, stockLeft: stockLeft, inBox: inBox, cardAt: cardAt,
+
+  STRATS: STRATS, simRun: simRun, fleet: fleet, rec: rec, snap: snap, sMoves: sMoves,
+  population: population, POPULATION: POPULATION, boards: boards
+};
+
+global.SM = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = API;
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   SUMMIT — presentation. The engine decides what happened; everything in
+   this file is about making it FELT.
+
+   Three layers, in this order, all sharing one coordinate space so the
+   picture and the sim cannot disagree about where anything is:
+
+     · SKY   a painted storybook night on <canvas> — aurora, three peaks,
+             a far castle, a cloud sea, snow, fireflies. Each mountain
+             carries its peak's pot as a gold bloom at the summit, so the
+             thing you are gambling with is the scenery.
+     · CARDS real DOM elements, so the ranks stay crisp at 38 px and the
+             flights can use the Web Animations API for proper arcs.
+     · FX    particles + floating numbers on top.
+
+   Everything reads its geometry from the board layout and SM.deckRow(), and every
+   tap goes through SM.tapAt() in card-width units — the same call the bot
+   fleet uses. A screenshot pass drives __SM.advance().
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+'use strict';
+
+const $ = function (id) { return document.getElementById(id); };
+const clamp = function (v, a, b) { return v < a ? a : v > b ? b : v; };
+const TAU = Math.PI * 2;
+
+/* Reduced motion is a first-class build path, not a broken one (bible
+   §11.7) — vestibular disorders are common and §7's juice is aggressive.
+   It is a `let` so __SM.setReduced() can flip it and a verification pass can
+   actually exercise the other branch instead of assuming it compiles. */
+let REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+const el = {
+  app: $('app'), field: $('field'), cards: $('cards'), badges: $('badges'),
+  sky: $('sky'), fx: $('fx'), floats: $('floats'), hint: $('hint'), banner: $('banner'),
+  flash: $('flash'),
+  score: $('hud-score'), clock: $('hud-clock'), mult: $('hud-mult'),
+  chain: $('hud-chain'), risk: $('hud-risk'),
+  pips: $('hud-pips'), phase: $('hud-phase'),
+  meterFill: $('meter-fill'), meterPB: $('meter-pb'),
+  scTitle: $('screen-title'), scGame: $('screen-game'), scOver: $('screen-over'),
+  titleSky: $('title-sky'), overSky: $('over-sky'), titleBest: $('title-best'),
+  overScore: $('over-score'), overGap: $('over-gap'), overLines: $('over-lines')
+};
+
+/* ═════════════════════ 1. AUDIO ═════════════════════
+   Procedural, so the build stays one file. The streak ladder is bible
+   §7.7 verbatim — a real pentatonic scale, because a linear Hz ramp
+   produces shrinking microtonal intervals and sounds broken as it climbs.
+   Every cue has a visual twin (§11.7): muted play must lose nothing. */
+const AU = {
+  ctx: null, master: null, on: true, noise: null,
+  boot: function () {
+    if (this.ctx) return;
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) { this.on = false; return; }
+    this.ctx = new C();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.5;
+    this.master.connect(this.ctx.destination);
+    const n = this.ctx.sampleRate * 0.5, buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    this.noise = buf;
+  },
+  resume: function () { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  tone: function (f, dur, type, gain, when, detune) {
+    if (!this.on || !this.ctx || !isFinite(f) || f <= 0) return;
+    const t = this.ctx.currentTime + (when || 0);
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f, t);
+    if (detune) o.detune.setValueAtTime(detune, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain || 0.15), t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.03);
+  },
+  swell: function (f0, f1, dur, gain, when) {
+    if (!this.on || !this.ctx) return;
+    const t = this.ctx.currentTime + (when || 0);
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + dur * 0.25);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+  hiss: function (dur, gain, freq, when) {
+    if (!this.on || !this.ctx || !this.noise) return;
+    const t = this.ctx.currentTime + (when || 0);
+    const s = this.ctx.createBufferSource(), g = this.ctx.createGain(), f = this.ctx.createBiquadFilter();
+    s.buffer = this.noise;
+    f.type = 'bandpass'; f.frequency.value = freq || 2200; f.Q.value = 0.9;
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t + dur + 0.02);
+  },
+  /* the streak ladder — major pentatonic, capping at +3 octaves */
+  ladder: function (n) {
+    const deg = [0, 2, 4, 7, 9];
+    const f = 360 * Math.pow(2, deg[n % 5] / 12) * Math.pow(2, Math.min(Math.floor(n / 5), 3));
+    this.tone(f, 0.14, 'triangle', 0.13, 0, (Math.random() * 14 - 7));
+    this.tone(f * 2, 0.055, 'sine', 0.035 + 0.0015 * n);
+    this.hiss(0.05, 0.03, 5200);
+  },
+  card: function () { this.hiss(0.07, 0.05, 3000); },
+  drawS: function () { this.hiss(0.13, 0.08, 1500); this.tone(220, 0.09, 'sine', 0.05); },
+  miss: function () {
+    this.tone(118, 0.16, 'square', 0.10);
+    this.tone(125, 0.16, 'square', 0.07);
+    this.hiss(0.09, 0.05, 700);
+  },
+  crown: function () {
+    const base = 523.25, deg = [0, 4, 7, 12, 16, 19];
+    for (let i = 0; i < deg.length; i++)
+      this.tone(base * Math.pow(2, deg[i] / 12), 0.4, 'triangle', 0.10, i * 0.052);
+    this.tone(base * 4, 1.1, 'sine', 0.06, 0.16);
+    this.swell(160, 320, 0.75, 0.08, 0);
+  },
+  clear: function () {
+    const deg = [0, 4, 7, 12, 16, 19, 24, 28];
+    for (let i = 0; i < deg.length; i++)
+      this.tone(523.25 * Math.pow(2, deg[i] / 12), 0.55, 'triangle', 0.11, i * 0.062);
+    this.swell(120, 480, 1.3, 0.10, 0);
+  },
+  dead: function () {
+    this.swell(300, 90, 0.7, 0.10, 0);
+    this.tone(146.83, 0.7, 'sine', 0.07, 0.05);
+    this.tone(155.56, 0.7, 'sine', 0.05, 0.05);
+  },
+  tick: function (hot) { this.tone(hot ? 1180 : 900, 0.045, 'sine', hot ? 0.09 : 0.05); },
+  bank: function (n) {
+    const deg = [0, 4, 7, 12, 16];
+    const k = Math.min(4, Math.floor(n / 3));
+    for (let i = 0; i <= k; i++)
+      this.tone(392 * Math.pow(2, deg[i] / 12), 0.26, 'triangle', 0.10, i * 0.04);
+    this.hiss(0.09, 0.05, 4200);
+  },
+  lose: function () {
+    this.swell(420, 110, 0.5, 0.11, 0);
+    this.tone(155.56, 0.5, 'square', 0.06, 0.02);
+  },
+  bell: function () {
+    this.tone(392, 1.9, 'sine', 0.15);
+    this.tone(587.33, 1.6, 'sine', 0.09, 0.02);
+    this.tone(196, 2.2, 'sine', 0.10, 0.01);
+  }
+};
+
+/* ═════════════════════ 2. LAYOUT ═════════════════════
+   One scale, one origin, shared by the canvas painter, the DOM cards and
+   the hit test. TOP_UNITS is headroom above the tableau where the painted
+   summits and the pot plaques live. */
+const TOP_UNITS = 0.98;
+const LAY = { s: 40, ox: 0, oy: 0, w: 0, h: 0, dpr: 1, tall: 9, dr: null };
+
+function relayout() {
+  const W = el.field.clientWidth, H = el.field.clientHeight;
+  if (W < 8 || H < 8) return false;                 // a zero-size frame is not a layout
+  const PAD = 5;
+  let s = (W - PAD * 2) / SM.FIELD_W;
+  const minUnits = TOP_UNITS + SM.TAB_BOT + 0.45 + SM.CH * SM.BIG + 0.34;
+  if (H / s < minUnits) s = H / minUnits;
+  LAY.s = s;
+  LAY.ox = (W - SM.FIELD_W * s) / 2;
+  LAY.oy = TOP_UNITS * s;
+  LAY.w = W; LAY.h = H;
+  LAY.tall = (H - LAY.oy) / s;
+  LAY.dr = SM.deckRow(LAY.tall);
+  el.app.style.setProperty('--cw', s.toFixed(2) + 'px');
+  el.app.style.setProperty('--chh', (s * SM.CH).toFixed(2) + 'px');
+  return true;
+}
+const PX = function (cx) { return LAY.ox + cx * LAY.s; };
+const PY = function (cy) { return LAY.oy + cy * LAY.s; };
+const UX = function (px) { return (px - LAY.ox) / LAY.s; };
+const UY = function (py) { return (py - LAY.oy) / LAY.s; };
+
+/* ═════════════════════ 3. THE PAINTED NIGHT ═════════════════════ */
+function sprite(size, stops) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (let i = 0; i < stops.length; i++) rg.addColorStop(stops[i][0], stops[i][1]);
+  g.fillStyle = rg;
+  g.fillRect(0, 0, size, size);
+  return c;
+}
+
+const SKY = {
+  far: null, mid: null, ready: false,
+  glowGold: null, glowTeal: null, glowPink: null, glowBlue: null, soft: null,
+  ranges: null, paths: null, stars: [], snow: [], flies: [], shelf: [],
+  potShown: [], crownShown: [], deathT: 0, boardKey: '',
+
+  sprites: function () {
+    if (this.glowGold) return;
+    this.glowGold = sprite(96, [[0, 'rgba(255,231,168,.95)'], [.35, 'rgba(245,201,106,.45)'], [1, 'rgba(245,201,106,0)']]);
+    this.glowTeal = sprite(128, [[0, 'rgba(87,233,198,.42)'], [.45, 'rgba(87,233,198,.16)'], [1, 'rgba(87,233,198,0)']]);
+    this.glowPink = sprite(128, [[0, 'rgba(255,143,218,.34)'], [.45, 'rgba(255,143,218,.13)'], [1, 'rgba(255,143,218,0)']]);
+    this.glowBlue = sprite(128, [[0, 'rgba(143,166,255,.36)'], [.45, 'rgba(143,166,255,.14)'], [1, 'rgba(143,166,255,0)']]);
+    this.soft = sprite(128, [[0, 'rgba(255,255,255,.55)'], [.5, 'rgba(226,236,255,.20)'], [1, 'rgba(226,236,255,0)']]);
+  },
+
+  /* THE RANGE IS THE BOARD. One mountain per cluster: its summit sits under
+     that cluster's crown card and its footprint spans that cluster's cards,
+     so when the layout changes the skyline changes with it. The pot you are
+     gambling with is painted into the mountain holding it. */
+  setBoard: function (G) {
+    if (!G || !G.L) return;
+    const key = G.L.name + ':' + LAY.w + 'x' + LAY.h;
+    if (key === this.boardKey) return;
+    this.boardKey = key;
+    const rnd = SM.mulberry32(SM.hash32(0x5177, G.L.name.length * 977 + G.L.nclust));
+    this.ranges = [];
+    this.wob = rnd() * TAU;
+    for (let c = 0; c < G.L.nclust; c++) {
+      let lo = 99, hi = -99, crown = null;
+      for (let i = 0; i < G.L.n; i++) {
+        const s = G.L.slots[i];
+        if (s.cluster !== c) continue;
+        if (s.cx < lo) lo = s.cx;
+        if (s.cx > hi) hi = s.cx;
+        if (s.crown) crown = s;
+      }
+      if (!crown) continue;
+      /* THE RANGE SITS BELOW THE TABLEAU, not behind it. Pinning each
+         summit to its crown card put the entire skyline underneath the
+         cards, where none of it could be seen — a mountain you cannot see
+         the top of is a gradient. Each peak now rises directly under its
+         own cluster, so the association still reads, and the crest lives in
+         the one band of the screen that no card ever covers. */
+      const sx = crown.cx, top = SM.TAB_BOT + 0.10 + rnd() * 0.45;
+      const half = Math.max(3.4, Math.max(sx - lo, hi - sx) + 2.6);
+      const ridge = [];
+      for (let i = 1; i <= 5; i++) ridge.push({ u: i / 6, j: (rnd() - 0.5) * 0.20 });
+      this.ranges.push({ sx: sx, top: top, half: half, ridge: ridge,
+                         snowU: 0.30 + rnd() * 0.07, wob: rnd() * TAU,
+                         streak: [rnd(), rnd(), rnd()],
+                         badgeY: crown.cy - 0.92, cardCx: crown.cx });
+    }
+    this.potShown = new Array(this.ranges.length).fill(-1);
+    this.crownShown = new Array(this.ranges.length).fill(false);
+    if (LAY.w > 8) this.paintMid(G.pots, G.crowned, this.deathT);
+  },
+
+  build: function () {
+    const rnd = SM.mulberry32(0x51AA);
+    this.stars = [];
+    for (let i = 0; i < 78; i++)
+      this.stars.push({ x: rnd(), y: rnd() * 0.58, r: 0.4 + rnd() * 1.1,
+                        a: 0.25 + rnd() * 0.6, ph: rnd() * TAU });
+    this.snow = [];
+    for (let i = 0; i < 70; i++)
+      this.snow.push({ x: rnd(), y: rnd(), r: 0.6 + rnd() * 1.7,
+                       v: 0.010 + rnd() * 0.030, sw: rnd() * TAU, a: 0.22 + rnd() * 0.45 });
+    this.flies = [];
+    for (let i = 0; i < 14; i++)
+      this.flies.push({ x: rnd(), y: 0.42 + rnd() * 0.5, ph: rnd() * TAU,
+                        sp: 0.14 + rnd() * 0.3, r: 1.1 + rnd() * 1.6 });
+    this.shelf = [];
+    for (let i = 0; i < 26; i++)
+      this.shelf.push({ u: i / 25, r: 0.7 + rnd() * 0.9, o: rnd() * TAU, a: 0.10 + rnd() * 0.16 });
+  },
+
+  /* THE COMPOSITION. A tri-peaks board is wide and short; a phone is tall
+     and narrow. Rather than stretch the peaks into needles to fill the
+     screen, they keep an honest mountain proportion and stand in a SEA OF
+     CLOUD, with the valley night below it and the pile and stock resting on
+     a cloud shelf down in the thumb arc. Three bands, each doing a job. */
+  rangeBase: function () { return this.valleyY() + 0.5; },
+  cloudY: function () { return this.rangeBase() - 1.35; },
+  valleyY: function () { return LAY.dr ? LAY.dr.cy - 1.95 : 12; },
+
+  /* THE RANGE IS ONE SKYLINE, not three shapes stacked on a gradient.
+     For any x, the ridge sits at the HIGHEST of the cluster profiles, so
+     neighbouring peaks cut real V-notches into each other and the snow band
+     can follow the whole crest — including through the valleys between
+     clusters, which is the one part of the range no card ever covers.
+
+     d = 0 at a summit, 1 at the edge of its footprint; d^1.35 makes a peak
+     that is sharp at the top and flares at the base, which is what a
+     mountain does and what a searchlight beam does not. */
+  skylineY: function (x, by) {
+    let y = by;
+    for (let k = 0; k < this.ranges.length; k++) {
+      const R = this.ranges[k];
+      /* asymmetric flanks: every real ridge has a windward and a lee side,
+         and a symmetric triangle is the fastest way to look like clip art */
+      const half = x < R.sx ? R.half * 0.86 : R.half * 1.14;
+      const d = Math.min(1, Math.abs(x - R.sx) / half);
+      const yy = R.top + (by - R.top) * Math.pow(d, 1.62);
+      if (yy < y) y = yy;
+    }
+    /* two octaves of wobble, so the crest is rocky rather than drafted */
+    y += Math.sin(x * 2.7 + this.wob) * 0.085 + Math.sin(x * 6.1 + this.wob * 1.7) * 0.038;
+    return y;
+  },
+
+  rangePath: function (by, drop) {
+    const p = new Path2D();
+    const x0 = -0.6, x1 = SM.FIELD_W + 0.6, step = 0.11;
+    p.moveTo(PX(x0), PY(by + drop));
+    for (let x = x0; x <= x1; x += step) p.lineTo(PX(x), PY(this.skylineY(x, by)));
+    p.lineTo(PX(x1), PY(by + drop));
+    p.closePath();
+    return p;
+  },
+
+  snowBand: function (by) {
+    const p = new Path2D();
+    const x0 = -0.6, x1 = SM.FIELD_W + 0.6, step = 0.11;
+    const pts = [];
+    for (let x = x0; x <= x1; x += step) pts.push([x, this.skylineY(x, by)]);
+    p.moveTo(PX(pts[0][0]), PY(pts[0][1]));
+    for (let i = 1; i < pts.length; i++) p.lineTo(PX(pts[i][0]), PY(pts[i][1]));
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const x = pts[i][0];
+      const depth = 0.20 + 0.13 * Math.sin(x * 2.1 + this.wob * 2.3) + 0.08 * Math.sin(x * 5.3);
+      p.lineTo(PX(x), PY(pts[i][1] + Math.max(0.06, depth)));
+    }
+    p.closePath();
+    return p;
+  },
+
+  /* sky, moon, far range, valley floor, castle — repainted only on resize */
+  paintFar: function () {
+    const W = LAY.w, H = LAY.h, d = LAY.dpr;
+    const c = this.far || (this.far = document.createElement('canvas'));
+    c.width = Math.round(W * d); c.height = Math.round(H * d);
+    const g = c.getContext('2d');
+    g.setTransform(d, 0, 0, d, 0, 0);
+
+    const hz = clamp(PY(this.cloudY()) / H, 0.15, 0.92);
+    const vy = clamp(PY(this.valleyY()) / H, hz + 0.05, 0.99);
+    const sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0.00, '#070420');
+    sky.addColorStop(hz * 0.40, '#180F42');
+    sky.addColorStop(hz * 0.80, '#331C64');
+    sky.addColorStop(hz, '#5E2F76');
+    sky.addColorStop(clamp(hz + (vy - hz) * 0.45, 0.02, 0.98), '#2A1856');
+    sky.addColorStop(clamp(vy, 0.03, 0.99), '#1B1046');
+    sky.addColorStop(1.00, '#241456');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, H);
+
+    for (let i = 0; i < this.stars.length; i++) {
+      const s = this.stars[i];
+      g.globalAlpha = s.a * (1 - s.y * 0.5);
+      g.fillStyle = '#EAF0FF';
+      g.beginPath(); g.arc(s.x * W, s.y * H * hz * 1.5, s.r, 0, TAU); g.fill();
+    }
+    g.globalAlpha = 1;
+
+    /* A BIG LOW MOON, rising behind the range and cut by the cloud sea. It
+       sits below the cards rather than beside them, so it can be enormous
+       without ever competing with a rank for attention — and it is the
+       source of every rim light on every ridge. */
+    const mx = W * 0.72, my = PY(SM.TAB_BOT + 2.15), mr = W * 0.135;
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = 0.85;
+    g.drawImage(this.soft, mx - mr * 4.2, my - mr * 4.2, mr * 8.4, mr * 8.4);
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    const mg = g.createRadialGradient(mx - mr * 0.28, my - mr * 0.3, mr * 0.1, mx, my, mr);
+    mg.addColorStop(0, '#FFFCEC'); mg.addColorStop(0.62, '#F6EBCC'); mg.addColorStop(1, '#DCC79B');
+    g.fillStyle = mg;
+    g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(176,158,120,.18)';
+    g.beginPath(); g.arc(mx + mr * .30, my + mr * .16, mr * .18, 0, TAU); g.fill();
+    g.beginPath(); g.arc(mx - mr * .30, my + mr * .36, mr * .11, 0, TAU); g.fill();
+    g.beginPath(); g.arc(mx + mr * .06, my - mr * .40, mr * .09, 0, TAU); g.fill();
+
+    /* a hazy range far behind, standing on the same cloud line */
+    const fy = PY(this.cloudY() - 0.15);
+    g.fillStyle = 'rgba(50,34,100,.72)';
+    g.beginPath();
+    g.moveTo(-10, fy + 80);
+    let x = -10;
+    const rnd = SM.mulberry32(77);
+    while (x < W + 20) {
+      const w = 34 + rnd() * 66, h = 40 + rnd() * 120;
+      g.lineTo(x + w / 2, fy - h);
+      g.lineTo(x + w, fy - h * 0.10);
+      x += w;
+    }
+    g.lineTo(W + 20, fy + 80);
+    g.closePath(); g.fill();
+
+    this.castle(g, W * 0.11, fy - LAY.s * 2.6, Math.max(13, LAY.s * 0.5));
+
+    /* THE FOREGROUND RIDGE — the mountain YOU are standing on, nearly black
+       and running clean off both edges. Three depth layers (far haze, the
+       cluster peaks, this) is what makes the picture read as a range rather
+       than as shapes on a gradient, and it gives the bottom third a horizon
+       instead of a void. */
+    const vY = PY(this.valleyY());
+    g.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 9; i++) {
+      const gx = (i + 0.5) / 9 * W, r = W * 0.16;
+      g.globalAlpha = 0.09 + 0.05 * Math.sin(i * 1.9);
+      g.drawImage(this.glowGold, gx - r, vY - r * 0.75, r * 2, r * 1.5);
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    const ridge = [];
+    let x2 = -20;
+    const rnd2 = SM.mulberry32(4242);
+    while (x2 < W + 40) {
+      const w = 52 + rnd2() * 86, h = 18 + rnd2() * 74;
+      ridge.push([x2 + w * 0.5, vY - h]);
+      ridge.push([x2 + w, vY - h * 0.22]);
+      x2 += w;
+    }
+    g.fillStyle = '#0A0522';
+    g.beginPath();
+    g.moveTo(-20, H + 10);
+    for (let i = 0; i < ridge.length; i++) g.lineTo(ridge[i][0], ridge[i][1]);
+    g.lineTo(W + 40, H + 10);
+    g.closePath(); g.fill();
+    /* moonlight catching the top edge */
+    g.strokeStyle = 'rgba(190,206,255,.34)';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(-20, ridge.length ? ridge[0][1] : vY);
+    for (let i = 0; i < ridge.length; i++) g.lineTo(ridge[i][0], ridge[i][1]);
+    g.stroke();
+    /* a dusting of snow on the sunward side of each crest */
+    g.fillStyle = 'rgba(214,229,255,.16)';
+    for (let i = 0; i < ridge.length - 1; i += 2) {
+      g.beginPath();
+      g.moveTo(ridge[i][0], ridge[i][1]);
+      g.lineTo(ridge[i][0] + 14, ridge[i][1] + 16);
+      g.lineTo(ridge[i][0] - 10, ridge[i][1] + 13);
+      g.closePath(); g.fill();
+    }
+    /* a scatter of warm windows down in the valley */
+    const rnd3 = SM.mulberry32(909);
+    for (let i = 0; i < 26; i++) {
+      const gx = rnd3() * W, gy = vY + rnd3() * (H - vY) * 0.72;
+      g.globalAlpha = 0.30 + rnd3() * 0.5;
+      g.fillStyle = '#FFD98F';
+      g.fillRect(gx, gy, 1.4, 1.4);
+    }
+    g.globalAlpha = 1;
+  },
+
+  castle: function (g, x, y, s) {
+    /* a far spire with a keep on it. Small and hazy on purpose: it is
+       scenery, and the cards are the subject. */
+    g.save();
+    g.globalAlpha = 0.9;
+    g.fillStyle = '#221847';
+    g.beginPath();
+    g.moveTo(x - s * 0.75, y + s * 3.4);
+    g.lineTo(x - s * 0.32, y + s * 0.44);
+    g.lineTo(x + s * 0.36, y + s * 0.44);
+    g.lineTo(x + s * 0.84, y + s * 3.4);
+    g.closePath(); g.fill();
+
+    g.fillStyle = '#2B1F55';
+    const towers = [[-0.32, 0.60, 0.32], [0.04, 1.02, 0.40], [0.46, 0.50, 0.27]];
+    for (let i = 0; i < towers.length; i++) {
+      const t = towers[i], tx = x + t[0] * s, th = t[1] * s, tw = t[2] * s;
+      g.fillRect(tx - tw / 2, y - th + s * 0.44, tw, th);
+      g.beginPath();
+      g.moveTo(tx - tw * 0.70, y - th + s * 0.44);
+      g.lineTo(tx, y - th - s * 0.40);
+      g.lineTo(tx + tw * 0.70, y - th + s * 0.44);
+      g.closePath(); g.fill();
+    }
+    g.fillStyle = 'rgba(255,214,140,.9)';
+    const win = [[-0.32, 0.28], [0.04, 0.64], [0.04, 0.34], [0.46, 0.22]];
+    for (let i = 0; i < win.length; i++)
+      g.fillRect(x + win[i][0] * s - s * 0.05, y + s * 0.44 - win[i][1] * s, s * 0.10, s * 0.14);
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = 0.45;
+    g.drawImage(this.glowGold, x - s * 1.6, y - s * 1.3, s * 3.2, s * 3.2);
+    g.restore();
+  },
+
+  /* the range — repainted when a pot, a crown, a death or the board changes */
+  paintMid: function (pots, crowned, deathT) {
+    if (!this.ranges || !this.ranges.length || !LAY.w) return;
+    const W = LAY.w, H = LAY.h, d = LAY.dpr;
+    const c = this.mid || (this.mid = document.createElement('canvas'));
+    if (c.width !== Math.round(W * d)) { c.width = Math.round(W * d); c.height = Math.round(H * d); }
+    const g = c.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, c.width, c.height);
+    g.setTransform(d, 0, 0, d, 0, 0);
+
+    const by = this.rangeBase();
+    const drop = (LAY.h / LAY.s);                    // run the fill off-screen
+    const path = this.rangePath(by, drop);
+    this.paths = path;
+
+    const rock = g.createLinearGradient(0, PY(this.ranges[0].top - 0.2), 0, PY(by + 2.4));
+    rock.addColorStop(0.00, '#4A3896');
+    rock.addColorStop(0.10, '#33235F');
+    rock.addColorStop(0.34, '#1F1348');
+    rock.addColorStop(0.70, '#120932');
+    rock.addColorStop(1.00, '#080320');
+    g.fillStyle = rock;
+    g.fill(path);
+
+    /* the moon is upper right: light that flank, sink the other one */
+    g.save(); g.clip(path);
+    const lit = g.createLinearGradient(W, 0, 0, 0);
+    lit.addColorStop(0, 'rgba(186,198,255,.20)');
+    lit.addColorStop(0.45, 'rgba(130,150,235,.06)');
+    lit.addColorStop(1, 'rgba(2,1,14,.42)');
+    g.fillStyle = lit;
+    g.fillRect(0, 0, W, H);
+    g.restore();
+
+    /* SNOW ON THE CREST — a band that follows the whole ridge */
+    const snow = this.snowBand(by);
+    g.save(); g.clip(path);
+    const anyGold = crowned.some ? crowned.some(function (x) { return x; }) : false;
+    const sg = g.createLinearGradient(0, PY(this.ranges[0].top - 0.2), 0, PY(this.ranges[0].top + 1.5));
+    sg.addColorStop(0, '#F2F7FF');
+    sg.addColorStop(0.5, '#C7D4F0');
+    sg.addColorStop(1, '#8294C6');
+    g.fillStyle = sg;
+    g.fill(snow);
+    g.restore();
+
+    /* a crowned cluster turns its own stretch of the crest to gold */
+    for (let k = 0; k < this.ranges.length; k++) {
+      if (!crowned[k]) continue;
+      const R = this.ranges[k];
+      g.save(); g.clip(path);
+      g.beginPath();
+      g.rect(PX(R.sx - R.half * 0.55), 0, R.half * 1.1 * LAY.s, H);
+      g.clip();
+      const gg = g.createLinearGradient(0, PY(R.top - 0.2), 0, PY(R.top + 1.5));
+      gg.addColorStop(0, '#FFF7DE'); gg.addColorStop(0.45, '#F5C96A'); gg.addColorStop(1, '#B5842A');
+      g.fillStyle = gg;
+      g.fill(snow);
+      g.restore();
+    }
+
+    /* rim light along the crest */
+    g.save(); g.clip(path);
+    g.strokeStyle = 'rgba(232,240,255,.75)';
+    g.lineWidth = Math.max(1.2, LAY.s * 0.045);
+    g.beginPath();
+    const x0 = -0.6, x1 = SM.FIELD_W + 0.6;
+    g.moveTo(PX(x0), PY(this.skylineY(x0, by)));
+    for (let x = x0; x <= x1; x += 0.11) g.lineTo(PX(x), PY(this.skylineY(x, by)));
+    g.stroke();
+    g.restore();
+
+    /* a second ridge INSIDE the mass — the shoulder of the range folding
+       away behind itself. One line, and the mountain gains a near side and
+       a far side. */
+    g.save(); g.clip(path);
+    g.fillStyle = 'rgba(7,3,26,.42)';
+    g.beginPath();
+    const bx0 = -0.6, bx1 = SM.FIELD_W + 0.6;
+    g.moveTo(PX(bx0), PY(by + 6));
+    for (let x = bx0; x <= bx1; x += 0.14) {
+      const sy = this.skylineY(x, by);
+      const fold = sy + 1.5 + 1.0 * Math.sin(x * 1.35 + this.wob * 0.7) + 0.35 * Math.sin(x * 3.7);
+      g.lineTo(PX(x), PY(fold));
+    }
+    g.lineTo(PX(bx1), PY(by + 6));
+    g.closePath(); g.fill();
+    g.restore();
+
+    /* the pot, as a bloom at its own summit — the stake IS the scenery */
+    g.save(); g.clip(path);
+    g.globalCompositeOperation = 'lighter';
+    for (let k = 0; k < this.ranges.length; k++) {
+      const R = this.ranges[k];
+      const pot = pots[k] || 0;
+      if (crowned[k]) {
+        g.globalAlpha = 0.55;
+        const r = LAY.s * 3.6;
+        g.drawImage(this.glowGold, PX(R.sx) - r, PY(R.top) - r * 0.45, r * 2, r * 2);
+      } else if (pot > 0) {
+        const a = clamp(pot / 800, 0.12, 1);
+        g.globalAlpha = a * 0.9;
+        const r = LAY.s * (1.7 + a * 3.0);
+        g.drawImage(this.glowGold, PX(R.sx) - r, PY(R.top) - r * 0.5, r * 2, r * 2);
+      }
+    }
+    g.restore();
+
+    if (deathT > 0) {
+      g.save(); g.clip(path);
+      g.fillStyle = 'rgba(9,5,28,' + (0.62 * deathT).toFixed(3) + ')';
+      g.fillRect(0, 0, W, H);
+      g.restore();
+    }
+
+    /* the cloud sea the whole range stands in — brightest where the moon
+       catches its top edge, feathering the bases away rather than cutting
+       them off */
+    g.globalCompositeOperation = 'lighter';
+    const cy = PY(this.cloudY());
+    const passes = [
+      { n: 30, r: 1.0, dy: -0.62, a: 0.045 },
+      { n: 26, r: 1.5, dy: -0.10, a: 0.075 },
+      { n: 20, r: 2.2, dy:  0.55, a: 0.085 },
+      { n: 14, r: 3.0, dy:  1.60, a: 0.055 }
+    ];
+    for (let q = 0; q < passes.length; q++) {
+      const P = passes[q];
+      for (let i = 0; i < P.n; i++) {
+        const u = i / (P.n - 1);
+        const x = u * (W + 200) - 100 + Math.sin(i * 2.7 + q * 1.4) * 26;
+        const r = LAY.s * (1.05 + 0.30 * Math.sin(i * 1.3 + q)) * P.r;
+        g.globalAlpha = P.a + 0.03 * Math.sin(i * 0.7 + q);
+        g.drawImage(this.soft, x - r, cy + P.dy * LAY.s - r * 0.5, r * 2, r);
+      }
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    this.ready = true;
+  },
+
+  resize: function () {
+    this.sprites();
+    LAY.dpr = Math.min(2.5, window.devicePixelRatio || 1);
+    el.sky.width = Math.round(LAY.w * LAY.dpr); el.sky.height = Math.round(LAY.h * LAY.dpr);
+    el.fx.width = Math.round(LAY.w * LAY.dpr); el.fx.height = Math.round(LAY.h * LAY.dpr);
+    if (!this.stars.length) this.build();
+    this.boardKey = '';
+    this.paintFar();
+  },
+
+  sync: function (pots, crowned, deathT) {
+    if (!this.ranges) return;
+    let dirty = Math.abs(deathT - this.deathT) > 0.03;
+    for (let k = 0; k < this.ranges.length; k++) {
+      if (Math.abs((pots[k] || 0) - this.potShown[k]) > 14) dirty = true;
+      if (!!crowned[k] !== this.crownShown[k]) dirty = true;
+    }
+    if (!dirty) return;
+    for (let k = 0; k < this.ranges.length; k++) {
+      this.potShown[k] = pots[k] || 0;
+      this.crownShown[k] = !!crowned[k];
+    }
+    this.deathT = deathT;
+    this.paintMid(pots, crowned, deathT);
+  },
+
+  frame: function (t) {
+    if (!LAY.w) return;
+    const g = el.sky.getContext('2d'), W = LAY.w, H = LAY.h;
+    g.setTransform(LAY.dpr, 0, 0, LAY.dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    if (this.far) g.drawImage(this.far, 0, 0, W, H);
+
+    /* aurora — three ribbons of stamped wisps, additive */
+    g.globalCompositeOperation = 'lighter';
+    const top = 0;
+    const bands = [
+      { spr: this.glowTeal, y: 0.055, amp: 0.035, f: 2.1, sp: 0.055, a: 0.95, sc: 1.5 },
+      { spr: this.glowPink, y: 0.120, amp: 0.050, f: 1.5, sp: -0.038, a: 0.62, sc: 1.9 },
+      { spr: this.glowBlue, y: 0.020, amp: 0.028, f: 2.9, sp: 0.075, a: 0.60, sc: 1.2 }
+    ];
+    for (let b = 0; b < bands.length; b++) {
+      const B = bands[b];
+      for (let i = 0; i <= 22; i++) {
+        const u = i / 22;
+        const x = u * (W + 160) - 80;
+        const y = top + H * (B.y + B.amp * Math.sin(u * B.f * TAU + t * B.sp * TAU));
+        const r = (W * 0.14) * B.sc * (0.7 + 0.3 * Math.sin(u * 5 + t * 0.4));
+        g.globalAlpha = B.a * (0.30 + 0.35 * Math.sin(u * 3.1 + t * 0.5));
+        g.drawImage(B.spr, x - r, y - r * 0.75, r * 2, r * 1.5);
+      }
+    }
+    for (let i = 0; i < this.stars.length; i += 2) {
+      const s = this.stars[i];
+      g.globalAlpha = 0.32 * (0.5 + 0.5 * Math.sin(t * 1.6 + s.ph));
+      g.fillStyle = '#FFFFFF';
+      g.beginPath(); g.arc(s.x * W, s.y * H * 0.9, s.r * 1.1, 0, TAU); g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+
+    if (this.mid) g.drawImage(this.mid, 0, 0, W, H);
+
+    /* a low cloud shelf for the pile and stock to sit on */
+    if (LAY.dr) {
+      g.globalCompositeOperation = 'lighter';
+      const sy = PY(LAY.dr.cy + LAY.dr.h * 0.42);
+      for (let i = 0; i < this.shelf.length; i++) {
+        const c = this.shelf[i];
+        const x = c.u * (W + 120) - 60 + Math.sin(t * 0.08 + c.o) * 10;
+        const r = LAY.s * (1.5 + c.r);
+        g.globalAlpha = c.a;
+        g.drawImage(this.soft, x - r, sy - r * 0.4, r * 2, r * 0.8);
+      }
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = 1;
+    }
+
+    /* snow in front of the range */
+    g.fillStyle = '#EAF2FF';
+    for (let i = 0; i < this.snow.length; i++) {
+      const f = this.snow[i];
+      const y = ((f.y + t * f.v) % 1.15) - 0.08;
+      const x = (f.x + Math.sin(t * 0.5 + f.sw) * 0.018) % 1;
+      g.globalAlpha = f.a * 0.75;
+      g.beginPath(); g.arc(x * W, y * H, f.r, 0, TAU); g.fill();
+    }
+    /* fireflies — gold motes that breathe */
+    g.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < this.flies.length; i++) {
+      const f = this.flies[i];
+      const x = (f.x + Math.sin(t * f.sp + f.ph) * 0.05) * W;
+      const y = (f.y + Math.cos(t * f.sp * 0.8 + f.ph) * 0.035) * H;
+      g.globalAlpha = 0.22 + 0.5 * Math.max(0, Math.sin(t * 1.1 + f.ph));
+      const r = f.r * 5;
+      g.drawImage(this.glowGold, x - r, y - r, r * 2, r * 2);
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+  }
+};
+
+/* ═════════════════════ 4. PARTICLES ═════════════════════ */
+const FX = {
+  ps: [],
+  burst: function (x, y, n, opt) {
+    opt = opt || {};
+    if (this.ps.length > 380) return;
+    for (let i = 0; i < n; i++) {
+      const a = (opt.dir === undefined ? Math.random() * TAU
+                 : opt.dir + (Math.random() - 0.5) * (opt.spread || 2.1));
+      const sp = (opt.sp || 120) * (0.35 + Math.random());
+      this.ps.push({
+        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - (opt.lift || 60),
+        g: opt.g === undefined ? 300 : opt.g,
+        life: (opt.life || 0.75) * (0.6 + Math.random() * 0.7), t: 0,
+        r: (opt.r || 3) * (0.6 + Math.random()), c: opt.c || '#F5C96A',
+        spin: (Math.random() - 0.5) * 8, rot: Math.random() * TAU,
+        sq: !!opt.sq
+      });
+    }
+  },
+  step: function (dt) {
+    const a = this.ps;
+    for (let i = a.length - 1; i >= 0; i--) {
+      const p = a[i];
+      p.t += dt;
+      if (p.t >= p.life) { a.splice(i, 1); continue; }
+      p.vy += p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.rot += p.spin * dt;
+      p.vx *= 0.995; p.vy *= 0.995;
+    }
+  },
+  draw: function () {
+    const g = el.fx.getContext('2d');
+    g.setTransform(LAY.dpr, 0, 0, LAY.dpr, 0, 0);
+    g.clearRect(0, 0, LAY.w, LAY.h);
+    g.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < this.ps.length; i++) {
+      const p = this.ps[i], k = 1 - p.t / p.life;
+      g.globalAlpha = k * k;
+      g.fillStyle = p.c;
+      if (p.sq) {
+        g.save();
+        g.translate(p.x, p.y); g.rotate(p.rot);
+        g.fillRect(-p.r, -p.r * 0.6, p.r * 2, p.r * 1.2);
+        g.restore();
+      } else {
+        g.beginPath(); g.arc(p.x, p.y, p.r * (0.4 + k * 0.6), 0, TAU); g.fill();
+      }
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+  },
+  clear: function () { this.ps.length = 0; }
+};
+
+/* ═════════════════════ 5. SHAKE (bible §7.2 trauma model) ═════════════════════ */
+const SHAKE = {
+  trauma: 0, t: 0,
+  add: function (v) { if (!REDUCED) this.trauma = clamp(this.trauma + v, 0, 1); },
+  step: function (dt) {
+    this.t += dt;
+    this.trauma = clamp(this.trauma - 1.2 * dt, 0, 1);
+    const s = this.trauma * this.trauma * this.trauma;
+    const n = function (o) { return Math.sin((SHAKE.t * 25 + o) * 1.7) * Math.sin((SHAKE.t * 25 + o) * 0.53); };
+    el.app.style.setProperty('--sx', (14 * s * n(0)).toFixed(2) + 'px');
+    el.app.style.setProperty('--sy', (14 * s * n(21)).toFixed(2) + 'px');
+    el.app.style.setProperty('--sr', (2 * s * n(47)).toFixed(3) + 'deg');
+  }
+};
+
+/* ═════════════════════ 6. CARD VIEWS ═════════════════════ */
+const SUIT_CH = { S: '♠', H: '♥', D: '♦', C: '♣' };
+const COURT = { 10: '♞', 11: '♛', 12: '♚' };   /* J Q K ornaments */
+
+function makeCard(rank, suit, deep) {
+  const d = document.createElement('div');
+  d.className = 'card ' + (suit === 1 || suit === 2 ? 'red' : 'blk') + (deep ? ' peak' : ' base');
+  const inner = document.createElement('div');
+  inner.className = 'cd';
+  const idx = document.createElement('span');
+  idx.className = 'idx';
+  const t = document.createElement('span');
+  t.className = 'ct'; t.textContent = SM.RANKS[rank];
+  const su = document.createElement('span');
+  su.className = 'cs'; su.textContent = SUIT_CH[SM.SUITS[suit]];
+  idx.appendChild(t); idx.appendChild(su);
+  const wm = document.createElement('span');
+  wm.className = 'wm'; wm.textContent = SUIT_CH[SM.SUITS[suit]];
+  inner.appendChild(idx); inner.appendChild(wm);
+  if (COURT[rank]) {
+    const o = document.createElement('span');
+    o.className = 'court'; o.textContent = COURT[rank];
+    inner.appendChild(o);
+  }
+  d.appendChild(inner);
+  return d;
+}
+function makeBack() {
+  const d = document.createElement('div');
+  d.className = 'card';
+  const inner = document.createElement('div');
+  inner.className = 'cd back';
+  const c = document.createElement('span');
+  c.className = 'backcrest';
+  c.textContent = '▲▲▲';
+  inner.appendChild(c);
+  d.appendChild(inner);
+  return d;
+}
+function place(node, cx, cy, rot, sc) {
+  node.style.transform = 'translate(' + PX(cx).toFixed(1) + 'px,' + PY(cy).toFixed(1) + 'px)' +
+    (rot ? ' rotate(' + rot.toFixed(2) + 'deg)' : '') + (sc && sc !== 1 ? ' scale(' + sc + ')' : '');
+}
+
+const VIEW = {
+  nodes: [], pileEls: [], slotPile: null, slotStock: null, stockBack: null,
+  countEl: null, badges: [], dealT: 0,
+
+  reset: function () {
+    el.cards.innerHTML = '';
+    el.badges.innerHTML = '';
+    /* innerHTML = '' detaches every cached node too. Forgetting stockBack
+       here left run 2 holding a pointer to an element that was no longer in
+       the document, so the stock silently rendered as an empty slot. */
+    this.nodes = []; this.pileEls = []; this.badges = [];
+    this.stockBack = null;
+    this.countEl = null; this.slotPile = null; this.slotStock = null;
+
+    this.slotPile = document.createElement('div');
+    this.slotPile.className = 'slot';
+    const l1 = document.createElement('span'); l1.className = 'lbl'; l1.textContent = 'PILE';
+    this.slotPile.appendChild(l1);
+    this.slotStock = document.createElement('div');
+    this.slotStock.className = 'slot';
+    const l2 = document.createElement('span'); l2.className = 'lbl'; l2.textContent = 'STOCK';
+    this.slotStock.appendChild(l2);
+    el.cards.appendChild(this.slotPile);
+    el.cards.appendChild(this.slotStock);
+
+    this.countEl = document.createElement('div');
+    this.countEl.className = 'count';
+    el.cards.appendChild(this.countEl);
+
+    this.sizeSlots();
+  },
+
+  sizeSlots: function () {
+    const w = LAY.s * SM.BIG, h = LAY.s * SM.CH * SM.BIG;
+    const dr = LAY.dr;
+    [[this.slotPile, dr.pile], [this.slotStock, dr.well0]].forEach(function (pair) {
+      const n = pair[0], b = pair[1];
+      if (!n || !b) return;
+      n.style.width = w + 'px'; n.style.height = h + 'px';
+      n.style.marginLeft = (-w / 2) + 'px'; n.style.marginTop = (-h / 2) + 'px';
+      n.style.transform = 'translate(' + PX(b.cx).toFixed(1) + 'px,' + PY(b.cy).toFixed(1) + 'px)';
+    });
+    if (this.countEl) {
+      this.countEl.style.transform = 'translate(' + (PX(dr.well0.cx) + w * 0.42).toFixed(1) +
+        'px,' + (PY(dr.well0.cy) - h * 0.5).toFixed(1) + 'px)';
+    }
+  },
+
+  /* deal a fresh board: a staggered cascade up out of the cloud sea */
+  deal: function (G, why) {
+    const self = this;
+    this.nodes.forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
+    this.pileEls.forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
+    this.nodes = []; this.pileEls = [];
+    const dur = why === 'dead' ? SM.K.DEAD_MS : SM.K.DEAL_MS;
+    const wait = why === 'dead' ? dur - SM.K.DEAL_MS : 0;
+
+    SKY.setBoard(G);
+    el.badges.innerHTML = '';
+    this.badges = [];
+    for (let k = 0; k < G.L.nclust; k++) {
+      const b = document.createElement('div');
+      b.className = 'badge gone';
+      b.innerHTML = '<span class="bk">POT</span><span class="bv">0</span>';
+      el.badges.appendChild(b);
+      this.badges.push(b);
+    }
+
+    for (let i = 0; i < G.L.n; i++) {
+      const c = G.cards[i];
+      const n = makeCard(c.rank, c.suit, c.depth > 0);
+      n.dataset.id = String(i);
+      n.style.zIndex = String(10 + c.row * 10 + (i % 10));
+      el.cards.appendChild(n);
+      this.nodes.push(n);
+      const from = LAY.dr.cy + 1.6;
+      place(n, c.cx, from, (Math.random() - 0.5) * 34, 0.8);
+      n.style.opacity = '0';
+      (function (node, card, idx) {
+        const delay = wait + (3 - card.row) * 44 + idx * 5;
+        setTimeout(function () {
+          /* THE GUARD. These callbacks are staggered, so by the time one
+             fires the card may already have been played, or the whole board
+             re-dealt. Without this check a late deal-in animation drags an
+             already-flown card back out of the pile and re-places it in the
+             tableau — which is exactly what an empty pile looked like. */
+          if (self.nodes[idx] !== node) return;
+          node.style.opacity = '1';
+          if (REDUCED) { place(node, card.cx, card.cy, 0, 1); return; }
+          const da = node.animate([
+            { transform: 'translate(' + PX(card.cx).toFixed(1) + 'px,' + PY(from).toFixed(1) + 'px) rotate(24deg) scale(.8)' },
+            { transform: 'translate(' + PX(card.cx).toFixed(1) + 'px,' + PY(card.cy - 0.12).toFixed(1) + 'px) rotate(-3deg) scale(1.04)', offset: 0.72 },
+            { transform: 'translate(' + PX(card.cx).toFixed(1) + 'px,' + PY(card.cy).toFixed(1) + 'px) rotate(0) scale(1)' }
+          ], { duration: 340, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' });
+          da.onfinish = function () {
+            try { da.cancel(); } catch (err) { /* already gone */ }
+            if (self.nodes[idx] !== node) return;
+            place(node, card.cx, card.cy, 0, 1);
+          };
+          place(node, card.cx, card.cy, 0, 1);
+        }, delay);
+      })(n, c, i);
+    }
+    /* the opening pile card */
+    setTimeout(function () { self.pushPile(G.pile[G.pile.length - 1], null); }, wait + 250);
+    this.refresh(G);
+  },
+
+  pushPile: function (card, fromNode) {
+    const dr = LAY.dr;
+    let n = fromNode;
+    if (!n) {
+      n = makeCard(card.rank, card.suit, false);
+      el.cards.appendChild(n);
+      place(n, dr.pile.cx, dr.pile.cy, 0, SM.BIG);
+    }
+    n.classList.add('onpile');
+    n.style.zIndex = String(200 + this.pileEls.length);
+    this.pileEls.push(n);
+    while (this.pileEls.length > 4) {
+      const old = this.pileEls.shift();
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+    }
+    for (let i = 0; i < this.pileEls.length; i++) {
+      const e = this.pileEls[i];
+      const back = this.pileEls.length - 1 - i;
+      e.style.zIndex = String(200 + i);
+      if (back > 0) {
+        e.style.opacity = String(1 - back * 0.18);
+        e.style.filter = 'brightness(' + (1 - back * 0.16).toFixed(2) + ')';
+      } else { e.style.opacity = '1'; e.style.filter = ''; }
+    }
+  },
+
+  /* a card leaves the tableau and arcs to the pile */
+  fly: function (id, card) {
+    const n = this.nodes[id];
+    if (!n) return;
+    this.nodes[id] = null;
+    const dr = LAY.dr;
+    const x0 = PX(card.cx), y0 = PY(card.cy), x1 = PX(dr.pile.cx), y1 = PY(dr.pile.cy);
+    const rot = (Math.random() - 0.5) * 16;
+    n.classList.remove('cov', 'free');
+    n.style.zIndex = '300';
+    /* A card carries TWO filling animations in its life — the deal and this
+       flight — and a filling animation outranks the inline transform. Kill
+       whatever is still filling before starting, or the deal's final
+       keyframe quietly drags the card back into the tableau the moment the
+       flight is cleaned up, and the pile renders empty. */
+    if (n.getAnimations) {
+      const old = n.getAnimations();
+      for (let q = 0; q < old.length; q++) { try { old[q].cancel(); } catch (err) { /* gone */ } }
+    }
+    const self = this;
+    if (REDUCED) {
+      n.style.transform = 'translate(' + x1 + 'px,' + y1 + 'px) scale(' + SM.BIG + ')';
+      self.pushPile(card, n);
+      return;
+    }
+    /* anticipation, then an ARC — never a straight line (§7.4 / animation
+       principle 4). The peak of the arc is biased toward the card, so it
+       reads as being picked up and set down. */
+    const mx = x0 + (x1 - x0) * 0.42, my = Math.min(y0, y1) - LAY.s * 1.15;
+    const land = 'translate(' + x1 + 'px,' + y1 + 'px) rotate(' + rot + 'deg) scale(' + SM.BIG + ')';
+    const a = n.animate([
+      { transform: 'translate(' + x0 + 'px,' + y0 + 'px) rotate(0deg) scale(1)', offset: 0 },
+      { transform: 'translate(' + x0 + 'px,' + (y0 - LAY.s * 0.16) + 'px) rotate(' + (-rot * 0.4) + 'deg) scale(1.07)', offset: 0.14 },
+      { transform: 'translate(' + mx + 'px,' + my + 'px) rotate(' + (rot * 0.6) + 'deg) scale(' + (SM.BIG * 1.08) + ')', offset: 0.62 },
+      { transform: land, offset: 1 }
+    ], { duration: 270, easing: 'cubic-bezier(.34,.72,.28,1)', fill: 'both' });
+    /* WRITE THE RESTING POSITION, do not rely on the animation's fill for it.
+       Chrome auto-removes finished filling animations, at which point the
+       element snaps back to whatever inline transform it had — which for a
+       card that just flew is where it was DEALT. The pile silently emptied
+       and four cards sat back up in the tableau. */
+    a.onfinish = function () {
+      n.style.transform = land;
+      try { a.cancel(); } catch (err) { /* already gone */ }
+      self.pushPile(card, n);
+    };
+  },
+
+  /* the stock turns over: a back flips to a face on its way to the pile */
+  flip: function (card) {
+    const dr = LAY.dr;
+    const n = makeBack();
+    el.cards.appendChild(n);
+    n.style.zIndex = '300';
+    const x0 = PX(dr.well0.cx), y0 = PY(dr.well0.cy), x1 = PX(dr.pile.cx), y1 = PY(dr.pile.cy);
+    place(n, dr.well0.cx, dr.well0.cy, 0, SM.BIG);
+    const self = this;
+    if (REDUCED) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+      this.pushPile(card, null);
+      return;
+    }
+    const half = 130;
+    n.animate([
+      { transform: 'translate(' + x0 + 'px,' + y0 + 'px) scale(' + SM.BIG + ',' + SM.BIG + ')' },
+      { transform: 'translate(' + ((x0 + x1) / 2) + 'px,' + (y0 - LAY.s * 0.42) + 'px) scale(0.02,' + (SM.BIG * 1.06) + ')' }
+    ], { duration: half, easing: 'cubic-bezier(.55,.06,.68,.19)', fill: 'both' }).onfinish = function () {
+      if (n.parentNode) n.parentNode.removeChild(n);
+      const f = makeCard(card.rank, card.suit, false);
+      el.cards.appendChild(f);
+      f.style.zIndex = '300';
+      const land2 = 'translate(' + x1 + 'px,' + y1 + 'px) scale(' + SM.BIG + ',' + SM.BIG + ')';
+      const a2 = f.animate([
+        { transform: 'translate(' + ((x0 + x1) / 2) + 'px,' + (y0 - LAY.s * 0.42) + 'px) scale(0.02,' + (SM.BIG * 1.06) + ')' },
+        { transform: land2 }
+      ], { duration: half + 30, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' });
+      a2.onfinish = function () {
+        f.style.transform = land2;
+        try { a2.cancel(); } catch (err) { /* already gone */ }
+        self.pushPile(card, f);
+      };
+    };
+  },
+
+  refresh: function (G) {
+    for (let i = 0; i < G.L.n; i++) {
+      const n = this.nodes[i];
+      if (!n) continue;
+      const free = SM.isFree(G, i);
+      n.classList.toggle('cov', !free);
+      n.classList.toggle('free', free);
+    }
+    const left = SM.stockLeft(G);
+    this.countEl.textContent = String(left);
+    this.countEl.classList.toggle('low', left <= 3);
+    this.countEl.style.opacity = left ? '1' : '0.25';
+    this.slotStock.style.opacity = left ? '1' : '0.35';
+    if (!this.stockBack) {
+      this.stockBack = makeBack();
+      el.cards.appendChild(this.stockBack);
+      this.stockBack.style.zIndex = '150';
+    }
+    this.stockBack.style.display = left ? '' : 'none';
+    place(this.stockBack, LAY.dr.well0.cx, LAY.dr.well0.cy, 0, SM.BIG);
+
+    /* one plaque per cluster, hung just under its summit */
+    const R = SKY.ranges || [];
+    for (let k = 0; k < this.badges.length; k++) {
+      const b = this.badges[k];
+      const r = R[k];
+      const cx = r ? r.sx : (5 + (k - (this.badges.length - 1) / 2) * 3);
+      const cy = r ? r.badgeY : -0.32;
+      b.style.left = PX(cx).toFixed(1) + 'px';
+      b.style.top = PY(cy).toFixed(1) + 'px';
+      const pot = G.pots[k] || 0;
+      const crowned = !!G.crowned[k];
+      if (crowned) {
+        if (!b.querySelector('.crown')) b.innerHTML = '<span class="crown">&#9819;</span>';
+        b.className = 'badge';
+      } else {
+        if (b.querySelector('.crown'))
+          b.innerHTML = '<span class="bk">POT</span><span class="bv">0</span>';
+        const v = b.querySelector('.bv');
+        if (v) v.textContent = String(pot);
+        b.className = 'badge' + (pot === 0 ? ' gone' : '') +
+          (pot >= 250 ? ' hot' : '') +
+          (pot >= 120 && left <= 3 ? ' risk' : '');
+      }
+    }
+    this.sizeSlots();
+  },
+
+  popBadge: function (k) {
+    const b = this.badges[k];
+    if (!b) return;
+    b.classList.add('pop');
+    setTimeout(function () { b.classList.remove('pop'); }, 170);
+  },
+
+  relayoutAll: function (G) {
+    for (let i = 0; i < G.L.n; i++) {
+      const n = this.nodes[i];
+      if (n) place(n, G.cards[i].cx, G.cards[i].cy, 0, 1);
+    }
+    for (let i = 0; i < this.pileEls.length; i++)
+      place(this.pileEls[i], LAY.dr.pile.cx, LAY.dr.pile.cy, 0, SM.BIG);
+    this.sizeSlots();
+    this.refresh(G);
+  }
+};
+
+/* ═════════════════════ 7. FLOATS / SHOUTS / HINT ═════════════════════ */
+function floatUp(cx, cy, text, cls) {
+  const d = document.createElement('div');
+  d.className = 'float' + (cls ? ' ' + cls : '');
+  d.textContent = text;
+  d.style.left = PX(cx).toFixed(1) + 'px';
+  d.style.top = PY(cy).toFixed(1) + 'px';
+  el.floats.appendChild(d);
+  setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 1000);
+}
+function shout(big, small, cold) {
+  const d = document.createElement('div');
+  d.className = 'shout' + (cold ? ' cold' : '');
+  d.innerHTML = '<span class="sk"></span><span class="ss"></span>';
+  d.querySelector('.sk').textContent = big;
+  d.querySelector('.ss').textContent = small || '';
+  el.banner.appendChild(d);
+  setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 1300);
+}
+function flash(cold) {
+  el.flash.classList.toggle('cold', !!cold);
+  el.flash.classList.remove('on');
+  void el.flash.offsetWidth;
+  el.flash.classList.add('on');
+}
+
+/* ═════════════════════ 8. THE RUN ═════════════════════ */
+let G = null;
+let raf = 0, lastT = 0, running = false, frozen = false, lockInput = false;
+let shownScore = 0, deathT = 0, lastTickSec = -1, phaseShown = '';
+let firstPlay = false, idleSince = 0;
+
+const BEST_KEY = 'summit.best.v1', RUNS_KEY = 'summit.runs.v1';
+function readBest() { const v = parseInt(localStorage.getItem(BEST_KEY) || '0', 10); return isFinite(v) ? v : 0; }
+function readRuns() {
+  try { const a = JSON.parse(localStorage.getItem(RUNS_KEY) || '[]'); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+
+function show(screen) {
+  [el.scTitle, el.scGame, el.scOver].forEach(function (s) { s.classList.remove('is-on'); });
+  screen.classList.add('is-on');
+}
+
+function startRun(seed) {
+  AU.boot(); AU.resume();
+  /* a run always starts live. Without this, one __SM.freeze(true) earlier in
+     a session leaves lockInput set and every later tap is silently dropped —
+     which reads exactly like broken input handling and is not. */
+  frozen = false; lockInput = false;
+  show(el.scGame);
+  relayout();
+  SKY.resize();
+  FX.clear();
+  G = SM.newGame(seed === undefined ? (Math.random() * 0xFFFFFFF) >>> 0 : seed >>> 0);
+  shownScore = 0; deathT = 0; lastTickSec = -1; phaseShown = null;
+  firstPlay = false; idleSince = 0;
+  SHAKE.trauma = 0;
+  VIEW.reset();
+  VIEW.deal(G, 'first');
+  drainEvents();
+  hud(true);
+  const best = readBest();
+  if (best > 0) { el.meterPB.hidden = false; }
+  running = true;
+  lastT = 0;
+  if (!raf) raf = requestAnimationFrame(frame);
+}
+
+function meterMax() { return Math.max(6000, readBest() * 1.18); }
+
+function hud(force) {
+  if (!G) return;
+  /* THE CLOCK COUNTS UP, 0:00 -> 1:30. The session is still the same fixed
+     ninety seconds for everybody (C3) — this is how it reads, not how long
+     it is. Everything that needs the REMAINING time still computes it. */
+  const up = Math.min(SM.K.SESSION_MS, G.t) / 1000;
+  const m = Math.floor(up / 60), s = Math.floor(up % 60);
+  el.clock.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+  const hot = G.t >= SM.K.LATE_AT;
+  el.clock.classList.toggle('hot', hot);
+  const phase = hot ? 'LAST CALL · VALUES UP' : '';
+  if (phase !== phaseShown) { el.phase.textContent = phase || ' '; phaseShown = phase; }
+
+  if (Math.abs(shownScore - G.score) > 0.6) {
+    shownScore += (G.score - shownScore) * 0.24;
+    if (Math.abs(shownScore - G.score) < 1) shownScore = G.score;
+  } else shownScore = G.score;
+  el.score.textContent = Math.round(shownScore).toLocaleString('en-US');
+
+  const t = SM.tierFor(G.chain);
+  el.chain.textContent = String(G.chain);
+  el.chain.className = 'hud-chain t' + t;
+  el.mult.textContent = '×' + G.mult;
+  el.mult.className = 'hud-mult';
+  if (el.pips.childElementCount !== 8) {
+    el.pips.innerHTML = '';
+    for (let i = 0; i < 8; i++) el.pips.appendChild(document.createElement('i'));
+  }
+  const lit = Math.min(8, Math.max(0, G.chain - SM.K.CHAIN_MIN + 1));
+  for (let i = 0; i < 8; i++) el.pips.children[i].classList.toggle('on', i < lit);
+
+  /* the at-risk pool: what this chain would pay if you banked it right now.
+     Distinct colour, never added to the score until it lands (C6). */
+  const worth = SM.chainWorth(G.chain, G.t);
+  el.risk.hidden = worth <= 0;
+  if (worth > 0) {
+    el.risk.textContent = worth.toLocaleString('en-US');
+    el.risk.classList.toggle('big', G.chain >= 6);
+  }
+
+  el.meterFill.style.width = clamp(100 * G.score / meterMax(), 0, 100).toFixed(1) + '%';
+  const best = readBest();
+  if (best > 0) el.meterPB.style.left = clamp(100 * best / meterMax(), 0, 100).toFixed(1) + '%';
+}
+
+/* Drain the engine's event list and stage each one. This is the only place
+   the presentation learns what happened, which keeps the sim authoritative. */
+function drainEvents() {
+  if (!G) return;
+  const ev = G.ev;
+  for (let i = 0; i < ev.length; i++) {
+    const e = ev[i];
+    if (e.k === 'play') {
+      const c = G.cards[e.id];
+      VIEW.fly(e.id, c);
+      AU.card();
+      AU.ladder(e.chain);
+      if (e.gain) floatUp(c.cx, c.cy, '+' + e.gain, '');
+      if (e.pot) { floatUp(c.cx, c.cy, '+' + e.pot, 'pot'); VIEW.popBadge(e.cluster); }
+      FX.burst(PX(c.cx), PY(c.cy), 6 + e.tier * 4, {
+        c: e.depth === 0 ? '#BFD0FF' : '#F5C96A', sp: 90, r: 2.4, life: 0.55, lift: 40
+      });
+      el.chain.classList.add('pop');
+      setTimeout(function () { el.chain.classList.remove('pop'); }, 130);
+      if (e.tier > 0 && e.chain % 4 === 0) SHAKE.add(0.5 * (e.tier >= 2 ? 1 : 0.6));
+      el.score.classList.add('pop');
+      setTimeout(function () { el.score.classList.remove('pop'); }, 110);
+      firstPlay = true;
+      hideHint();
+    } else if (e.k === 'draw') {
+      VIEW.flip(e.card);
+      AU.drawS();
+      firstPlay = true;
+      hideHint();
+    } else if (e.k === 'chainpay') {
+      if (e.gain > 0) {
+        /* banked: the pool flies out of the HUD and lands on the score */
+        AU.bank(e.len);
+        el.risk.classList.remove('banked');
+        void el.risk.offsetWidth;
+        el.risk.classList.add('banked');
+        floatUp(LAY.dr.well0.cx, LAY.dr.well0.cy - 1.5,
+                'CHAIN ' + e.len + '  +' + e.gain, e.len >= 6 ? 'big' : '');
+        FX.burst(PX(LAY.dr.well0.cx), PY(LAY.dr.well0.cy - 1.2), 10 + e.tier * 8,
+                 { c: '#8CF3D6', sp: 150, r: 2.8, life: 0.8, lift: 90 });
+        if (e.len >= 8) { SHAKE.add(0.55); flash(false); shout('CHAIN ' + e.len, '+' + e.gain); }
+        el.score.classList.add('pop');
+        setTimeout(function () { el.score.classList.remove('pop'); }, 110);
+      } else if (e.lost > 0) {
+        /* taken: the one loss the player has to be able to name (L5) */
+        AU.lose();
+        SHAKE.add(0.85);
+        el.mult.classList.add('broke');
+        setTimeout(function () { el.mult.classList.remove('broke'); }, 430);
+        floatUp(LAY.dr.well0.cx, LAY.dr.well0.cy - 1.5, 'CHAIN ' + e.len + '  −' + e.lost, 'bad');
+        flash(true);
+      }
+    } else if (e.k === 'miss') {
+      AU.miss();
+      SHAKE.add(1.0);
+      el.clock.classList.remove('bite');
+      void el.clock.offsetWidth;
+      el.clock.classList.add('bite');
+      floatUp(LAY.dr.pile.cx + 1.6, LAY.dr.pile.cy - 1.5, '−0.35s', 'bad');
+    } else if (e.k === 'crown') {
+      AU.crown();
+      SHAKE.add(0.62);
+      flash(false);
+      const cx = e.cx, cy = e.cy;
+      FX.burst(PX(cx), PY(cy), 46, { c: '#FFE9A8', sp: 230, r: 3.4, life: 1.1, lift: 120, g: 240, sq: true });
+      FX.burst(PX(cx), PY(cy), 26, { c: '#FFFFFF', sp: 150, r: 2.2, life: 0.8, lift: 90, g: 200 });
+      floatUp(cx, cy - 0.7, '+' + e.gain, 'big');
+      shout('CROWNED', 'the pot doubles');
+    } else if (e.k === 'clear') {
+      AU.clear();
+      SHAKE.add(0.8);
+      flash(false);
+      for (let q = 0; q < 5; q++) {
+        (function (qq) {
+          setTimeout(function () {
+            FX.burst(LAY.w * (0.2 + 0.15 * qq), LAY.h * (0.18 + 0.06 * (qq % 2)), 34,
+              { c: qq % 2 ? '#FFE9A8' : '#57E9C6', sp: 260, r: 3.6, life: 1.3, lift: 140, g: 260, sq: true });
+          }, qq * 110);
+        })(q);
+      }
+      shout('BOARD CLEAR', '+' + e.gain);
+    } else if (e.k === 'dead') {
+      AU.dead();
+      SHAKE.add(0.85);
+      deathT = 1;
+      if (e.lost > 0) {
+        flash(true);
+        shout('THE PEAKS CLOSE', '−' + e.lost + ' unbanked', true);
+        const R = SKY.ranges || [];
+        for (let k = 0; k < e.pots.length; k++) {
+          if (!e.pots[k] || !R[k]) continue;
+          FX.burst(PX(R[k].sx), PY(R[k].top), 22, { c: '#FF9C86', sp: 90, r: 2.8, life: 1.1, lift: -30, g: 420 });
+        }
+      } else {
+        shout('NO WAY THROUGH', 'a new board', true);
+      }
+    } else if (e.k === 'deal') {
+      VIEW.deal(G, e.why);
+      deathT = 0;
+      if (e.board > 0) shout(e.layout, '', false);
+    } else if (e.k === 'siren-lost') {
+      flash(true);
+    } else if (e.k === 'siren') {
+      endRun();
+    }
+  }
+  ev.length = 0;
+  if (G) {
+    VIEW.refresh(G);
+    SKY.sync(G.pots, G.crowned, deathT);   /* the pot IS the scenery, so the
+                                              scenery has to move on the tap
+                                              and not on the next frame */
+  }
+}
+
+/* ── the zero-text hint (bible §12): a finger on a card that IS playable,
+   shown only while the player has not yet played anything this run. It can
+   never leak information after the first play, and it is reachable every
+   run rather than hidden behind a one-shot flag. ── */
+let hintEls = [];
+function hideHint() {
+  hintEls.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+  hintEls = [];
+}
+function showHint() {
+  if (hintEls.length || !G || SM.dealing(G)) return;
+  const m = SM.legalIds(G);
+  const w = LAY.s, h = LAY.s * SM.CH;
+  let cx, cy;
+  if (m.length) { cx = G.cards[m[0]].cx; cy = G.cards[m[0]].cy; }
+  else { cx = LAY.dr.well0.cx; cy = LAY.dr.well0.cy; }
+  const ring = document.createElement('div');
+  ring.className = 'ring';
+  const big = m.length ? 1 : SM.BIG;
+  ring.style.width = (w * big + 6) + 'px';
+  ring.style.height = (h * big + 6) + 'px';
+  ring.style.left = PX(cx) + 'px';
+  ring.style.top = PY(cy) + 'px';
+  const f = document.createElement('div');
+  f.className = 'finger';
+  f.textContent = '☝';
+  f.style.left = PX(cx) + 'px';
+  f.style.top = (PY(cy) + h * big * 0.52) + 'px';
+  el.hint.appendChild(ring); el.hint.appendChild(f);
+  el.hint.hidden = false;
+  hintEls = [ring, f];
+}
+
+function frame(now) {
+  raf = requestAnimationFrame(frame);
+  const dt = lastT ? Math.min(0.05, (now - lastT) / 1000) : 0.016;
+  lastT = now;
+  SKY.frame(now / 1000);
+  /* freeze holds the PRESENTATION too, not just the sim. Particles and CSS
+     keyframes run on real time, so without this a screenshot taken a second
+     after the event it is meant to capture shows an empty screen and the
+     juice reads as missing when it is fine. */
+  if (!frozen) { FX.step(dt); SHAKE.step(dt); }
+  FX.draw();
+  if (!G || !running || frozen) return;
+
+  SM.tick(G, dt * 1000);
+  drainEvents();
+  if (!G) return;
+  deathT = Math.max(0, deathT - dt * 1.6);
+  SKY.sync(G.pots, G.crowned, deathT);
+  hud(false);
+
+  const leftS = Math.ceil(Math.max(0, SM.K.SESSION_MS - G.t) / 1000);
+  if (leftS !== lastTickSec) {
+    if (lastTickSec >= 0 && leftS <= 10 && leftS > 0) {
+      AU.tick(leftS <= 5);
+      el.clock.classList.remove('pulse');
+      void el.clock.offsetWidth;
+      el.clock.classList.add('pulse');
+    }
+    lastTickSec = leftS;
+  }
+  if (!firstPlay && !SM.dealing(G)) {
+    idleSince += dt;
+    if (idleSince > 1.2) showHint();
+  }
+}
+
+function endRun() {
+  running = false;
+  AU.bell();
+  SHAKE.add(0.6);
+  const score = G.score;
+  const best = readBest();
+  const runs = readRuns();
+  runs.push(score);
+  while (runs.length > 20) runs.shift();
+  try {
+    localStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+    if (score > best) localStorage.setItem(BEST_KEY, String(score));
+  } catch (e) { /* private mode */ }
+
+  const sorted = runs.slice().sort(function (a, b) { return a - b; });
+  const med = sorted[Math.floor(sorted.length / 2)] || 0;
+
+  el.overScore.textContent = score.toLocaleString('en-US');
+  /* L6 — the smallest TRUE gap, never a manufactured one (§10.5) */
+  let gap = '';
+  if (best > 0 && score > best) gap = 'A NEW BEST · +' + (score - best).toLocaleString('en-US') + ' past it';
+  else if (best > 0) gap = '−' + (best - score).toLocaleString('en-US') + ' from your best';
+  else if (runs.length > 1) gap = med > score ? '−' + (med - score) + ' from your median' : '+' + (score - med) + ' over your median';
+  el.overGap.textContent = gap;
+
+  const st = G.stats;
+  el.overLines.innerHTML = '';
+  const lines = [
+    ['longest chain', String(G.bestChain)],
+    ['chains banked', st.chainScore.toLocaleString('en-US')],
+    ['chains lost', st.chainLost.toLocaleString('en-US')],
+    ['crowned', st.crowns + ' peak' + (st.crowns === 1 ? '' : 's')],
+    ['pots banked', st.potBanked.toLocaleString('en-US')],
+    ['pots let go', st.potLost.toLocaleString('en-US')],
+    ['boards', String(st.boards)],
+    ['cleared', String(st.clears)]
+  ];
+  lines.forEach(function (l) {
+    const s = document.createElement('span');
+    s.innerHTML = l[0] + ' <b>' + l[1] + '</b>';
+    el.overLines.appendChild(s);
+  });
+  setTimeout(function () {
+    show(el.scOver);
+    paintPoster(el.overSky);
+  }, 900);
+}
+
+/* The title and result screens get the same painted night, drawn by the same
+   skyline maths as the board so the cover and the game cannot drift apart. */
+function paintPoster(canvas) {
+  const W = canvas.clientWidth || el.app.clientWidth;
+  const H = canvas.clientHeight || el.app.clientHeight;
+  if (W < 8 || H < 8) return;
+  const d = Math.min(2.5, window.devicePixelRatio || 1);
+  canvas.width = Math.round(W * d); canvas.height = Math.round(H * d);
+  const g = canvas.getContext('2d');
+  g.setTransform(d, 0, 0, d, 0, 0);
+  SKY.sprites();
+
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0.00, '#070420');
+  sky.addColorStop(0.26, '#170E40');
+  sky.addColorStop(0.50, '#2E1A60');
+  sky.addColorStop(0.66, '#5C2E74');
+  sky.addColorStop(0.82, '#2A1856');
+  sky.addColorStop(1.00, '#12092E');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, H);
+
+  const rnd = SM.mulberry32(20260819);
+  for (let i = 0; i < 110; i++) {
+    g.globalAlpha = 0.18 + rnd() * 0.62;
+    g.fillStyle = '#EAF0FF';
+    g.beginPath(); g.arc(rnd() * W, rnd() * H * 0.66, 0.4 + rnd() * 1.2, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+
+  /* aurora */
+  g.globalCompositeOperation = 'lighter';
+  for (let i = 0; i <= 22; i++) {
+    const u = i / 22, x = u * (W + 140) - 70, r = W * 0.21;
+    g.globalAlpha = 0.40 * (0.35 + 0.45 * Math.sin(u * 3.2));
+    g.drawImage(SKY.glowTeal, x - r, H * (0.10 + 0.035 * Math.sin(u * 2.4 * TAU)) - r * 0.7, r * 2, r * 1.4);
+    g.globalAlpha = 0.28 * (0.35 + 0.45 * Math.cos(u * 2.5));
+    g.drawImage(SKY.glowPink, x - r, H * (0.18 + 0.045 * Math.sin(u * 1.7 * TAU + 1)) - r * 0.7, r * 2, r * 1.4);
+  }
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+
+  /* the moon, low and large behind the range */
+  const mx = W * 0.755, my = H * 0.700, mr = W * 0.125;
+  g.globalCompositeOperation = 'lighter';
+  g.globalAlpha = 0.8;
+  g.drawImage(SKY.soft, mx - mr * 4, my - mr * 4, mr * 8, mr * 8);
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+  const mg = g.createRadialGradient(mx - mr * .3, my - mr * .3, mr * .1, mx, my, mr);
+  mg.addColorStop(0, '#FFFCEC'); mg.addColorStop(0.65, '#F5EACB'); mg.addColorStop(1, '#DBC69A');
+  g.fillStyle = mg; g.beginPath(); g.arc(mx, my, mr, 0, TAU); g.fill();
+
+  /* a far hazy range */
+  const fy = H * 0.795;
+  g.fillStyle = 'rgba(52,36,104,.7)';
+  g.beginPath(); g.moveTo(-10, fy + 90);
+  let fx = -10;
+  const rf = SM.mulberry32(31);
+  while (fx < W + 20) {
+    const w = 40 + rf() * 70, h = 34 + rf() * 96;
+    g.lineTo(fx + w / 2, fy - h); g.lineTo(fx + w, fy - h * 0.1); fx += w;
+  }
+  g.lineTo(W + 20, fy + 90); g.closePath(); g.fill();
+
+  /* THE THREE PEAKS, by the same profile the board uses */
+  /* the range sits in the bottom third: the type owns the top two thirds,
+     and nothing the player has to read ever crosses a ridge */
+  const peaks = [
+    { sx: 0.19, top: 0.735, half: 0.34 },
+    { sx: 0.50, top: 0.660, half: 0.31 },
+    { sx: 0.81, top: 0.720, half: 0.34 }
+  ];
+  const by = 1.06;
+  const line = function (u) {
+    let y = by;
+    for (let k = 0; k < peaks.length; k++) {
+      const P = peaks[k];
+      const half = u < P.sx ? P.half * 0.86 : P.half * 1.14;
+      const dd = Math.min(1, Math.abs(u - P.sx) / half);
+      const yy = P.top + (by - P.top) * Math.pow(dd, 1.62);
+      if (yy < y) y = yy;
+    }
+    return y + Math.sin(u * 19) * 0.006 + Math.sin(u * 41) * 0.003;
+  };
+  const path = new Path2D();
+  path.moveTo(-10, H + 10);
+  for (let u = -0.04; u <= 1.04; u += 0.006) path.lineTo(u * W, line(u) * H);
+  path.lineTo(W + 10, H + 10); path.closePath();
+  const rock = g.createLinearGradient(0, H * 0.64, 0, H);
+  rock.addColorStop(0.00, '#4A3896');
+  rock.addColorStop(0.14, '#33235F');
+  rock.addColorStop(0.44, '#1D1246');
+  rock.addColorStop(1.00, '#080320');
+  g.fillStyle = rock; g.fill(path);
+
+  /* snow crest */
+  const snow = new Path2D();
+  const pts = [];
+  for (let u = -0.04; u <= 1.04; u += 0.006) pts.push([u * W, line(u) * H]);
+  snow.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) snow.lineTo(pts[i][0], pts[i][1]);
+  for (let i = pts.length - 1; i >= 0; i--)
+    snow.lineTo(pts[i][0], pts[i][1] + H * (0.012 + 0.008 * Math.sin(i * 0.07)));
+  snow.closePath();
+  g.save(); g.clip(path);
+  const sg = g.createLinearGradient(0, H * 0.64, 0, H * 0.76);
+  sg.addColorStop(0, '#F4F8FF'); sg.addColorStop(0.5, '#C9D6F2'); sg.addColorStop(1, '#8496C8');
+  g.fillStyle = sg; g.fill(snow);
+  /* the inner fold */
+  g.fillStyle = 'rgba(7,3,26,.42)';
+  g.beginPath(); g.moveTo(-10, H + 10);
+  for (let i = 0; i < pts.length; i += 2)
+    g.lineTo(pts[i][0], pts[i][1] + H * (0.055 + 0.035 * Math.sin(i * 0.03)));
+  g.lineTo(W + 10, H + 10); g.closePath(); g.fill();
+  g.restore();
+  g.strokeStyle = 'rgba(232,240,255,.7)'; g.lineWidth = 1.6;
+  g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+  g.stroke();
+
+  /* cloud sea + a soft vignette so the type always has something to sit on */
+  g.globalCompositeOperation = 'lighter';
+  for (let q = 0; q < 3; q++) {
+    for (let i = 0; i < 22; i++) {
+      const u = i / 21, x = u * (W + 160) - 80 + Math.sin(i * 2.3 + q) * 24;
+      const r = W * (0.10 + q * 0.05);
+      g.globalAlpha = 0.06 + 0.03 * Math.sin(i + q);
+      g.drawImage(SKY.soft, x - r, H * (0.955 + q * 0.022) - r * 0.5, r * 2, r);
+    }
+  }
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+  const vg = g.createRadialGradient(W * 0.5, H * 0.38, H * 0.14, W * 0.5, H * 0.5, H * 0.8);
+  vg.addColorStop(0, 'rgba(8,4,26,0)');
+  vg.addColorStop(1, 'rgba(6,3,20,.55)');
+  g.fillStyle = vg; g.fillRect(0, 0, W, H);
+  /* and a soft floor under the type, so a ridge can never eat a word */
+  const tg = g.createLinearGradient(0, H * 0.20, 0, H * 0.60);
+  tg.addColorStop(0, 'rgba(9,5,30,.34)');
+  tg.addColorStop(1, 'rgba(9,5,30,0)');
+  g.fillStyle = tg; g.fillRect(0, 0, W, H * 0.62);
+}
+
+/* ═════════════════════ 9. INPUT ═════════════════════ */
+function onTap(clientX, clientY) {
+  if (!G || !running || lockInput) return;
+  AU.boot(); AU.resume();
+  const r = el.field.getBoundingClientRect();
+  const x = UX(clientX - r.left), y = UY(clientY - r.top);
+  const before = G.score;
+  const res = SM.tapAt(G, x, y, LAY.tall);
+  if (res && res.k === 'miss') {
+    /* stage the refusal on the card the finger actually landed on — asking
+       the ENGINE which one, so the picture and the number cannot disagree */
+    const hit = SM.cardAt(G, x, y);
+    const n = hit >= 0 ? VIEW.nodes[hit] : null;
+    if (n) { n.classList.remove('no'); void n.offsetWidth; n.classList.add('no');
+      setTimeout(function () { n.classList.remove('no'); }, 360); }
+  }
+  drainEvents();
+  hud(true);
+  void before;
+}
+
+el.field.addEventListener('pointerdown', function (e) {
+  e.preventDefault();
+  onTap(e.clientX, e.clientY);
+}, { passive: false });
+
+$('btn-play').addEventListener('click', function () { startRun(); });
+$('btn-again').addEventListener('click', function () { startRun(); });
+$('btn-home').addEventListener('click', function () {
+  running = false;
+  show(el.scTitle);
+  paintPoster(el.titleSky);
+  refreshTitle();
+});
+
+function refreshTitle() {
+  const b = readBest();
+  el.titleBest.textContent = b > 0
+    ? 'your best · ' + b.toLocaleString('en-US')
+    : '90 seconds · one thumb';
+}
+
+/* ═════════════════════ 10. RESIZE / BOOT ═════════════════════ */
+let resizeT = 0;
+function doResize() {
+  /* the posters live on their own screens and must repaint even when the
+     game field is display:none and therefore has no size at all */
+  if (el.scTitle.classList.contains('is-on')) paintPoster(el.titleSky);
+  if (el.scOver.classList.contains('is-on')) paintPoster(el.overSky);
+  if (!relayout()) return;                 /* never lay out on a 0-size frame */
+  SKY.resize();
+  if (G) { SKY.setBoard(G); VIEW.relayoutAll(G); }
+}
+window.addEventListener('resize', function () {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(doResize, 90);
+});
+window.addEventListener('orientationchange', function () { setTimeout(doResize, 220); });
+
+relayout();
+paintPoster(el.titleSky);
+refreshTitle();
+if (!raf) raf = requestAnimationFrame(frame);
+
+/* ═════════════════════ 11. HARNESS ═════════════════════
+   A backgrounded tab never fires requestAnimationFrame, so a screenshot or
+   verification pass has to drive the sim itself. advance() steps the sim
+   AND presents, synchronously; freeze() stops the tick, and freeze(true,
+   false) leaves the real buttons live for a DOM-path test. */
+window.__SM = {
+  get G() { return G; },
+  SM: SM,
+  start: function (seed) { startRun(seed); },
+  freeze: function (on, lock) {
+    frozen = !!on;
+    lockInput = (lock === undefined ? !!on : !!lock);
+    el.app.classList.toggle('hold', frozen);
+    return frozen;
+  },
+  setReduced: function (v) { REDUCED = !!v; return REDUCED; },
+  get reduced() { return REDUCED; },
+  advance: function (sec, fn) {
+    const step = 1 / 60;
+    let n = Math.round(sec / step);
+    while (n-- > 0 && G && running) {
+      SM.tick(G, step * 1000);
+      drainEvents();
+      if (fn) fn(G);
+      if (G) { SKY.sync(G.pots, G.crowned, deathT); }
+      hud(true);
+      FX.step(step);
+    }
+    SKY.frame(performance.now() / 1000);
+    FX.draw();
+    return G ? { t: G.t, score: G.score, chain: G.chain } : null;
+  },
+  pump: function () { drainEvents(); hud(true); },
+  tap: function (cx, cy) {
+    const r = el.field.getBoundingClientRect();
+    onTap(r.left + PX(cx), r.top + PY(cy));
+  },
+  tapCard: function (id) { const c = G.cards[id]; this.tap(c.cx, c.cy); },
+  tapStock: function () { this.tap(LAY.dr.well0.cx, LAY.dr.well0.cy); },
+  geom: function () { return { s: LAY.s, ox: LAY.ox, oy: LAY.oy, w: LAY.w, h: LAY.h, tall: LAY.tall, dr: LAY.dr }; },
+  hud: function () {
+    return G ? {
+      t: Math.round(G.t), left: Math.round(SM.K.SESSION_MS - G.t), score: G.score,
+      chain: G.chain, mult: G.mult, pots: G.pots.slice(), crowned: G.crowned.slice(),
+      stock: SM.stockLeft(G), legal: SM.legalIds(G), free: SM.freeIds(G),
+      dealing: SM.dealing(G), over: G.over, board: G.board, stats: G.stats
+    } : null;
+  },
+  AU: AU, LAY: LAY, VIEW: VIEW, SKY: SKY, FX: FX
+};
+})();
+</script>
+</body>
+</html>
