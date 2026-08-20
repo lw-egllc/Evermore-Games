@@ -1,0 +1,2495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0C2620">
+<title>YAHTZEE — thirteen boxes, thirteen turns</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   YAHTZEE — the whole look. No images, no fonts, no fetches: every die,
+   pip, glow and particle here is CSS, which is what lets the build be a
+   single file you can email.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root{
+  /* felt */
+  --felt-0:#0A211B;  --felt-1:#0E2C24;  --felt-2:#134034;  --felt-3:#1A5342;
+  /* ivory — the dice, and anything the player owns */
+  --ivory:#F7F2E4;   --ivory-d:#DCD3BC;  --pip:#191713;
+  /* gold — the scoring family (bible 11.6) */
+  --gold:#F2B33D;    --gold-hi:#FFD97A;  --gold-lo:#B9821F;
+  /* warm red — the cost family */
+  --red:#E2553C;     --red-lo:#8E2E1E;
+  /* cool desaturated — neutral / safe */
+  --cool:#7FA396;    --cool-d:#4C6B60;
+  --ink:#F3EEE1;     --ink-dim:#A9BEB4;
+
+  --d:64px;                 /* die edge — JS overwrites with the exact fit */
+  --rowh:55px;
+  --rolldur:640ms;
+  --ease:cubic-bezier(.18,.92,.26,1);
+  --r:14px;
+
+  --sx:0px; --sy:0px; --sr:0deg;   /* shake, driven from JS */
+}
+
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ margin:0; padding:0; height:100%; overflow:hidden; }
+body{
+  background:#050F0C;
+  color:var(--ink);
+  font:500 16px/1.25 ui-rounded,-apple-system,BlinkMacSystemFont,"Segoe UI",
+       "Avenir Next",Avenir,"Nunito",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  user-select:none; -webkit-user-select:none;
+  touch-action:manipulation;
+}
+
+#app{
+  position:relative;
+  width:min(100vw, 480px, 54vh);
+  height:100dvh; max-height:100dvh;
+  margin-inline:auto;
+  overflow:hidden;
+  background:
+    radial-gradient(120% 70% at 50% -10%, var(--felt-3) 0%, var(--felt-1) 45%, var(--felt-0) 100%);
+  box-shadow:0 0 0 1px #0000004d, 0 24px 80px #0009;
+}
+/* the felt weave — two hairline gradients, cheaper than any texture */
+#app::before{
+  content:''; position:absolute; inset:0; pointer-events:none; opacity:.35;
+  background:
+    repeating-linear-gradient(90deg,#ffffff08 0 1px,transparent 1px 3px),
+    repeating-linear-gradient(0deg,#00000010 0 1px,transparent 1px 3px);
+}
+/* vignette */
+#app::after{
+  content:''; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(110% 80% at 50% 42%,transparent 40%,#00110c99 100%);
+}
+
+.screen{
+  position:absolute; inset:0; z-index:2;
+  display:none; flex-direction:column;
+  padding:max(14px,env(safe-area-inset-top)) 14px max(12px,env(safe-area-inset-bottom));
+}
+.screen.is-on{ display:flex; animation:screenIn .32s var(--ease) both; }
+@keyframes screenIn{ from{ opacity:0; transform:translateY(10px) } to{ opacity:1; transform:none } }
+
+#screen-game{ transform:translate(var(--sx),var(--sy)) rotate(var(--sr)); }
+
+/* ─────────────── buttons ─────────────── */
+.btn{
+  font:inherit; font-weight:800; letter-spacing:.06em;
+  color:var(--ink); background:#ffffff12;
+  border:2px solid #ffffff26; border-radius:var(--r);
+  padding:14px 18px; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; gap:3px;
+  transition:transform .12s var(--ease), background .16s, border-color .16s, box-shadow .16s;
+}
+.btn:active{ transform:scale(.965); }
+.btn-primary{
+  background:linear-gradient(180deg,var(--gold-hi),var(--gold));
+  border-color:#fff6; color:#2A1C05;
+  box-shadow:0 6px 0 var(--gold-lo), 0 12px 24px #0006;
+}
+.btn-primary:active{ box-shadow:0 2px 0 var(--gold-lo), 0 6px 14px #0006; transform:translateY(4px) scale(.99); }
+.btn-ghost{ background:#ffffff0e; }
+.btn-sm{ padding:10px 14px; font-size:13px; border-radius:11px; }
+.btn-k{ font-size:15px; }
+.btn-sub{ font-size:11px; font-weight:600; letter-spacing:.02em; opacity:.72; text-transform:none; }
+.btn:disabled{ opacity:.32; pointer-events:none; }
+
+/* ─────────────── title ─────────────── */
+.felt-glow{
+  position:absolute; left:50%; top:-14%; width:130%; aspect-ratio:1;
+  transform:translateX(-50%);
+  background:radial-gradient(closest-side,#2E8A6C55,transparent 70%);
+  pointer-events:none;
+}
+#screen-title{ align-items:center; text-align:center; justify-content:flex-start; }
+.title-dice{
+  height:96px; width:100%; margin-top:6px;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  perspective:1200px;
+}
+.bigtitle{
+  margin:10px 0 2px; font-size:clamp(38px,12vw,54px); font-weight:900;
+  letter-spacing:.10em; line-height:1;
+  background:linear-gradient(180deg,#FFF6DC,var(--gold) 62%,var(--gold-lo));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  filter:drop-shadow(0 3px 0 #6B4A0E) drop-shadow(0 10px 18px #0008);
+}
+.subtitle{ margin:0 0 16px; font-size:12.5px; font-weight:700; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--cool); }
+.mode-pick{ display:flex; flex-direction:column; gap:10px; width:100%; max-width:300px; }
+.title-rules{
+  list-style:none; margin:18px 0 0; padding:0; width:100%;
+  display:flex; flex-direction:column; gap:9px; text-align:left;
+}
+.title-rules li{
+  font-size:12.5px; font-weight:600; line-height:1.45; color:var(--ink-dim);
+  padding-left:26px; position:relative;
+}
+.title-rules li b:first-child{
+  position:absolute; left:0; top:0; width:18px; height:18px; border-radius:50%;
+  background:#ffffff1a; color:var(--gold); font-size:11px; font-weight:800;
+  display:grid; place-items:center;
+}
+.title-rules li b{ color:var(--ink); }
+/* The title had 200 dp of dead felt under the rules. This is the goal
+   gradient the bible asks for: your own record, before you tap PLAY. */
+.title-stat{
+  display:flex; gap:8px; width:100%; margin-top:auto; padding-top:18px;
+}
+.title-stat div{
+  flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:9px 4px; border-radius:11px; background:#ffffff0b; border:1.5px solid #ffffff14;
+}
+.title-stat span{ font-size:8.5px; font-weight:800; letter-spacing:.15em; color:var(--cool); }
+.title-stat b{ font-size:20px; font-weight:900; color:var(--ivory); font-variant-numeric:tabular-nums; }
+.title-stat div:first-child b{ color:var(--gold); }
+.title-stat[hidden]{ display:none; }
+
+.title-links{ display:flex; gap:8px; margin-top:auto; padding-top:14px; }
+.title-stat + .title-links{ margin-top:10px; }
+
+/* ─────────────── HUD ─────────────── */
+#hud{
+  flex:0 0 auto; display:grid; grid-template-columns:1fr auto 1fr;
+  align-items:center; gap:8px; padding:2px 2px 8px;
+}
+.hud-cell{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+.hud-total{ align-items:flex-start; }
+.hud-turn{ align-items:center; }
+.hud-bonus{ align-items:flex-end; }
+.hud-k{ font-size:9.5px; font-weight:800; letter-spacing:.16em; color:var(--cool); }
+.hud-v{ font-size:30px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums;
+  color:var(--ivory); }
+.hud-turn .hud-v{ font-size:18px; color:var(--ink-dim); }
+.hud-turn .hud-v i{ font-style:normal; font-size:12px; opacity:.6; }
+.hud-bonus .hud-v{ font-size:20px; color:var(--gold); }
+.hud-bonus.is-got .hud-v{ color:var(--gold-hi); }
+.hud-bonus.is-dead .hud-v{ color:var(--red); }
+#hud-total.pop{ animation:pop .42s cubic-bezier(.22,1,.36,1); }
+@keyframes pop{
+  0%{ transform:scale(1,1) } 18%{ transform:scale(1.25,.80) }
+  45%{ transform:scale(.87,1.15) } 72%{ transform:scale(1.03,.97) } 100%{ transform:scale(1,1) }
+}
+.turn-pips{ display:flex; gap:2px; margin-top:3px; }
+.turn-pips i{ width:5px; height:5px; border-radius:50%; background:#ffffff26; }
+.turn-pips i.on{ background:var(--gold); }
+.bonus-bar{ width:74px; height:4px; border-radius:2px; background:#ffffff1f; margin-top:4px; overflow:hidden; }
+.bonus-bar i{ display:block; height:100%; width:0; border-radius:2px;
+  background:linear-gradient(90deg,var(--gold-lo),var(--gold-hi)); transition:width .4s var(--ease); }
+.hud-bonus.is-dead .bonus-bar i{ background:var(--red-lo); }
+
+.pace{
+  flex:0 0 auto; height:16px; text-align:center;
+  font-size:10.5px; font-weight:800; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--cool-d);
+}
+.pace.up{ color:var(--gold); } .pace.dn{ color:#B9705E; }
+
+/* ─────────────── scorecard ─────────────── */
+.card{
+  flex:0 0 auto;
+  display:grid; grid-template-columns:1fr 1fr; gap:8px;
+}
+.col{ display:flex; flex-direction:column; min-width:0; }
+.col-head{
+  display:flex; align-items:baseline; justify-content:space-between;
+  font-size:9.5px; font-weight:800; letter-spacing:.16em; color:var(--cool);
+  padding:0 6px 5px;
+}
+.col-head em{ font-style:normal; font-size:13px; font-weight:900; color:var(--ink-dim);
+  font-variant-numeric:tabular-nums; }
+.rows{ display:flex; flex-direction:column; gap:4px; }
+
+/* Fixed height, not flex. Flexed, the six upper rows stretched taller than
+   the seven lower ones and the two columns stopped reading as one card. */
+.row{
+  flex:0 0 auto; height:var(--rowh);
+  display:flex; align-items:center; justify-content:space-between; gap:4px;
+  padding:0 9px; border-radius:11px;
+  background:#ffffff0d; border:1.5px solid #ffffff17;
+  font:inherit; color:var(--ink-dim); text-align:left; cursor:default;
+  transition:background .14s, border-color .14s, transform .12s var(--ease), color .14s;
+}
+.row .n{ font-size:12px; font-weight:700; letter-spacing:.01em; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.row .v{ font-size:16px; font-weight:900; font-variant-numeric:tabular-nums; flex:0 0 auto; }
+
+/* filled */
+.row.done{ background:#ffffff06; border-color:#ffffff10; color:var(--cool-d); }
+.row.done .v{ color:var(--ivory); }
+.row.done.zero .v{ color:var(--red-lo); }
+
+/* open, dice on the table: the live preview */
+.row.live{ cursor:pointer; color:var(--ink); border-color:#ffffff2e; background:#ffffff14; }
+.row.live .v{ color:var(--gold); }
+.row.live.nil .v{ color:#8B6A62; }
+.row.live:active{ transform:scale(.97); }
+.row.illegal{ opacity:.34; }
+.row:disabled{ cursor:default; }
+.die:focus-visible, .row:focus-visible, .btn:focus-visible{
+  outline:3px solid var(--gold-hi); outline-offset:3px;
+}
+.row.just{ animation:justTook .5s var(--ease); }
+@keyframes justTook{
+  0%{ background:var(--gold); color:#2A1C05; transform:scale(1.05) }
+  100%{ background:#ffffff06; transform:scale(1) }
+}
+.row.just .v{ animation:justV .5s var(--ease); }
+@keyframes justV{ 0%{ color:#2A1C05 } 100%{ color:var(--ivory) } }
+
+.bonusrow{
+  margin-top:5px; display:flex; align-items:center; justify-content:space-between;
+  padding:7px 9px; border-radius:11px; min-height:34px;
+  background:#ffffff08; border:1.5px dashed #ffffff20;
+  font:inherit; color:var(--cool); cursor:default;
+}
+.br-k{ font-size:9px; font-weight:800; letter-spacing:.11em; white-space:nowrap; }
+.br-v{ font-size:14px; font-weight:900; font-variant-numeric:tabular-nums;
+       color:var(--cool-d); white-space:nowrap; }
+.bonusrow.is-got{ border-style:solid; border-color:var(--gold); background:#F2B33D1f; }
+.bonusrow.is-got .br-v,.bonusrow.is-got .br-k{ color:var(--gold-hi); }
+.bonusrow.is-dead .br-v{ color:var(--red-lo); }
+.chainrow.live{ border-style:solid; border-color:var(--gold); background:#F2B33D22; }
+.chainrow.live .br-v{ color:var(--gold-hi); }
+.chainrow.pending{
+  border-color:var(--gold-hi); background:#F2B33D3d;
+  animation:chainPulse .9s ease-in-out infinite;
+}
+.chainrow.pending .br-v{ color:#FFF3D0; font-size:16px; }
+@keyframes chainPulse{
+  0%,100%{ box-shadow:0 0 0 0 #FFD97A00 }
+  50%{ box-shadow:0 0 14px 2px #FFD97A66 }
+}
+@media (prefers-reduced-motion:reduce){ .chainrow.pending{ animation:none; } }
+
+/* ─────────────── the dice ───────────────
+   Five real cubes. `.cube` carries the orientation, and the face brought
+   to the front IS the value the engine rolled — the art and the sim cannot
+   disagree, because there is only one number.
+
+   Held reads on THREE channels at once (bible 11.6 — colour is never the
+   only one): the die lifts onto the rail, it gains a gold collar, and its
+   shadow tightens. Readable at a glance, and in greyscale.
+   ──────────────────────────────────────── */
+.tray{
+  flex:1 1 auto; min-height:96px;
+  display:flex; align-items:center; justify-content:center; gap:9px;
+  perspective:2000px; perspective-origin:50% 44%;
+  margin:6px 0 2px;
+}
+/* flex:0 0 auto is load-bearing. Flex-shrunk, the die's WIDTH drops but
+   the faces' translateZ still uses --d, so the cube ends up deeper than it
+   is wide and a felt-coloured gap opens down both sides. --d is set from
+   JS (sizeDice) to the exact width five dice can have. */
+.die{
+  position:relative; flex:0 0 auto; width:var(--d); height:var(--d);
+  transform-style:preserve-3d;
+  transform:translateY(var(--lift,0px));
+  transition:transform .26s var(--ease);
+  cursor:pointer;
+}
+.die::after{                                   /* contact shadow */
+  content:''; position:absolute; left:8%; right:8%; bottom:-13px; height:9px;
+  border-radius:50%; background:#00120c; filter:blur(5px); opacity:.5;
+  transition:all .26s var(--ease);
+}
+.die.held{ --lift:-15px; }
+.die.held::after{ left:20%; right:20%; bottom:-6px; opacity:.34; filter:blur(4px); }
+.die.dead{ pointer-events:none; }
+.die.pre{ opacity:.22; pointer-events:none; }
+.die.pre::after{ opacity:.18; }
+/* A UNIFORM scale is safe on a preserve-3d node: it scales the faces and
+   their translateZ together. A non-uniform one pulls them apart and opens
+   seams — which is exactly what the old settle animation did. */
+.die:active:not(.dead){ transform:translateY(calc(var(--lift,0px) - 6px)) scale(.94); }
+
+.cube{
+  position:absolute; inset:0; transform-style:preserve-3d;
+  transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+  transition:transform var(--rolldur) cubic-bezier(.16,.86,.24,1.02);
+}
+/* The landing bounce lives on the DIE, not the cube: a die that hits felt
+   drops and rebounds, and doing it that way keeps the cube rigid. */
+.die.settle{ animation:settle .40s cubic-bezier(.22,1,.36,1) var(--rolldur); }
+@keyframes settle{
+  0%{   transform:translateY(calc(var(--lift,0px) - 9px)) }
+  34%{  transform:translateY(calc(var(--lift,0px) + 5px)) }
+  62%{  transform:translateY(calc(var(--lift,0px) - 3px)) }
+  100%{ transform:translateY(var(--lift,0px)) }
+}
+
+/* A solid core at the cube's mid-plane, with a TIGHTER radius than the
+   faces. The faces are rounded, so at every edge and corner of the cube
+   they leave a gap, and where two faces meet at 90 degrees antialiasing
+   leaves a hairline. Both show felt through the die. The core has to reach
+   PAST the silhouette (inset:-1px) or it backs the middle and misses the
+   only place the problem occurs. */
+.die::before{
+  content:''; position:absolute; inset:-1px;
+  border-radius:calc(var(--d)*.13);
+  background:linear-gradient(150deg,var(--ivory-d),#C9BFA6);
+  transform:translateZ(0);
+}
+.face{
+  position:absolute; inset:0; border-radius:calc(var(--d)*.15);
+  background:linear-gradient(150deg,#FFFDF6 0%,var(--ivory) 42%,var(--ivory-d) 100%);
+  box-shadow:inset 0 0 0 1px #ffffffcc, inset 0 -5px 10px #00000018,
+              inset 0 0 7px #0000001f;   /* perimeter shading — an adjacent
+                 face glimpsed at the edge then reads as a shaded side of the
+                 cube rather than a bright seam */
+  display:grid; grid-template:repeat(3,1fr)/repeat(3,1fr);
+  padding:calc(var(--d)*.13); gap:calc(var(--d)*.04);
+  /* NO backface-visibility:hidden. The cube is closed and opaque, so the
+     far faces are occluded by depth anyway — culling them only punched a
+     black sliver through the die wherever a side face was in view. */
+}
+.face i{ border-radius:50%; background:
+  radial-gradient(circle at 34% 30%, #55504A, var(--pip) 70%);
+  box-shadow:inset 0 1px 1px #0006, 0 0 0 .5px #0000001a; }
+.face i.blank{ background:none; box-shadow:none; }
+
+/* face placement — opposite faces sum to 7 */
+.f1{ transform:translateZ(calc(var(--d)/2)); }
+.f6{ transform:rotateY(180deg) translateZ(calc(var(--d)/2)); }
+.f3{ transform:rotateY(90deg)  translateZ(calc(var(--d)/2)); }
+.f4{ transform:rotateY(-90deg) translateZ(calc(var(--d)/2)); }
+.f5{ transform:rotateX(90deg)  translateZ(calc(var(--d)/2)); }
+.f2{ transform:rotateX(-90deg) translateZ(calc(var(--d)/2)); }
+
+/* the gold collar on a held die — a ring, not a tint */
+.die.held .cube .face{ box-shadow:inset 0 0 0 2.5px var(--gold), inset 0 -5px 10px #00000018,
+                       inset 0 0 7px #0000001f; }
+.die.hot .cube .face{ box-shadow:inset 0 0 0 2.5px var(--gold-hi),
+  inset 0 -5px 10px #00000018, inset 0 0 7px #0000001f, 0 0 18px #FFD97A88; }
+
+/* ─────────────── action zone ─────────────── */
+#act{
+  flex:0 0 auto; display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding-top:4px;
+}
+.rolls{ display:flex; gap:6px; height:9px; }
+.rolls i{ width:26px; height:5px; border-radius:3px; background:#ffffff22; transition:background .2s; }
+.rolls i.on{ background:var(--gold); }
+.rolls i.spent{ background:#ffffff10; }
+.btn-roll{
+  width:100%; max-width:250px; padding:17px 18px; font-size:19px; letter-spacing:.14em;
+  background:linear-gradient(180deg,var(--gold-hi),var(--gold));
+  color:#2A1C05; border-color:#fff6;
+  box-shadow:0 6px 0 var(--gold-lo), 0 14px 26px #0007;
+}
+.btn-roll:active{ transform:translateY(4px); box-shadow:0 2px 0 var(--gold-lo), 0 6px 14px #0006; }
+.btn-roll:disabled{
+  background:#ffffff10; color:var(--cool-d); border-color:#ffffff14;
+  box-shadow:none; opacity:1;
+}
+.act-hint{
+  margin:0; height:14px; font-size:10.5px; font-weight:800; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--cool-d);
+}
+.act-hint.warn{ color:var(--gold); }
+
+/* ─────────────── FX ─────────────── */
+.fx{ position:absolute; inset:0; pointer-events:none; z-index:6; overflow:hidden; }
+.spark{
+  position:absolute; width:10px; height:10px; border-radius:2px;
+  will-change:transform,opacity;
+}
+.float{
+  position:absolute; font-size:20px; font-weight:900; color:var(--gold-hi);
+  text-shadow:0 2px 0 #6B4A0E,0 4px 12px #000a; pointer-events:none;
+  animation:floatUp .78s var(--ease) forwards;
+}
+@keyframes floatUp{
+  0%{ transform:translate(-50%,0) scale(.6); opacity:0 }
+  16%{ transform:translate(-50%,-6px) scale(1.15); opacity:1 }
+  100%{ transform:translate(-50%,-46px) scale(1); opacity:0 }
+}
+.shout{
+  position:absolute; inset:0; display:grid; place-items:center; z-index:7;
+  pointer-events:none; opacity:0;
+}
+.shout.on{ animation:shout 1.05s var(--ease); }
+.shout b{
+  font-size:clamp(30px,11vw,46px); font-weight:900; letter-spacing:.1em;
+  background:linear-gradient(180deg,#FFF6DC,var(--gold) 60%,var(--gold-lo));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  filter:drop-shadow(0 3px 0 #6B4A0E) drop-shadow(0 8px 22px #000);
+}
+.shout.cold b{
+  background:linear-gradient(180deg,#F3C4B8,var(--red) 60%,var(--red-lo));
+  -webkit-background-clip:text; background-clip:text;
+  filter:drop-shadow(0 3px 0 #5E1F13) drop-shadow(0 8px 22px #000);
+}
+@keyframes shout{
+  0%{ opacity:0; transform:scale(.55) rotate(-7deg) }
+  18%{ opacity:1; transform:scale(1.14) rotate(2deg) }
+  32%{ transform:scale(1) rotate(0) }
+  74%{ opacity:1; transform:scale(1) }
+  100%{ opacity:0; transform:scale(1.06) translateY(-14px) }
+}
+
+/* ─────────────── result ─────────────── */
+/* Score block centred, actions pinned into the thumb arc — the retry has
+   to be under the thumb that just finished playing, not halfway up. */
+#screen-over{ align-items:center; justify-content:center; text-align:center; gap:2px; }
+#screen-over .over-lines{ margin-bottom:0; }
+#screen-over .btn-again{ margin-top:auto; }
+.over-k{ margin:0; font-size:11px; font-weight:800; letter-spacing:.28em; color:var(--cool); }
+.over-score{
+  font-size:clamp(64px,22vw,96px); font-weight:900; line-height:1; letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;
+  background:linear-gradient(180deg,#FFF6DC,var(--gold) 60%,var(--gold-lo));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  filter:drop-shadow(0 3px 0 #6B4A0E) drop-shadow(0 12px 24px #0009);
+}
+.over-gap{
+  margin:6px 0 20px; font-size:17px; font-weight:800; letter-spacing:.02em; color:var(--ink);
+  min-height:22px;
+}
+.over-gap em{ font-style:normal; color:var(--gold); }
+.over-lines{ display:flex; flex-direction:column; gap:5px; width:100%; max-width:280px; }
+.over-lines div{
+  display:flex; justify-content:space-between; font-size:12.5px; font-weight:700;
+  color:var(--ink-dim); padding:6px 12px; border-radius:9px; background:#ffffff0b;
+}
+.over-lines div b{ color:var(--ivory); font-variant-numeric:tabular-nums; }
+.over-lines div.good b{ color:var(--gold); }
+.btn-again{ width:100%; max-width:250px; font-size:17px; }
+#btn-home{ margin-top:10px; margin-bottom:6px; }
+
+/* ─────────────── sheet ─────────────── */
+.sheet{
+  position:absolute; inset:0; z-index:20; display:none;
+  background:#040D0Ad9; backdrop-filter:blur(6px);
+  align-items:flex-end;
+}
+.sheet.on{ display:flex; animation:screenIn .24s var(--ease); }
+.sheet-in{
+  width:100%; max-height:82%; overflow-y:auto; -webkit-overflow-scrolling:touch;
+  background:var(--felt-2); border-radius:22px 22px 0 0;
+  border-top:2px solid #ffffff1f;
+  padding:20px 16px max(22px,env(safe-area-inset-bottom));
+  position:relative;
+}
+.sheet-x{
+  position:absolute; top:12px; right:12px; width:34px; height:34px; border-radius:50%;
+  background:#ffffff14; border:0; color:var(--ink); font-size:22px; line-height:1; cursor:pointer;
+}
+.sheet h3{ margin:0 0 12px; font-size:13px; letter-spacing:.18em; color:var(--gold); font-weight:800; }
+.sheet table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+.sheet td{ padding:7px 4px; border-bottom:1px solid #ffffff12; color:var(--ink-dim); }
+.sheet td:last-child{ text-align:right; color:var(--ivory); font-weight:800; white-space:nowrap; }
+.sheet td b{ color:var(--ink); }
+.sheet .runs{ display:flex; flex-direction:column; gap:6px; }
+.sheet .runs div{ display:flex; justify-content:space-between; padding:8px 10px;
+  background:#ffffff0b; border-radius:9px; font-size:13px; font-weight:700; }
+.sheet .runs div b{ color:var(--gold); }
+.sheet p{ font-size:12px; line-height:1.5; color:var(--ink-dim); }
+
+/* ─────────────── reduced motion (bible 11.7) ─────────────── */
+@media (prefers-reduced-motion:reduce){
+  *{ animation-duration:.01ms !important; animation-iteration-count:1 !important;
+     transition-duration:.09s !important; }
+  #screen-game{ transform:none !important; }
+  .cube{ transition-duration:.12s !important; }
+}
+
+/* Short screens. Thirteen rows plus five dice plus a button is the tightest
+   constraint in the game, and below about 640 dp it stops fitting at a 44 dp
+   row. The row is what gives: it is ~170 dp WIDE, so a 34 dp-tall row is
+   still an easy target, whereas a ROLL button pushed off the bottom of the
+   screen is a broken game. Order of sacrifice: row height, then dice, then
+   HUD type — never the button and never the dice being visible. */
+@media (max-height:780px){
+  :root{ --rowh:46px; }
+}
+@media (max-height:690px){
+  :root{ --rowh:38px; }
+  .tray{ min-height:80px; }
+  .hud-v{ font-size:26px; }
+  .btn-roll{ padding:14px 18px; font-size:17px; }
+  .title-rules li{ font-size:11.5px; }
+}
+@media (max-height:620px){
+  :root{ --rowh:33px; }
+  .screen{ padding-left:11px; padding-right:11px; }
+  .hud-v{ font-size:22px; }
+  .hud-turn .hud-v{ font-size:15px; }
+  .hud-bonus .hud-v{ font-size:16px; }
+  #hud{ padding-bottom:5px; }
+  .pace{ height:13px; font-size:9.5px; }
+  .col-head{ padding-bottom:3px; }
+  .rows{ gap:3px; }
+  .row{ border-radius:9px; padding:0 7px; }
+  .row .n{ font-size:11px; }
+  .row .v{ font-size:14px; }
+  .bonusrow{ min-height:27px; padding:5px 7px; margin-top:4px; }
+  .tray{ min-height:62px; gap:7px; }
+  #act{ gap:4px; padding-top:2px; }
+  .btn-roll{ padding:11px 16px; font-size:15px; }
+  .act-hint{ height:12px; font-size:9px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════════ TITLE ═══════════════ -->
+  <section id="screen-title" class="screen is-on">
+    <div class="felt-glow" aria-hidden="true"></div>
+    <div class="title-dice" id="title-dice" aria-hidden="true"></div>
+    <h1 class="bigtitle">YAHTZEE</h1>
+    <p class="subtitle">Thirteen boxes &middot; thirteen turns</p>
+
+    <div class="mode-pick">
+      <button id="btn-daily" class="btn btn-primary">
+        <span class="btn-k">TODAY&rsquo;S DICE</span>
+        <span class="btn-sub" id="daily-label">everyone rolls the same</span>
+      </button>
+      <button id="btn-free" class="btn btn-ghost">
+        <span class="btn-k">FREE PLAY</span>
+        <span class="btn-sub">fresh dice every run</span>
+      </button>
+    </div>
+
+    <ul class="title-rules">
+      <li><b>1</b> Roll five dice. Tap any die to <b>keep</b> it, then roll again &mdash; <b>three rolls</b> a turn.</li>
+      <li><b>2</b> Spend the dice on <b>one box</b>. Every box is spent exactly once.</li>
+      <li><b>3</b> Get the top six to <b>63</b> and take <b>+35</b>. That is three of each face.</li>
+      <li><b>4</b> Five alike is <b>YAHTZEE</b>. Score it, and every one after pays <b>+100</b>.</li>
+    </ul>
+
+    <div class="title-stat" id="title-stat" hidden>
+      <div><span>BEST</span><b id="ts-best">—</b></div>
+      <div><span>AVERAGE</span><b id="ts-avg">—</b></div>
+      <div><span>PAR</span><b id="ts-par">252</b></div>
+    </div>
+
+    <div class="title-links">
+      <button id="btn-card" class="btn btn-ghost btn-sm">SCORING</button>
+      <button id="btn-best" class="btn btn-ghost btn-sm">YOUR RUNS</button>
+    </div>
+  </section>
+
+  <!-- ═══════════════ GAME ═══════════════ -->
+  <section id="screen-game" class="screen">
+
+    <header id="hud">
+      <div class="hud-cell hud-total">
+        <span class="hud-k">TOTAL</span>
+        <span class="hud-v" id="hud-total">0</span>
+      </div>
+      <div class="hud-cell hud-turn">
+        <span class="hud-k">TURN</span>
+        <span class="hud-v" id="hud-turn">1<i>/13</i></span>
+        <div class="turn-pips" id="turn-pips" aria-hidden="true"></div>
+      </div>
+      <div class="hud-cell hud-bonus" id="hud-bonus-cell">
+        <span class="hud-k">TO 63</span>
+        <span class="hud-v" id="hud-bonus">63</span>
+        <div class="bonus-bar"><i id="bonus-fill"></i></div>
+      </div>
+    </header>
+
+    <div id="pace" class="pace" aria-live="polite"></div>
+
+    <main id="card" class="card">
+      <div class="col col-up">
+        <div class="col-head"><span>UPPER</span><em id="up-sum">0</em></div>
+        <div class="rows" id="rows-up"></div>
+        <button class="bonusrow" id="bonusrow" type="button">
+          <span class="br-k">BONUS AT 63</span>
+          <span class="br-v" id="br-v">+35</span>
+        </button>
+      </div>
+      <div class="col col-lo">
+        <div class="col-head"><span>LOWER</span><em id="lo-sum">0</em></div>
+        <div class="rows" id="rows-lo"></div>
+        <div class="bonusrow chainrow" id="chainrow">
+          <span class="br-k">YAHTZEE BONUS</span>
+          <span class="br-v" id="chain-v">&mdash;</span>
+        </div>
+      </div>
+    </main>
+
+    <div id="tray" class="tray"></div>
+
+    <footer id="act">
+      <div class="rolls" id="rolls" aria-hidden="true"></div>
+      <button id="btn-roll" class="btn btn-roll" type="button">
+        <span id="roll-label">ROLL</span>
+      </button>
+      <p class="act-hint" id="act-hint"></p>
+    </footer>
+
+    <div class="fx" id="fx" aria-hidden="true"></div>
+    <div class="shout" id="shout" aria-hidden="true"></div>
+  </section>
+
+  <!-- ═══════════════ RESULT ═══════════════ -->
+  <section id="screen-over" class="screen">
+    <div class="felt-glow" aria-hidden="true"></div>
+    <p class="over-k" id="over-k">FINAL</p>
+    <div class="over-score" id="over-score">0</div>
+    <p class="over-gap" id="over-gap"></p>
+    <div class="over-lines" id="over-lines"></div>
+    <button id="btn-again" class="btn btn-primary btn-again">PLAY AGAIN</button>
+    <button id="btn-home" class="btn btn-ghost btn-sm">HOME</button>
+  </section>
+
+  <!-- ═══════════════ SHEETS ═══════════════ -->
+  <div id="sheet" class="sheet">
+    <div class="sheet-in">
+      <button id="sheet-x" class="sheet-x" type="button" aria-label="close">&times;</button>
+      <div id="sheet-body"></div>
+    </div>
+  </div>
+
+</div>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   YAHTZEE — solo score-attack rules engine.
+
+   Thirteen turns. Three rolls a turn. Keep what you like, reroll the rest,
+   then spend the dice on exactly one of thirteen boxes. Every box is spent
+   once. The clock is the scorecard.
+
+   Standard published rules: the 35-point upper bonus at 63, the 100-point
+   Yahtzee bonus, and the joker rules in full.
+
+   Everything in this file is pure logic — no DOM, no timers, no audio. The
+   UI and the headless bot fleet both drive it through the same `roll()` /
+   `hold()` / `take()` calls, which is the only way the two can be
+   guaranteed to agree about what a game is.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+
+/* ───────────────────────── RNG ─────────────────────────
+   Two dice sources, and the difference between them is a design decision
+   the fleet measures rather than a matter of taste (see §3 of the doc).
+
+   'stream'  a single sequential PRNG, the way every dice game does it.
+   'tape'    every (turn, roll) owns a fixed five-value tape derived from
+             the seed alone. Rerolling k dice consumes the first k of that
+             turn's tape. Two players who make the SAME decision therefore
+             see the SAME dice, which is what makes a shared daily seed a
+             shared puzzle instead of a shared starting position.
+
+   The tape is unbiased: each tape value is iid U{1..6}, and a prefix of an
+   iid sequence is iid. The player cannot peek — they only ever observe the
+   prefix they consumed, and each (turn, roll) draws from its own tape, so
+   nothing learned on one roll says anything about the next.
+   ─────────────────────────────────────────────────────── */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Avalanche hash — three rounds, because two rounds leaves visible
+   structure across adjacent turns and the tape is indexed by small ints. */
+function hash32(a, b, c) {
+  let h = (a ^ 0x9E3779B9) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85EBCA6B) >>> 0;
+  h = (h + Math.imul(b | 0, 0xC2B2AE35)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x27D4EB2F) >>> 0;
+  h = (h + Math.imul(c | 0, 0x165667B1)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x9E3779B1) >>> 0;
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+/* The five values available to (turn, roll). Deterministic in the seed. */
+function tapeFor(seed, turn, roll) {
+  const rnd = mulberry32(hash32(seed >>> 0, turn * 3 + roll, 0x5EED));
+  rnd(); rnd();                       // discard two — the first draw off a
+                                      // freshly-seeded mulberry32 correlates
+                                      // with the seed low bits
+  const t = new Array(5);
+  for (let i = 0; i < 5; i++) t[i] = 1 + ((rnd() * 6) | 0);
+  return t;
+}
+
+/* ───────────────────────── THE CARD ─────────────────────────
+   Index is the currency: 0..5 are the upper boxes (aces..sixes), 6..12 the
+   lower. Order matters — it is the render order and the bitmask order.
+   ──────────────────────────────────────────────────────────── */
+const CATS = [
+  { key: 'ones',   name: 'Aces',            sec: 'up', face: 1, hint: 'Count and add only 1s' },
+  { key: 'twos',   name: 'Twos',            sec: 'up', face: 2, hint: 'Count and add only 2s' },
+  { key: 'threes', name: 'Threes',          sec: 'up', face: 3, hint: 'Count and add only 3s' },
+  { key: 'fours',  name: 'Fours',           sec: 'up', face: 4, hint: 'Count and add only 4s' },
+  { key: 'fives',  name: 'Fives',           sec: 'up', face: 5, hint: 'Count and add only 5s' },
+  { key: 'sixes',  name: 'Sixes',           sec: 'up', face: 6, hint: 'Count and add only 6s' },
+  { key: 'k3',     name: 'Three of a Kind', sec: 'lo', hint: 'Add all five dice' },
+  { key: 'k4',     name: 'Four of a Kind',  sec: 'lo', hint: 'Add all five dice' },
+  { key: 'fh',     name: 'Full House',      sec: 'lo', hint: 'Three of one, two of another', fixed: 25 },
+  { key: 'ss',     name: 'Small Straight',  sec: 'lo', hint: 'Four in a row',  fixed: 30 },
+  { key: 'ls',     name: 'Large Straight',  sec: 'lo', hint: 'Five in a row',  fixed: 40 },
+  { key: 'yz',     name: 'YAHTZEE',         sec: 'lo', hint: 'Five of a kind', fixed: 50 },
+  { key: 'ch',     name: 'Chance',          sec: 'lo', hint: 'Add all five dice' }
+];
+const NCAT = 13, UP_END = 6;
+const K3 = 6, K4 = 7, FH = 8, SS = 9, LS = 10, YZ = 11, CH = 12;
+const BONUS_AT = 63, BONUS_VAL = 35, YZ_BONUS = 100;
+
+const CAT_INDEX = {};
+CATS.forEach(function (c, i) { CAT_INDEX[c.key] = i; });
+
+/* ───────────────────────── SCORING ─────────────────────────
+   `counts` is a 7-slot array indexed by face 1..6; counts[0] is unused so
+   that face arithmetic never needs an offset.
+   ─────────────────────────────────────────────────────────── */
+function countsOf(dice) {
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < dice.length; i++) c[dice[i]]++;
+  return c;
+}
+function sumOf(counts) {
+  let s = 0;
+  for (let f = 1; f <= 6; f++) s += counts[f] * f;
+  return s;
+}
+function maxCount(counts) {
+  let m = 0;
+  for (let f = 1; f <= 6; f++) if (counts[f] > m) m = counts[f];
+  return m;
+}
+function isYahtzee(counts) { return maxCount(counts) >= 5; }
+
+function runLength(counts) {
+  let best = 0, run = 0;
+  for (let f = 1; f <= 6; f++) {
+    if (counts[f] > 0) { run++; if (run > best) best = run; }
+    else run = 0;
+  }
+  return best;
+}
+
+/* Plain scoring — no joker, no bonus. `counts` only. */
+function rawScore(cat, counts) {
+  const sum = sumOf(counts), mx = maxCount(counts);
+  if (cat < UP_END) return counts[cat + 1] * (cat + 1);
+  switch (cat) {
+    case K3: return mx >= 3 ? sum : 0;
+    case K4: return mx >= 4 ? sum : 0;
+    /* "Three of one number and two of ANOTHER" — so five alike is NOT a
+       full house under ordinary rules. It only pays 25 as a JOKER, which
+       scoreFor handles before it ever reaches here. The distinction is
+       nearly unreachable in play (with the Yahtzee box open you take the
+       50) but it is the printed rule, and getting it wrong would quietly
+       hand out 25 points in a case the rules give 0. */
+    case FH: {
+      let has3 = false, has2 = false;
+      for (let f = 1; f <= 6; f++) {
+        if (counts[f] === 3) has3 = true;
+        if (counts[f] === 2) has2 = true;
+      }
+      return has3 && has2 ? 25 : 0;
+    }
+    case SS: return runLength(counts) >= 4 ? 30 : 0;
+    case LS: return runLength(counts) >= 5 ? 40 : 0;
+    case YZ: return mx >= 5 ? 50 : 0;
+    case CH: return sum;
+  }
+  return 0;
+}
+
+/* ── JOKER RULES ──────────────────────────────────────────────
+   A rolled Yahtzee is a joker when the YAHTZEE box is already filled —
+   with 50 *or* with 0. (The +100 bonus needs the 50; the placement rule
+   does not.) Placement is then forced in this order:
+
+     1. the matching upper box, if it is open — MANDATORY;
+     2. otherwise any open lower box, at full face value:
+        3K and 4K = sum of the dice, FH = 25, SS = 30, LS = 40, CH = sum;
+     3. otherwise any open upper box, which necessarily scores 0.
+   ───────────────────────────────────────────────────────────── */
+function jokerActive(counts, used) {
+  return isYahtzee(counts) && used[YZ];
+}
+
+/* What `cat` pays for these dice in this game state. */
+function scoreFor(cat, counts, S) {
+  if (jokerActive(counts, S.used)) {
+    if (cat >= UP_END) {
+      switch (cat) {
+        case FH: return 25;
+        case SS: return 30;
+        case LS: return 40;
+        case K3: case K4: case CH: return sumOf(counts);
+        case YZ: return 0;                 // already filled, never offered
+      }
+    }
+    return counts[cat + 1] * (cat + 1);    // the matching upper box, or 0
+  }
+  return rawScore(cat, counts);
+}
+
+/* Which open boxes may legally be chosen. Usually all of them; the joker
+   rule is the only thing that ever narrows it. */
+function legalCats(counts, S) {
+  const open = [];
+  for (let i = 0; i < NCAT; i++) if (!S.used[i]) open.push(i);
+  if (!jokerActive(counts, S.used)) return open;
+
+  const face = maxFace(counts);
+  if (!S.used[face - 1]) return [face - 1];           // forced upper
+  const lower = open.filter(function (i) { return i >= UP_END; });
+  return lower.length ? lower : open;                 // else lower, else a zero
+}
+function maxFace(counts) {
+  let f = 1, m = -1;
+  for (let g = 1; g <= 6; g++) if (counts[g] > m) { m = counts[g]; f = g; }
+  return f;
+}
+
+/* Does taking `cat` with these dice also pay the +100 chain bonus? */
+function bonusFor(counts, S) {
+  return isYahtzee(counts) && S.scores[YZ] === 50 ? YZ_BONUS : 0;
+}
+
+/* ───────────────────────── DICE TABLES ─────────────────────────
+   Built once, at load, and shared by every bot. Rebuilding these inside a
+   decision loop is the difference between a fleet that runs in seconds and
+   one that runs in hours.
+
+     ROLLS   the 252 distinct sorted five-dice outcomes
+     KEEPS   the 462 distinct multisets you can hold (sizes 0..5)
+     TRANS   for each keep, the distribution over the roll it becomes
+     SUBS    for each roll, the keeps that are sub-multisets of it (<= 32)
+   ─────────────────────────────────────────────────────────────── */
+const FACT = [1, 1, 2, 6, 24, 120];
+
+function multisets(size) {
+  const out = [];
+  (function rec(face, left, acc) {
+    if (face > 6) { if (left === 0) out.push(acc.slice()); return; }
+    for (let n = left; n >= 0; n--) { acc[face] = n; rec(face + 1, left - n, acc); }
+    acc[face] = 0;
+  })(1, size, [0, 0, 0, 0, 0, 0, 0]);
+  return out;
+}
+
+/* P(this exact multiset | rolling `n` fair dice) */
+function multiProb(counts, n) {
+  let p = FACT[n];
+  for (let f = 1; f <= 6; f++) p /= FACT[counts[f]];
+  return p / Math.pow(6, n);
+}
+
+const ROLLS = multisets(5);
+const ROLL_ID = {};
+function keyOf(counts) {
+  return counts[1] + ',' + counts[2] + ',' + counts[3] + ',' +
+         counts[4] + ',' + counts[5] + ',' + counts[6];
+}
+ROLLS.forEach(function (c, i) { ROLL_ID[keyOf(c)] = i; });
+const NROLL = ROLLS.length;                                   // 252
+
+const PROB5 = new Float64Array(NROLL);
+ROLLS.forEach(function (c, i) { PROB5[i] = multiProb(c, 5); });
+
+const KEEPS = [];
+for (let s = 0; s <= 5; s++) multisets(s).forEach(function (c) { KEEPS.push(c); });
+const KEEP_ID = {};
+KEEPS.forEach(function (c, i) { KEEP_ID[keyOf(c)] = i; });
+const NKEEP = KEEPS.length;                                   // 462
+const KEEP_SIZE = KEEPS.map(function (c) {
+  let s = 0; for (let f = 1; f <= 6; f++) s += c[f]; return s;
+});
+
+/* TRANS[k] = flat [rollIdx, prob, rollIdx, prob, ...] */
+const TRANS = KEEPS.map(function (keep, ki) {
+  const n = 5 - KEEP_SIZE[ki], flat = [];
+  multisets(n).forEach(function (add) {
+    const res = [0, 0, 0, 0, 0, 0, 0];
+    for (let f = 1; f <= 6; f++) res[f] = keep[f] + add[f];
+    flat.push(ROLL_ID[keyOf(res)], multiProb(add, n));
+  });
+  return flat;
+});
+
+/* SUBS[r] = the keep indices reachable by holding a subset of roll r */
+const SUBS = ROLLS.map(function (roll) {
+  const seen = [];
+  (function rec(face, acc) {
+    if (face > 6) { seen.push(KEEP_ID[keyOf(acc)]); return; }
+    for (let n = 0; n <= roll[face]; n++) { acc[face] = n; rec(face + 1, acc); }
+    acc[face] = 0;
+  })(1, [0, 0, 0, 0, 0, 0, 0]);
+  return seen;
+});
+
+/* ───────────────────────── GAME ─────────────────────────
+   One object, cloned nowhere. `roll()` throws, `hold()` toggles a die,
+   `take(cat)` spends the dice and ends the turn.
+   ──────────────────────────────────────────────────────── */
+function newGame(seed, mode) {
+  return {
+    seed: (seed >>> 0) || 1,
+    mode: (mode === 'stream' || mode === 'slot') ? mode : 'tape',
+    rnd: mulberry32(hash32(seed >>> 0, 0xA11CE, 0xD1CE)),
+    turn: 0,                      // 0..12
+    rollsUsed: 0,                 // 0..3 within the turn
+    dice: [0, 0, 0, 0, 0],
+    held: [false, false, false, false, false],
+    scores: new Array(NCAT).fill(null),
+    used: new Array(NCAT).fill(false),
+    yzBonus: 0,
+    yzCount: 0,                   // total Yahtzees rolled and scored
+    scratched: 0,                 // boxes taken for zero
+    log: [],
+    over: false
+  };
+}
+
+/* The turn's dice, from whichever source the game was created with. */
+function drawInto(S, slots) {
+  if (S.mode === 'tape') {
+    /* PREFIX consumption: rerolling k dice takes the first k of the tape.
+       Dice are indistinguishable, so the decision is "keep the two fives",
+       not "keep slots 0 and 3" — and two players who make the same
+       decision should see the same dice. */
+    const tape = tapeFor(S.seed, S.turn, S.rollsUsed);
+    for (let i = 0; i < slots.length; i++) S.dice[slots[i]] = tape[i];
+  } else if (S.mode === 'slot') {
+    /* POSITIONAL consumption: each slot owns its own tape value. Measured
+       against prefix in §3 of the design doc. */
+    const tape = tapeFor(S.seed, S.turn, S.rollsUsed);
+    for (let i = 0; i < slots.length; i++) S.dice[slots[i]] = tape[slots[i]];
+  } else {
+    for (let i = 0; i < slots.length; i++) S.dice[slots[i]] = 1 + ((S.rnd() * 6) | 0);
+  }
+}
+
+function roll(S) {
+  if (S.over || S.rollsUsed >= 3) return false;
+  const slots = [];
+  for (let i = 0; i < 5; i++) if (S.rollsUsed === 0 || !S.held[i]) slots.push(i);
+  if (!slots.length) return false;                 // all five held, nothing to do
+  drawInto(S, slots);
+  S.rollsUsed++;
+  return true;
+}
+
+function hold(S, i) {
+  if (S.over || S.rollsUsed === 0 || S.rollsUsed >= 3) return false;
+  S.held[i] = !S.held[i];
+  return true;
+}
+
+/* Hold exactly this multiset of faces, ignoring slot order. Used by bots
+   and by the "keep" replay path; the UI toggles individual dice instead. */
+function holdKeep(S, keepCounts) {
+  const want = keepCounts.slice();
+  for (let i = 0; i < 5; i++) {
+    const f = S.dice[i];
+    if (want[f] > 0) { want[f]--; S.held[i] = true; }
+    else S.held[i] = false;
+  }
+}
+
+function upperSum(S) {
+  let s = 0;
+  for (let i = 0; i < UP_END; i++) if (S.scores[i] !== null) s += S.scores[i];
+  return s;
+}
+function upperBonus(S) { return upperSum(S) >= BONUS_AT ? BONUS_VAL : 0; }
+
+function total(S) {
+  let s = 0;
+  for (let i = 0; i < NCAT; i++) if (S.scores[i] !== null) s += S.scores[i];
+  return s + upperBonus(S) + S.yzBonus;
+}
+
+function take(S, cat) {
+  if (S.over || S.used[cat] || S.rollsUsed === 0) return false;
+  const counts = countsOf(S.dice);
+  if (legalCats(counts, S).indexOf(cat) < 0) return false;
+
+  const gained = scoreFor(cat, counts, S);
+  const chain = bonusFor(counts, S);
+
+  S.scores[cat] = gained;
+  S.used[cat] = true;
+  S.yzBonus += chain;
+  if (isYahtzee(counts)) S.yzCount++;
+  if (gained === 0) S.scratched++;
+
+  S.log.push({
+    turn: S.turn, cat: cat, dice: S.dice.slice(),
+    score: gained, chain: chain, rolls: S.rollsUsed
+  });
+
+  S.turn++;
+  S.rollsUsed = 0;
+  S.held = [false, false, false, false, false];
+  if (S.turn >= NCAT) { S.over = true; S.dice = [0, 0, 0, 0, 0]; }
+  return true;
+}
+
+/* Every open box and what it would pay right now — this is the "live
+   preview" the scorecard renders. It is information about the player's own
+   dice, never a recommendation: it says what each box pays, and says
+   nothing about which one is worth taking. */
+function preview(S) {
+  if (S.rollsUsed === 0) return null;
+  const counts = countsOf(S.dice);
+  const legal = legalCats(counts, S);
+  const out = [];
+  for (let i = 0; i < NCAT; i++) {
+    if (S.used[i]) { out.push(null); continue; }
+    out.push({
+      value: scoreFor(i, counts, S),
+      legal: legal.indexOf(i) >= 0,
+      chain: bonusFor(counts, S)
+    });
+  }
+  return out;
+}
+
+/* ───────────────────────── VALUATION ─────────────────────────
+   The bots share one evaluator. It is an EXACT solve of the turn — every
+   keep subset, both reroll layers, the full 252x462 transition tables —
+   against a HEURISTIC valuation of the boxes still open. That split is
+   deliberate: the within-turn arithmetic is where a bot can be perfect
+   cheaply, and the across-turn planning is where the tuning lives.
+
+   PAR[c] is what an open box is worth to a competent player who still has
+   to fill it. Every constant here is tuned against `tools/solver.js`,
+   which solves the game exactly and answers 254.59.
+   ───────────────────────────────────────────────────────────── */
+const TUNE = {
+  /* Tuned by coordinate ascent under common random numbers — see
+     tools/tune.js. These are OPPORTUNITY COSTS, not expected scores: par[c]
+     is what spending box c costs you, so the high upper faces sit lower
+     than their averages because `bonusHope` already carries their real
+     value. Hand-set values that "looked right" scored 245.7; these score
+     251.7 on the same dice. */
+  par: [ 9.40,  8.40,  9.30, 11.80, 12.70, 17.20,      // aces..sixes
+        25.10, 15.20, 19.90, 31.10, 20.60, 14.40, 28.10 ], // 3K 4K FH SS LS YZ CH
+  bonusK: 0.30,          // logistic width on the 63 chase, per sqrt(sum f^2)
+  chain: 3.80            // value of one future turn with the Yahtzee box live
+};
+
+/* How much the 35 is worth from here.
+   The width of the logistic is NOT a constant: with five upper boxes still
+   open the remaining total is a sum of five noisy terms and the decision is
+   soft; with one box open it is nearly deterministic and the decision is
+   sharp. Box f contributes roughly 3f +/- 1.3f, so the remaining sum has SD
+   about k*sqrt(sum of f^2) and the width has to follow it. A fixed width
+   left the bot securing the bonus 56% of the time against the exact
+   solver's 68% — which was most of its whole gap to optimal. */
+function bonusHope(upSum, openUpMask, opt) {
+  if (upSum >= BONUS_AT) return BONUS_VAL;
+  let par = 0, cap = 0, vsum = 0;
+  for (let f = 1; f <= 6; f++) {
+    if (openUpMask & (1 << (f - 1))) { par += 3 * f; cap += 5 * f; vsum += f * f; }
+  }
+  const need = BONUS_AT - upSum;
+  if (need > cap) return 0;                       // arithmetically dead
+  const spread = opt.bonusK
+    ? opt.bonusK * Math.sqrt(vsum) + 0.6
+    : opt.bonusSpread;
+  return BONUS_VAL / (1 + Math.exp(-(par - need) / spread));
+}
+
+/* The bonus term as the bots see it. `bonusBlind` is what the noBonus
+   isolation bot flips: it deletes the 63-point chase and nothing else. */
+function hopeOf(opt, upSum, mask) {
+  return opt.bonusBlind ? 0 : bonusHope(upSum, mask, opt);
+}
+
+/* A closure over the current game state that values any final roll. */
+function makeEval(S, opt) {
+  const par = opt.par, chain = opt.chain;
+  const open = [];
+  for (let i = 0; i < NCAT; i++) if (!S.used[i]) open.push(i);
+  let parBase = 0;
+  for (let i = 0; i < open.length; i++) parBase += par[open[i]];
+
+  const upSum = upperSum(S);
+  let openUp = 0;
+  for (let i = 0; i < UP_END; i++) if (!S.used[i]) openUp |= 1 << i;
+  const hopeBase = hopeOf(opt, upSum, openUp);
+  const turnsAfter = NCAT - S.turn - 1;
+  const yzFilled = S.used[YZ], yzIs50 = S.scores[YZ] === 50;
+
+  /* value(rollIdx) -> { v, cat } */
+  function evalRoll(r, wantCat) {
+    const counts = ROLLS[r];
+    const five = counts[1] === 5 || counts[2] === 5 || counts[3] === 5 ||
+                 counts[4] === 5 || counts[5] === 5 || counts[6] === 5;
+    const joker = five && yzFilled;
+    const bonus = five && yzIs50 ? YZ_BONUS : 0;
+
+    /* legal set, inlined — this is the hot path */
+    let cats = open, forced = -1;
+    if (joker) {
+      let face = 1;
+      for (let g = 1; g <= 6; g++) if (counts[g] === 5) face = g;
+      if (!S.used[face - 1]) { forced = face - 1; }
+      else {
+        const lo = [];
+        for (let i = 0; i < open.length; i++) if (open[i] >= UP_END) lo.push(open[i]);
+        if (lo.length) cats = lo;
+      }
+    }
+    if (forced >= 0) cats = [forced];
+
+    let bv = -1e18, bc = cats[0];
+    for (let ci = 0; ci < cats.length; ci++) {
+      const c = cats[ci];
+      const g = joker ? jokerScore(c, counts) : rawScore(c, counts);
+      let v = g + bonus + (parBase - par[c]);
+      v += (c < UP_END)
+        ? hopeOf(opt, upSum + g, openUp & ~(1 << c))
+        : hopeBase;
+      const live = (c === YZ) ? (g === 50) : yzIs50;
+      if (live) v += chain * turnsAfter;
+      if (v > bv) { bv = v; bc = c; }
+    }
+    return wantCat ? bc : bv;
+  }
+  return evalRoll;
+}
+
+function jokerScore(cat, counts) {
+  if (cat >= UP_END) {
+    switch (cat) {
+      case FH: return 25;
+      case SS: return 30;
+      case LS: return 40;
+      case YZ: return 0;
+      default: return sumOf(counts);
+    }
+  }
+  return counts[cat + 1] * (cat + 1);
+}
+
+/* Scratch buffers — reused across every decision in the fleet. */
+const BUF_V = new Float64Array(NROLL);
+const BUF_K = new Float64Array(NKEEP);
+const BUF_N = new Float64Array(NROLL);
+
+/* Exact backward induction over the rerolls still to come.
+   Returns the Float64Array of keep values for the CURRENT decision. */
+function keepValues(S, rerollsLeft, opt) {
+  const evalRoll = makeEval(S, opt);
+  for (let r = 0; r < NROLL; r++) BUF_V[r] = evalRoll(r, false);
+
+  let layer = BUF_V;
+  for (let step = 0; step < rerollsLeft; step++) {
+    for (let k = 0; k < NKEEP; k++) {
+      const t = TRANS[k];
+      let s = 0;
+      for (let j = 0; j < t.length; j += 2) s += t[j + 1] * layer[t[j]];
+      BUF_K[k] = s;
+    }
+    if (step < rerollsLeft - 1) {
+      for (let r = 0; r < NROLL; r++) {
+        const subs = SUBS[r];
+        let m = -1e18;
+        for (let j = 0; j < subs.length; j++) {
+          const v = BUF_K[subs[j]];
+          if (v > m) m = v;
+        }
+        BUF_N[r] = m;
+      }
+      layer = BUF_N;
+    }
+  }
+  return BUF_K;
+}
+
+function currentRollId(S) { return ROLL_ID[keyOf(countsOf(S.dice))]; }
+
+/* Softmax pick over an option list. temp 0 is argmax; temp is in POINTS,
+   so temp 2 means "routinely gives away about two points a decision". */
+function pick(vals, idx, temp, rnd) {
+  let bi = idx[0], bv = -1e18;
+  for (let j = 0; j < idx.length; j++) if (vals[idx[j]] > bv) { bv = vals[idx[j]]; bi = idx[j]; }
+  if (!temp || temp <= 0 || idx.length === 1) return bi;
+  let tot = 0;
+  const w = new Array(idx.length);
+  for (let j = 0; j < idx.length; j++) {
+    w[j] = Math.exp((vals[idx[j]] - bv) / temp);
+    tot += w[j];
+  }
+  let x = rnd() * tot;
+  for (let j = 0; j < idx.length; j++) { x -= w[j]; if (x <= 0) return idx[j]; }
+  return bi;
+}
+
+/* Per-category values for the box decision, same maths as makeEval. */
+function catValues(S, opt) {
+  const par = opt.par, chain = opt.chain;
+  const counts = countsOf(S.dice);
+  const legal = legalCats(counts, S);
+  const upSum = upperSum(S);
+  let openUp = 0, parBase = 0;
+  for (let i = 0; i < NCAT; i++) {
+    if (S.used[i]) continue;
+    parBase += par[i];
+    if (i < UP_END) openUp |= 1 << i;
+  }
+  const hopeBase = hopeOf(opt, upSum, openUp);
+  const turnsAfter = NCAT - S.turn - 1;
+  const yzIs50 = S.scores[YZ] === 50;
+  const bonus = bonusFor(counts, S);
+
+  const vals = new Float64Array(NCAT);
+  for (let i = 0; i < NCAT; i++) vals[i] = -1e18;
+  for (let j = 0; j < legal.length; j++) {
+    const c = legal[j];
+    const g = scoreFor(c, counts, S);
+    let v = g + bonus + (parBase - par[c]);
+    v += (c < UP_END) ? hopeOf(opt, upSum + g, openUp & ~(1 << c)) : hopeBase;
+    const live = (c === YZ) ? (g === 50) : yzIs50;
+    if (live) v += chain * turnsAfter;
+    vals[c] = v;
+  }
+  return { vals: vals, legal: legal };
+}
+
+/* ───────────────────────── THE FLEET ─────────────────────────
+   `temp` is a softmax temperature in POINTS: temp 2.2 means the bot
+   routinely gives away about two points of expected value per decision,
+   which is what a strong but human player does. temp 0 is the machine.
+
+   The isolation bots each delete exactly ONE decision and keep the rest
+   perfect. That is what makes the ladder say *which* decisions carry the
+   skill, instead of only saying that some of them do.
+   ───────────────────────────────────────────────────────────── */
+function modalKeep(S) {
+  const counts = countsOf(S.dice);
+  let face = 1, best = -1;
+  for (let f = 1; f <= 6; f++) if (counts[f] >= best) { best = counts[f]; face = f; }
+  const k = [0, 0, 0, 0, 0, 0, 0];
+  k[face] = counts[face];
+  return k;
+}
+const KEEP_ALL = null;                              // sentinel: hold everything
+function allKeep(S) { return countsOf(S.dice); }
+function noneKeep() { return [0, 0, 0, 0, 0, 0, 0]; }
+
+function bestImmediate(S, rnd, temp) {
+  const counts = countsOf(S.dice);
+  const legal = legalCats(counts, S);
+  const vals = new Float64Array(NCAT);
+  for (let i = 0; i < NCAT; i++) vals[i] = -1e18;
+  for (let j = 0; j < legal.length; j++) vals[legal[j]] = scoreFor(legal[j], counts, S);
+  return pick(vals, legal, temp || 0, rnd);
+}
+
+function expertKeep(S, rerolls, rnd, opt, temp) {
+  const kv = keepValues(S, rerolls, opt);
+  return KEEPS[pick(kv, SUBS[currentRollId(S)], temp, rnd)];
+}
+function expertCat(S, rnd, opt, temp) {
+  const cv = catValues(S, opt);
+  return pick(cv.vals, cv.legal, temp, rnd);
+}
+
+function mk(opt, temp) {
+  return {
+    keep: function (S, r, rnd) { return expertKeep(S, r, rnd, opt, temp); },
+    cat:  function (S, rnd)    { return expertCat(S, rnd, opt, temp); }
+  };
+}
+const BLIND_BONUS = { par: TUNE.par, bonusK: TUNE.bonusK, chain: TUNE.chain, bonusBlind: true };
+/* chain 0 and NOTHING else changed — the point of an isolation bot is that
+   exactly one term is deleted, so the gap it opens is attributable. */
+const BLIND_CHAIN = { par: TUNE.par, bonusK: TUNE.bonusK, chain: 0 };
+
+const STRATS = {
+  /* honest play, in descending order of how hard it thinks */
+  expert: mk(TUNE, 0),
+  good:   mk(TUNE, 1.0),
+  casual: mk(TUNE, 2.2),
+  novice: mk(TUNE, 3.5),
+
+  /* isolation bots — perfect everywhere except one deleted decision */
+  noBonus: mk(BLIND_BONUS, 0),                      // ignores the 63 chase
+  noChain: mk(BLIND_CHAIN, 0),                      // ignores the Yahtzee chain
+  noReroll: {                                       // scores the first throw
+    keep: allKeep,
+    cat: function (S, rnd) { return bestImmediate(S, rnd, 0); }
+  },
+  randomKeep: {                                     // keeps blind, boxes perfectly
+    keep: function (S, r, rnd) {
+      const subs = SUBS[currentRollId(S)];
+      return KEEPS[subs[(rnd() * subs.length) | 0]];
+    },
+    cat: function (S, rnd) { return expertCat(S, rnd, TUNE, 0); }
+  },
+  randomCat: {                                      // keeps perfectly, boxes blind
+    keep: function (S, r, rnd) { return expertKeep(S, r, rnd, TUNE, 0); },
+    cat: function (S, rnd) {
+      const legal = legalCats(countsOf(S.dice), S);
+      return legal[(rnd() * legal.length) | 0];
+    }
+  },
+
+  /* degenerate — every one of these must lose to `casual` */
+  greedy:  { keep: modalKeep, cat: function (S, rnd) { return bestImmediate(S, rnd, 0); } },
+  topDown: {
+    keep: modalKeep,
+    cat: function (S) {
+      const legal = legalCats(countsOf(S.dice), S);
+      return legal[0];
+    }
+  },
+  chaser: {                                         // always hunts the modal face
+    keep: modalKeep,
+    cat: function (S, rnd) { return expertCat(S, rnd, TUNE, 0); }
+  },
+  noHold:  { keep: noneKeep, cat: function (S, rnd) { return bestImmediate(S, rnd, 0); } },
+  random:  {
+    keep: function (S, r, rnd) {
+      const subs = SUBS[currentRollId(S)];
+      return KEEPS[subs[(rnd() * subs.length) | 0]];
+    },
+    cat: function (S, rnd) {
+      const legal = legalCats(countsOf(S.dice), S);
+      return legal[(rnd() * legal.length) | 0];
+    }
+  }
+};
+
+/* Deterministic best play under an arbitrary parameter set. This is the
+   entry point the tuner drives: no softmax, no bot RNG, so two parameter
+   sets are compared on identical dice (common random numbers) and the
+   difference between them carries none of the game's own variance. */
+function bestKeep(S, rerolls, opt) {
+  const kv = keepValues(S, rerolls, opt || TUNE);
+  const subs = SUBS[currentRollId(S)];
+  let bi = subs[0], bv = -1e18;
+  for (let j = 0; j < subs.length; j++) if (kv[subs[j]] > bv) { bv = kv[subs[j]]; bi = subs[j]; }
+  return KEEPS[bi];
+}
+function bestCat(S, opt) {
+  const cv = catValues(S, opt || TUNE);
+  let bi = cv.legal[0], bv = -1e18;
+  for (let j = 0; j < cv.legal.length; j++) {
+    const c = cv.legal[j];
+    if (cv.vals[c] > bv) { bv = cv.vals[c]; bi = c; }
+  }
+  return bi;
+}
+function playWith(seed, opt, mode) {
+  const S = newGame(seed, mode);
+  while (!S.over) {
+    roll(S);
+    while (S.rollsUsed < 3) {
+      const keep = bestKeep(S, 3 - S.rollsUsed, opt);
+      let n = 0;
+      for (let f = 1; f <= 6; f++) n += keep[f];
+      if (n >= 5) break;
+      holdKeep(S, keep);
+      roll(S);
+    }
+    take(S, bestCat(S, opt));
+  }
+  return S;
+}
+
+function nameSalt(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+function simGame(seed, name, mode) {
+  const strat = STRATS[name];
+  if (!strat) throw new Error('no strategy ' + name);
+  const S = newGame(seed, mode);
+  const rnd = mulberry32(hash32(seed >>> 0, nameSalt(name), 0xB07));
+
+  while (!S.over) {
+    roll(S);
+    while (S.rollsUsed < 3) {
+      const keep = strat.keep(S, 3 - S.rollsUsed, rnd);
+      let n = 0;
+      for (let f = 1; f <= 6; f++) n += keep[f];
+      if (n >= 5) break;                            // holding all five ends the turn
+      holdKeep(S, keep);
+      roll(S);
+    }
+    take(S, strat.cat(S, rnd));
+  }
+  return {
+    total: total(S), upper: upperSum(S), bonus: upperBonus(S) > 0,
+    yz: S.scores[YZ] === 50, yzCount: S.yzCount, yzBonus: S.yzBonus,
+    scratched: S.scratched, state: S
+  };
+}
+
+function pct(sorted, p) {
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
+  return sorted[i];
+}
+
+function fleet(n, mode, only) {
+  n = n || 200;
+  const names = only || Object.keys(STRATS);
+  const rows = [];
+  names.forEach(function (name) {
+    const xs = [];
+    let bonus = 0, yz = 0, scratch = 0, chain = 0;
+    for (let i = 0; i < n; i++) {
+      const r = simGame(1000 + i * 7919, name, mode);
+      xs.push(r.total);
+      if (r.bonus) bonus++;
+      if (r.yz) yz++;
+      scratch += r.scratched;
+      chain += r.yzBonus;
+    }
+    const mean = xs.reduce(function (a, b) { return a + b; }, 0) / n;
+    const sd = Math.sqrt(xs.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / (n - 1));
+    xs.sort(function (a, b) { return a - b; });
+    rows.push({
+      strategy: name,
+      mean: +mean.toFixed(1),
+      se: +(sd / Math.sqrt(n)).toFixed(1),
+      sd: +sd.toFixed(1),
+      p10: pct(xs, 0.10), p50: pct(xs, 0.50), p90: pct(xs, 0.90),
+      bonusPct: +(100 * bonus / n).toFixed(1),
+      yzPct: +(100 * yz / n).toFixed(1),
+      chain: +(chain / n).toFixed(1),
+      scratch: +(scratch / n).toFixed(2)
+    });
+  });
+  rows.sort(function (a, b) { return b.mean - a.mean; });
+  return rows;
+}
+
+/* ───────────────────────── EXPORTS ───────────────────────── */
+const API = {
+  CATS: CATS, NCAT: NCAT, UP_END: UP_END, BONUS_AT: BONUS_AT,
+  BONUS_VAL: BONUS_VAL, YZ_BONUS: YZ_BONUS, CAT_INDEX: CAT_INDEX,
+  K3: K3, K4: K4, FH: FH, SS: SS, LS: LS, YZ: YZ, CH: CH,
+  TUNE: TUNE, STRATS: STRATS, ROLLS: ROLLS, KEEPS: KEEPS,
+
+  newGame: newGame, roll: roll, hold: hold, holdKeep: holdKeep, take: take,
+  preview: preview, total: total, upperSum: upperSum, upperBonus: upperBonus,
+  legalCats: legalCats, scoreFor: scoreFor, rawScore: rawScore,
+  countsOf: countsOf, sumOf: sumOf, isYahtzee: isYahtzee,
+  jokerActive: jokerActive, bonusFor: bonusFor,
+  tapeFor: tapeFor, mulberry32: mulberry32, hash32: hash32,
+
+  keepValues: keepValues, catValues: catValues, makeEval: makeEval,
+  simGame: simGame, fleet: fleet,
+  bestKeep: bestKeep, bestCat: bestCat, playWith: playWith, SUBS: SUBS
+};
+
+global.YZ_ENGINE = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = API;
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   YAHTZEE — presentation, input and flow.
+
+   Everything that decides anything lives in engine.js. This file renders
+   that state, collects taps, and makes the good moments loud. The split is
+   what lets the bot fleet and the screen be driven by the same rules.
+
+   Harness: `window.__YZ` (see the bottom). A backgrounded tab never fires
+   requestAnimationFrame, so anything verifying this game has to drive the
+   sim itself rather than wait for it.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+'use strict';
+
+const E = window.YZ_ENGINE;
+const $ = function (id) { return document.getElementById(id); };
+const el = function (tag, cls, txt) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+};
+const clamp = function (x, a, b) { return x < a ? a : x > b ? b : x; };
+
+/* ───────────────────────── AUDIO ─────────────────────────
+   Synthesised outright — no assets, so the single-file build stays a
+   single file. The streak ladder is the bible's: major pentatonic, real
+   intervals, three octaves. Every cue here has a visual twin, because a
+   large share of phone sessions are muted.
+   ───────────────────────────────────────────────────────── */
+const AU = {
+  ctx: null, on: true, master: null, noise: null,
+
+  boot: function () {
+    if (this.ctx || !this.on) return;
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) { this.on = false; return; }
+    this.ctx = new C();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.5;
+    this.master.connect(this.ctx.destination);
+    /* one shared noise buffer — rebuilding it per die is audible jank */
+    const n = this.ctx.sampleRate * 0.5;
+    this.noise = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  },
+  now: function () { return this.ctx ? this.ctx.currentTime : 0; },
+
+  tone: function (freq, dur, gain, type, when) {
+    if (!this.on || !this.ctx) return;
+    const t = this.now() + (when || 0);
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || 'triangle';
+    o.frequency.value = freq * (1 + (Math.random() - 0.5) * 0.014);   // ±0.7%
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.02);
+  },
+
+  /* a die hitting felt: a filtered noise burst with a short woody body */
+  clack: function (when, level) {
+    if (!this.on || !this.ctx) return;
+    const t = this.now() + (when || 0), v = level == null ? 1 : level;
+    const s = this.ctx.createBufferSource(); s.buffer = this.noise;
+    s.playbackRate.value = 0.7 + Math.random() * 0.7;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900 + Math.random() * 1400;
+    bp.Q.value = 1.1;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.13 * v, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
+    s.connect(bp); bp.connect(g); g.connect(this.master);
+    s.start(t); s.stop(t + 0.12);
+    this.tone(150 + Math.random() * 130, 0.06, 0.05 * v, 'square', when);
+  },
+
+  /* the ladder — degree by streak, capped at three octaves up */
+  DEG: [0, 2, 4, 7, 9],
+  ladder: function (n, when) {
+    const f = 360 * Math.pow(2, this.DEG[n % 5] / 12) * Math.pow(2, Math.min(n / 5 | 0, 3));
+    this.tone(f, 0.12, 0.16, 'triangle', when);
+    this.tone(f * 2, 0.035, 0.05, 'sine', (when || 0) + 0.01);
+  },
+  /* the ladder falling — a scratch is HEARD before it is read */
+  drop: function () {
+    if (!this.on || !this.ctx) return;
+    const t = this.now();
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(330, t);
+    o.frequency.exponentialRampToValueAtTime(78, t + 0.42);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.13, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 1500;
+    o.connect(lp); lp.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + 0.5);
+  },
+  fanfare: function (notes, step) {
+    const s = step || 0.085;
+    for (let i = 0; i < notes.length; i++) {
+      this.tone(notes[i], 0.3, 0.17, 'triangle', i * s);
+      this.tone(notes[i] * 2, 0.14, 0.05, 'sine', i * s + 0.01);
+    }
+  }
+};
+
+/* ───────────────────────── SHAKE ─────────────────────────
+   Trauma, cubed, with rotation — never set shake directly, or it reads as
+   a glitch instead of an impact. Presentation only: it cannot touch a
+   die, a score, or a decision.
+   ───────────────────────────────────────────────────────── */
+const SHAKE = {
+  t: 0, last: 0, raf: 0, reduced: false,
+  add: function (m) { this.t = clamp(this.t + m, 0, 1); this.run(); },
+  run: function () {
+    if (this.raf) return;
+    this.last = performance.now();
+    const self = this;
+    const step = function (now) {
+      const dt = Math.min(0.05, (now - self.last) / 1000);
+      self.last = now;
+      self.t = clamp(self.t - 1.2 * dt, 0, 1);
+      const s = self.t * self.t * self.t;
+      const r = self.root;
+      if (s < 0.001 || self.reduced) {
+        r.style.setProperty('--sx', '0px');
+        r.style.setProperty('--sy', '0px');
+        r.style.setProperty('--sr', '0deg');
+        self.raf = 0; self.t = 0; return;
+      }
+      const k = now * 0.025;
+      r.style.setProperty('--sx', (14 * s * nz(k, 11)).toFixed(2) + 'px');
+      r.style.setProperty('--sy', (14 * s * nz(k, 71)).toFixed(2) + 'px');
+      r.style.setProperty('--sr', (2.0 * s * nz(k, 131)).toFixed(3) + 'deg');
+      self.raf = requestAnimationFrame(step);
+    };
+    self.raf = requestAnimationFrame(step);
+  }
+};
+/* cheap smooth noise — value noise on a hashed lattice, not random(), so
+   the shake stays continuous and degrades gracefully when frames drop */
+function nz(t, seed) {
+  const i = Math.floor(t), f = t - i;
+  const a = h1(i, seed), b = h1(i + 1, seed);
+  const u = f * f * (3 - 2 * f);
+  return a + (b - a) * u;
+}
+function h1(i, s) {
+  let x = Math.imul(i ^ s, 0x27d4eb2d);
+  x ^= x >>> 15; x = Math.imul(x, 0x85ebca6b); x ^= x >>> 13;
+  return ((x >>> 0) / 4294967295) * 2 - 1;
+}
+
+/* ───────────────────────── PARTICLES ───────────────────────── */
+const FX = { live: 0, CAP: 300 };
+FX.burst = function (x, y, tier, hue) {
+  if (SHAKE.reduced) tier = Math.min(tier, 1);
+  const n = Math.min(10 + tier * 6, this.CAP - this.live);
+  const spread = (90 + tier * 30) * Math.PI / 180;
+  for (let i = 0; i < n; i++) {
+    const p = el('i', 'spark');
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * spread;
+    const sp = 130 + Math.random() * 210;
+    const life = 550 + Math.random() * 400;
+    p.style.left = x + 'px'; p.style.top = y + 'px';
+    p.style.background = hue || 'var(--gold)';
+    const s = 5 + Math.random() * 7;
+    p.style.width = p.style.height = s + 'px';
+    p.style.borderRadius = Math.random() < 0.4 ? '50%' : '2px';
+    $('fx').appendChild(p); this.live++;
+    const dx = Math.cos(a) * sp * life / 1000;
+    const dy = Math.sin(a) * sp * life / 1000 + 300 * Math.pow(life / 1000, 2) * 0.5;
+    const an = p.animate([
+      { transform: 'translate(-50%,-50%) scale(1) rotate(0deg)', opacity: 1 },
+      { transform: 'translate(' + (dx - 50) + '%,' + (dy - 50) + '%) scale(.2) rotate(' +
+        ((Math.random() - 0.5) * 540) + 'deg)', opacity: 0 }
+    ], { duration: life, easing: 'cubic-bezier(.2,.6,.35,1)' });
+    const self = this;
+    an.onfinish = function () { p.remove(); self.live--; };
+  }
+};
+FX.float = function (x, y, txt, cls) {
+  const n = el('b', 'float' + (cls ? ' ' + cls : ''), txt);
+  n.style.left = x + 'px'; n.style.top = y + 'px';
+  if (cls === 'cold') n.style.color = 'var(--red)';
+  $('fx').appendChild(n);
+  setTimeout(function () { n.remove(); }, 820);
+};
+FX.shout = function (txt, cold) {
+  const s = $('shout');
+  s.innerHTML = '';
+  s.appendChild(el('b', null, txt));
+  s.className = 'shout' + (cold ? ' cold' : '');
+  void s.offsetWidth;
+  s.classList.add('on');
+  setTimeout(function () { s.classList.remove('on'); }, 1100);
+};
+
+/* ───────────────────────── STATE ───────────────────────── */
+const G = {
+  S: null, mode: 'daily', seed: 1, rolling: false, frozen: false,
+  streak: 0, best: 0, bestLabel: '', started: false
+};
+
+/* Expected cumulative total after each turn under the shipping expert bot,
+   measured over 4000 games (tools/pace.js). This is the PACE line: a fixed,
+   public benchmark the player is measured against, exactly like the bible's
+   rival marker. It says how you are doing. It never says what to do. */
+const PACE = [23, 45, 66, 86, 105, 125, 144, 164, 184, 203, 222, 238, 252];
+
+/* ───────────────────────── DICE ─────────────────────────
+   Orientation that brings face N to the front. The face the player reads
+   IS engine state — there is no second copy of the number to drift.
+   ───────────────────────────────────────────────────────── */
+const ORI = { 1: [0, 0], 2: [90, 0], 3: [0, -90], 4: [0, 90], 5: [-90, 0], 6: [0, 180] };
+const PIPS = {
+  1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8],
+  5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8]
+};
+const DICE = [];
+
+function buildDie(idx, small) {
+  const d = el('div', 'die');
+  d.dataset.i = idx;
+  if (!small) {
+    /* A div with a click handler is invisible to a keyboard and to a screen
+       reader. The scorecard rows are real <button>s already; the dice need
+       the same affordances without becoming buttons, because a <button>
+       cannot host a preserve-3d subtree reliably. */
+    d.setAttribute('role', 'button');
+    d.setAttribute('tabindex', '0');
+    d.setAttribute('aria-pressed', 'false');
+  } else {
+    d.setAttribute('aria-hidden', 'true');
+  }
+  if (small) d.style.setProperty('--d', '38px');
+  const c = el('div', 'cube');
+  for (let f = 1; f <= 6; f++) {
+    const face = el('div', 'face f' + f);
+    for (let p = 0; p < 9; p++) {
+      face.appendChild(el('i', PIPS[f].indexOf(p) >= 0 ? '' : 'blank'));
+    }
+    c.appendChild(face);
+  }
+  d.appendChild(c);
+  return d;
+}
+
+function buildTray() {
+  const tray = $('tray');
+  tray.innerHTML = ''; DICE.length = 0;
+  for (let i = 0; i < 5; i++) {
+    const d = buildDie(i);
+    const st = { node: d, cube: d.querySelector('.cube'), rx: 0, ry: 0, val: 1 };
+    DICE.push(st);
+    d.addEventListener('click', function () { onDie(i); });
+    d.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault(); onDie(i);
+      }
+    });
+    tray.appendChild(d);
+  }
+}
+
+/* Point a die at `val`, optionally tumbling there. Extra turns always go
+   the same way, so a die never appears to un-spin. */
+function faceDie(st, val, tumble, delay) {
+  const o = ORI[val];
+  let rx = o[0], ry = o[1];
+  if (tumble) {
+    const nx = 1 + ((Math.random() * 2) | 0), ny = 2 + ((Math.random() * 2) | 0);
+    rx += 360 * (Math.ceil((st.rx - rx) / 360) + nx);
+    ry += 360 * (Math.ceil((st.ry - ry) / 360) + ny);
+  } else {
+    rx += 360 * Math.round((st.rx - rx) / 360);
+    ry += 360 * Math.round((st.ry - ry) / 360);
+  }
+  st.rx = rx; st.ry = ry; st.val = val;
+  const set = function () {
+    st.cube.style.setProperty('--rx', rx + 'deg');
+    st.cube.style.setProperty('--ry', ry + 'deg');
+    if (tumble) {
+      st.node.classList.remove('settle');
+      void st.node.offsetWidth;
+      st.node.classList.add('settle');
+    }
+  };
+  if (delay) setTimeout(set, delay); else set();
+}
+
+/* Held / dead / pre are pure functions of engine state, so render() owns
+   them too. Keeping them only in paintDice left every path that changed a
+   hold without repainting showing stale dice. */
+function syncDiceState() {
+  const S = G.S;
+  if (!S || !DICE.length) return;
+  const pre = S.rollsUsed === 0 || S.over;
+  for (let i = 0; i < 5; i++) {
+    const n = DICE[i].node, held = !!S.held[i] && !pre;
+    n.classList.toggle('held', held);
+    n.classList.toggle('pre', pre);
+    const dead = pre || S.rollsUsed >= 3;
+    n.classList.toggle('dead', dead);
+    n.setAttribute('aria-pressed', held ? 'true' : 'false');
+    n.setAttribute('aria-label', 'die showing ' + (S.dice[i] || '—') +
+                   (held ? ', kept' : '') + (dead ? ', locked' : ''));
+    n.setAttribute('tabindex', dead ? '-1' : '0');
+  }
+}
+
+function paintDice(tumbleMask) {
+  const S = G.S;
+  syncDiceState();
+  for (let i = 0; i < 5; i++) {
+    const st = DICE[i], v = S.dice[i] || 1;
+    const tumble = tumbleMask && tumbleMask[i];
+    faceDie(st, v, tumble, tumble ? i * 46 : 0);
+    if (tumble) {
+      AU.clack(i * 0.046 + 0.02, 0.9);
+      AU.clack(i * 0.046 + 0.13 + Math.random() * 0.05, 0.55);
+    }
+  }
+}
+
+/* ───────────────────────── SCORECARD ───────────────────────── */
+const ROWS = [];
+function buildCard() {
+  const up = $('rows-up'), lo = $('rows-lo');
+  up.innerHTML = ''; lo.innerHTML = ''; ROWS.length = 0;
+  for (let i = 0; i < E.NCAT; i++) {
+    const c = E.CATS[i];
+    const b = el('button', 'row');
+    b.type = 'button';
+    b.appendChild(el('span', 'n', c.name));
+    b.appendChild(el('span', 'v', '·'));
+    b.dataset.cat = i;
+    b.addEventListener('click', function () { onTake(i); });
+    ROWS.push(b);
+    (c.sec === 'up' ? up : lo).appendChild(b);
+  }
+}
+
+function render() {
+  const S = G.S;
+  if (!S) return;
+  syncDiceState();
+  const pv = E.preview(S);
+  const live = S.rollsUsed > 0 && !S.over;
+
+  for (let i = 0; i < E.NCAT; i++) {
+    const r = ROWS[i], v = r.querySelector('.v');
+    r.className = 'row';
+    if (S.used[i]) {
+      r.classList.add('done');
+      if (S.scores[i] === 0) r.classList.add('zero');
+      v.textContent = S.scores[i];
+      r.disabled = true;
+      r.setAttribute('aria-label', E.CATS[i].name + ', scored ' + S.scores[i]);
+    } else if (live && pv[i]) {
+      r.classList.add('live');
+      if (!pv[i].legal) r.classList.add('illegal');
+      if (pv[i].value === 0) r.classList.add('nil');
+      v.textContent = pv[i].value;
+      r.disabled = !pv[i].legal;
+      r.setAttribute('aria-label', E.CATS[i].name + ', would score ' + pv[i].value +
+        (pv[i].legal ? '' : ', not allowed by the joker rule'));
+    } else {
+      v.textContent = '·';
+      r.disabled = true;
+      r.setAttribute('aria-label', E.CATS[i].name + ', open');
+    }
+  }
+
+  /* HUD */
+  const up = E.upperSum(S), tot = E.total(S);
+  $('up-sum').textContent = up;
+  let loSum = 0;
+  for (let i = E.UP_END; i < E.NCAT; i++) if (S.scores[i] !== null) loSum += S.scores[i];
+  $('lo-sum').textContent = loSum + S.yzBonus;
+  if (!counting) $('hud-total').textContent = tot;
+  $('hud-turn').innerHTML = Math.min(S.turn + 1, 13) + '<i>/13</i>';
+
+  const pips = $('turn-pips');
+  if (pips.children.length !== 13) {
+    pips.innerHTML = '';
+    for (let i = 0; i < 13; i++) pips.appendChild(el('i'));
+  }
+  for (let i = 0; i < 13; i++) pips.children[i].classList.toggle('on', i < S.turn);
+
+  /* the 63 chase — an owned, losable quantity, and it can die outright */
+  const cell = $('hud-bonus-cell'), row = $('bonusrow');
+  let cap = 0;
+  for (let i = 0; i < E.UP_END; i++) if (!S.used[i]) cap += 5 * (i + 1);
+  const need = E.BONUS_AT - up;
+  cell.classList.remove('is-got', 'is-dead');
+  row.classList.remove('is-got', 'is-dead');
+  if (up >= E.BONUS_AT) {
+    cell.classList.add('is-got'); row.classList.add('is-got');
+    $('hud-bonus').textContent = '✓';
+    $('br-v').textContent = '+35';
+  } else if (need > cap) {
+    cell.classList.add('is-dead'); row.classList.add('is-dead');
+    $('hud-bonus').textContent = '—';
+    $('br-v').textContent = 'GONE';
+  } else {
+    $('hud-bonus').textContent = need;
+    $('br-v').textContent = '+35';
+  }
+  $('bonus-fill').style.width = clamp(100 * up / E.BONUS_AT, 0, 100) + '%';
+
+  /* the Yahtzee chain — lit while it can still pay, SHOUTING when it is
+     about to. The +100 is the biggest number in the game and the player
+     must see it is on the table before they choose where to spend it. */
+  const cr = $('chainrow');
+  const pending = live && pv.some(function (x) { return x && x.chain > 0; });
+  cr.classList.toggle('live', S.scores[E.YZ] === 50);
+  cr.classList.toggle('pending', pending);
+  $('chain-v').textContent = pending ? '+100'
+    : (S.yzBonus ? '+' + S.yzBonus
+    : (S.scores[E.YZ] === 50 ? 'LIVE' : '—'));
+
+  /* rolls left */
+  const rolls = $('rolls');
+  if (rolls.children.length !== 3) {
+    rolls.innerHTML = '';
+    for (let i = 0; i < 3; i++) rolls.appendChild(el('i'));
+  }
+  for (let i = 0; i < 3; i++) {
+    rolls.children[i].className = i < S.rollsUsed ? 'spent' : 'on';
+  }
+
+  /* the one button */
+  const btn = $('btn-roll'), lab = $('roll-label'), hint = $('act-hint');
+  const canRoll = !S.over && S.rollsUsed < 3 && !G.rolling &&
+                  (S.rollsUsed === 0 || S.held.some(function (h) { return !h; }));
+  btn.disabled = !canRoll;
+  if (S.over) { lab.textContent = 'DONE'; hint.textContent = ''; }
+  else if (S.rollsUsed === 0) { lab.textContent = 'ROLL'; hint.textContent = ''; }
+  else if (S.rollsUsed >= 3) { lab.textContent = 'PICK A BOX'; hint.textContent = 'no rolls left'; }
+  else if (!canRoll && !G.rolling) { lab.textContent = 'PICK A BOX'; hint.textContent = 'all five kept'; }
+  else { lab.textContent = 'ROLL AGAIN'; hint.textContent = 'tap dice to keep them'; }
+
+  /* The joker rule greys out boxes. Unexplained, that is baffling — this
+     says WHY, which is a rule, not a suggestion. */
+  if (live) {
+    const counts = E.countsOf(S.dice);
+    if (E.jokerActive(counts, S.used)) {
+      const legal = E.legalCats(counts, S);
+      hint.textContent = legal.length === 1
+        ? 'joker — must go in ' + E.CATS[legal[0]].name
+        : (legal[0] >= E.UP_END ? 'joker — any lower box, full value'
+                                : 'joker — no lower box left');
+    }
+  }
+  hint.classList.toggle('warn', S.rollsUsed >= 3 ||
+    (live && E.jokerActive(E.countsOf(S.dice), S.used)));
+
+  /* pace */
+  const p = $('pace');
+  if (S.turn === 0 || S.over) { p.textContent = ''; p.className = 'pace'; }
+  else {
+    const d = tot - PACE[S.turn - 1];
+    p.textContent = (d >= 0 ? '+' : '') + d + ' ON PACE';
+    p.className = 'pace ' + (d >= 0 ? 'up' : 'dn');
+  }
+}
+
+/* ───────────────────────── MOMENTS ─────────────────────────
+   Every one of these has a visual twin for a muted phone, and none of them
+   touches the sim — a shout is a shout, not a score.
+   ───────────────────────────────────────────────────────── */
+function centreOf(node) {
+  const a = node.getBoundingClientRect(), b = $('app').getBoundingClientRect();
+  return { x: a.left - b.left + a.width / 2, y: a.top - b.top + a.height / 2 };
+}
+
+function celebrate(cat, gained, chain, wasYahtzee) {
+  const p = centreOf(ROWS[cat]);
+  if (gained === 0) {
+    /* the costly mistake: heard falling, seen shattering, and it is the
+       player's own sentence — "I had to scratch sixes" */
+    G.streak = 0;
+    SHAKE.add(0.85);
+    AU.drop();
+    FX.burst(p.x, p.y, 1, 'var(--red)');
+    FX.float(p.x, p.y, '0', 'cold');
+    FX.shout('SCRATCHED', true);
+    return;
+  }
+  G.streak++;
+  const tier = G.streak >= 12 ? 3 : G.streak >= 8 ? 2 : G.streak >= 4 ? 1 : 0;
+  SHAKE.add(tier ? 0.5 : 0.28);
+  AU.ladder(G.streak);
+  FX.burst(p.x, p.y, tier, 'var(--gold)');
+  FX.float(p.x, p.y, '+' + gained);
+
+  if (chain) {
+    SHAKE.add(1.0);
+    FX.shout('+100');
+    AU.fanfare([523, 659, 784, 1047], 0.075);
+    FX.burst(195, 300, 4, 'var(--gold-hi)');
+  } else if (wasYahtzee && cat === E.YZ) {
+    SHAKE.add(1.0);
+    FX.shout('YAHTZEE!');
+    AU.fanfare([392, 523, 659, 784, 1047], 0.08);
+    FX.burst(195, 300, 4, 'var(--gold-hi)');
+  }
+}
+
+function bonusMoment() {
+  SHAKE.add(0.70);
+  FX.shout('+35 BONUS');
+  AU.fanfare([523, 659, 880], 0.09);
+  const p = centreOf($('bonusrow'));
+  FX.burst(p.x, p.y, 3, 'var(--gold-hi)');
+}
+
+/* ───────────────────────── FLOW ───────────────────────── */
+function show(id) {
+  ['screen-title', 'screen-game', 'screen-over'].forEach(function (s) {
+    $(s).classList.toggle('is-on', s === id);
+  });
+}
+
+function todaySeed() {
+  const d = new Date();
+  return (d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate()) >>> 0;
+}
+
+function start(mode, seed) {
+  AU.boot();
+  if (AU.ctx && AU.ctx.state === 'suspended') AU.ctx.resume();
+  G.mode = mode || 'free';
+  G.seed = seed != null ? (seed >>> 0)
+         : (G.mode === 'daily' ? todaySeed() : (Math.random() * 4294967295) >>> 0);
+  G.S = E.newGame(G.seed, 'tape');
+  G.streak = 0; G.rolling = false; G.started = true;
+  clearTimeout(rollTimer); rollTimer = 0;
+  clearTimeout(endTimer); endTimer = 0;
+  countGen++; counting = false;
+  const b = bestFor(G.seed, G.mode);
+  G.best = b.score; G.bestLabel = b.label;
+  show('screen-game');
+  buildTray();
+  sizeDice();
+  paintDice(null);
+  render();
+}
+
+/* The tumble is 780 ms and there are 39 of them in a game — half a minute
+   of dead input if a roll locks the screen. So it doesn't: ANY tap during a
+   tumble snaps the dice to rest instead of being swallowed, and the tap
+   after it does the thing. Predictable, and it removes the wait without
+   letting anyone hold a die whose face they cannot read yet. */
+let rollTimer = 0;
+function settleRoll() {
+  if (!G.rolling) return;
+  clearTimeout(rollTimer); rollTimer = 0;
+  G.rolling = false;
+  const S = G.S;
+  for (let i = 0; i < 5; i++) DICE[i].node.classList.remove('settle');
+  const counts = E.countsOf(S.dice);
+  if (!S.over && E.isYahtzee(counts)) {
+    SHAKE.add(0.9);
+    FX.shout('FIVE ALIKE');
+    AU.fanfare([523, 784, 1047], 0.07);
+    for (let i = 0; i < 5; i++) DICE[i].node.classList.add('hot');
+    setTimeout(function () {
+      for (let i = 0; i < 5; i++) DICE[i].node.classList.remove('hot');
+    }, 1400);
+  }
+  render();
+}
+
+function doRoll() {
+  const S = G.S;
+  if (G.rolling) { settleRoll(); return; }
+  if (!S || S.over || S.rollsUsed >= 3) return;
+  const mask = [];
+  for (let i = 0; i < 5; i++) mask.push(S.rollsUsed === 0 || !S.held[i]);
+  if (!mask.some(Boolean)) return;
+
+  if (!E.roll(S)) return;
+  G.rolling = true;
+  SHAKE.add(0.32);
+  paintDice(mask);
+  render();
+
+  /* frozen resolves SYNCHRONOUSLY — a backgrounded or frozen page never
+     runs the timer, and a test that waits for it hangs forever */
+  if (G.frozen) settleRoll();
+  else rollTimer = setTimeout(settleRoll, SHAKE.reduced ? 140 : 780);
+}
+
+function onDie(i) {
+  const S = G.S;
+  if (G.rolling) { settleRoll(); return; }
+  if (!S || S.over || S.rollsUsed === 0 || S.rollsUsed >= 3) return;
+  if (!E.hold(S, i)) return;
+  AU.clack(0, 0.5);
+  render();
+}
+
+function onTake(cat) {
+  const S = G.S;
+  if (G.rolling) { settleRoll(); return; }
+  if (!S || S.over || S.rollsUsed === 0 || S.used[cat]) return;
+  const counts = E.countsOf(S.dice);
+  if (E.legalCats(counts, S).indexOf(cat) < 0) return;
+
+  const upBefore = E.upperSum(S);
+  const wasY = E.isYahtzee(counts);
+  const chain = E.bonusFor(counts, S);
+  const before = E.total(S);
+
+  if (!E.take(S, cat)) return;
+  const gained = S.scores[cat];
+
+  ROWS[cat].classList.add('just');
+  setTimeout(function () { ROWS[cat].classList.remove('just'); }, 520);
+
+  celebrate(cat, gained, chain, wasY);
+  if (upBefore < E.BONUS_AT && E.upperSum(S) >= E.BONUS_AT) setTimeout(bonusMoment, 380);
+
+  countUp(before, E.total(S));
+  paintDice(null);
+  render();
+
+  if (S.over) { clearTimeout(endTimer); endTimer = setTimeout(finish, 1000); }
+}
+
+/* Generation-stamped, because an in-flight count-up outlives the game it
+   belongs to: start a new run mid-animation and the old rAF keeps writing
+   the OLD score over the new one. render() also stands off while a count
+   is running, or the two fight for the same node every frame. */
+let countGen = 0, counting = false;
+function countUp(from, to) {
+  const n = $('hud-total');
+  const gen = ++countGen;
+  n.classList.remove('pop'); void n.offsetWidth; n.classList.add('pop');
+  if (from === to) { counting = false; n.textContent = to; return; }
+  counting = true;
+  const t0 = performance.now(), dur = 260;
+  const step = function (t) {
+    if (gen !== countGen) return;
+    const k = clamp((t - t0) / dur, 0, 1);
+    n.textContent = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+    if (k < 1) requestAnimationFrame(step);
+    else counting = false;
+  };
+  requestAnimationFrame(step);
+}
+
+/* ───────────────────────── RESULT ─────────────────────────
+   Line two is THE GAP — the smallest TRUE thing they did not do. Never a
+   manufactured one, and never the score restated.
+   ───────────────────────────────────────────────────────── */
+let endTimer = 0;
+function finish() {
+  const S = G.S;
+  /* Guard, and mean it. The 1 s hand-off from the last box is a real
+     window: without this, a run started inside it gets its INCOMPLETE
+     score written to the result screen and saved as a run. */
+  if (!S || !S.over) return;
+  clearTimeout(endTimer); endTimer = 0;
+  const tot = E.total(S);
+  saveRun(G.seed, G.mode, tot);
+  show('screen-over');
+  SHAKE.add(0.6);
+
+  const n = $('over-score');
+  const t0 = performance.now();
+  const step = function (t) {
+    const k = clamp((t - t0) / 620, 0, 1);
+    n.textContent = Math.round(tot * (1 - Math.pow(1 - k, 3)));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+
+  const gap = $('over-gap');
+  const prevBest = G.best;
+  if (prevBest && tot > prevBest) {
+    gap.innerHTML = 'NEW BEST — <em>+' + (tot - prevBest) + '</em> on ' + G.bestLabel;
+    AU.fanfare([523, 659, 784, 1047, 1319], 0.085);
+    setTimeout(function () { FX.burst(195, 240, 4, 'var(--gold-hi)'); }, 200);
+  } else if (prevBest) {
+    gap.innerHTML = '<em>' + (prevBest - tot) + '</em> short of your best on ' + G.bestLabel;
+    AU.fanfare([523, 440], 0.11);
+  } else {
+    const d = PACE[12] - tot;
+    gap.innerHTML = d > 0 ? '<em>' + d + '</em> under par' : '<em>' + (-d) + '</em> over par';
+    AU.fanfare([523, 659, 784], 0.09);
+  }
+  $('over-k').textContent = G.mode === 'daily' ? "TODAY'S DICE" : 'FREE PLAY';
+
+  let upS = 0, loS = 0;
+  for (let i = 0; i < E.UP_END; i++) upS += S.scores[i];
+  for (let i = E.UP_END; i < E.NCAT; i++) loS += S.scores[i];
+  const lines = $('over-lines'); lines.innerHTML = '';
+  const add = function (k, v, good) {
+    const d = el('div'); d.appendChild(el('span', null, k));
+    d.appendChild(el('b', null, v));
+    if (good) d.classList.add('good');
+    lines.appendChild(d);
+  };
+  add('Upper', String(upS));
+  add('Bonus at 63', E.upperBonus(S) ? '+35' : '—', E.upperBonus(S) > 0);
+  add('Lower', String(loS));
+  add('Yahtzee bonus', S.yzBonus ? '+' + S.yzBonus : '—', S.yzBonus > 0);
+  add('Boxes scratched', String(S.scratched));
+  add('Par', String(PACE[12]));
+
+  /* the retry button is live only after the gap has had time to be read */
+  const again = $('btn-again');
+  again.disabled = true;
+  setTimeout(function () { again.disabled = false; }, 450);
+}
+
+/* ───────────────────────── STORAGE ─────────────────────────
+   Display only. Nothing here changes a die, a rule or a score — the run is
+   the whole game, every time.
+   ───────────────────────────────────────────────────────── */
+const LS = 'yz.runs.v1';
+function loadRuns() {
+  try { return JSON.parse(localStorage.getItem(LS)) || []; } catch (e) { return []; }
+}
+function saveRun(seed, mode, score) {
+  const runs = loadRuns();
+  runs.push({ s: seed >>> 0, m: mode, v: score, t: Date.now() });
+  while (runs.length > 200) runs.shift();
+  try { localStorage.setItem(LS, JSON.stringify(runs)); } catch (e) {}
+  return runs;
+}
+/* A daily score is only comparable to another score on the SAME dice, so
+   "your best" means best on this seed. Free play has no fixed dice, so it
+   falls back to an all-time best and says so. */
+function bestFor(seed, mode) {
+  const runs = loadRuns();
+  if (mode === 'daily') {
+    const same = runs.filter(function (r) { return r.s === (seed >>> 0); });
+    if (!same.length) return { score: 0, label: '' };
+    return { score: Math.max.apply(null, same.map(function (r) { return r.v; })),
+             label: 'these dice' };
+  }
+  const free = runs.filter(function (r) { return r.m === 'free'; });
+  if (!free.length) return { score: 0, label: '' };
+  return { score: Math.max.apply(null, free.map(function (r) { return r.v; })),
+           label: 'free play' };
+}
+
+/* ───────────────────────── SHEETS ───────────────────────── */
+function openSheet(html) {
+  $('sheet-body').innerHTML = html;
+  $('sheet').classList.add('on');
+}
+function closeSheet() { $('sheet').classList.remove('on'); }
+
+function scoringSheet() {
+  let h = '<h3>SCORING</h3><table>';
+  const band = function (t) {
+    return '<tr><td colspan="2" style="color:var(--gold);font-size:10px;' +
+           'letter-spacing:.14em;padding-top:12px">' + t + '</td></tr>';
+  };
+  h += band('UPPER');
+  for (let i = 0; i < E.NCAT; i++) {
+    const c = E.CATS[i];
+    if (i === E.UP_END) {
+      h += band('LOWER');
+    }
+    h += '<tr><td><b>' + c.name + '</b><br><span style="font-size:11px;opacity:.7">' +
+         c.hint + '</span></td><td>' + (c.fixed ? c.fixed : 'sum') + '</td></tr>';
+  }
+  h += '</table><p><b>Bonus.</b> Get the six upper boxes to <b>63</b> — three of each ' +
+       'face exactly — and take <b>+35</b>.</p>' +
+       '<p><b>Yahtzee bonus.</b> Once the YAHTZEE box holds 50, every further five-alike ' +
+       'pays <b>+100</b>, on top of whatever box you spend it in.</p>' +
+       '<p><b>Jokers.</b> With YAHTZEE already filled, a five-alike must go in its own ' +
+       'upper box if that is open. If it is not, any lower box takes it at full value — ' +
+       'Full House 25, Small Straight 30, Large Straight 40.</p>';
+  return h;
+}
+
+function runsSheet() {
+  const runs = loadRuns().slice().reverse();
+  if (!runs.length) return '<h3>YOUR RUNS</h3><p>Nothing yet. Play one.</p>';
+  const best = Math.max.apply(null, runs.map(function (r) { return r.v; }));
+  const mean = runs.reduce(function (a, r) { return a + r.v; }, 0) / runs.length;
+  let h = '<h3>YOUR RUNS</h3><div class="runs">';
+  h += '<div><span>Best</span><b>' + best + '</b></div>';
+  h += '<div><span>Average of ' + runs.length + '</span><b>' + mean.toFixed(0) + '</b></div>';
+  h += '<div><span>Par (expert pace)</span><b>' + PACE[12] + '</b></div></div>';
+  h += '<h3 style="margin-top:18px">LAST 12</h3><div class="runs">';
+  runs.slice(0, 12).forEach(function (r) {
+    const d = new Date(r.t);
+    h += '<div><span>' + (r.m === 'daily' ? 'Daily' : 'Free') + ' · ' +
+         (d.getMonth() + 1) + '/' + d.getDate() + '</span><b>' + r.v + '</b></div>';
+  });
+  return h + '</div>';
+}
+
+/* ───────────────────────── TITLE DEMO ─────────────────────────
+   Five dice idly tumbling. It is the zero-text tutorial: before a word is
+   read, the player has seen what the game is made of.
+   ───────────────────────────────────────────────────────── */
+const TITLE = [];
+function buildTitle() {
+  const t = $('title-dice');
+  t.innerHTML = ''; TITLE.length = 0;
+  for (let i = 0; i < 5; i++) {
+    const d = buildDie(i, true);
+    d.style.cursor = 'default';
+    TITLE.push({ node: d, cube: d.querySelector('.cube'), rx: 0, ry: 0, val: 1 });
+    t.appendChild(d);
+  }
+  tumbleTitle();
+}
+let titleTimer = 0;
+function tumbleTitle() {
+  clearTimeout(titleTimer);
+  if (!$('screen-title').classList.contains('is-on')) return;
+  for (let i = 0; i < 5; i++) {
+    faceDie(TITLE[i], 1 + ((Math.random() * 6) | 0), true, i * 70);
+  }
+  titleTimer = setTimeout(tumbleTitle, 2600);
+}
+
+/* The cube is only square if --d is EXACTLY the width the die gets. Let
+   flexbox pick the number and the faces separate from the body; measure it
+   and hand it back instead. */
+function sizeDice() {
+  const tray = $('tray');
+  if (!tray || !tray.clientWidth) return;
+  const gap = window.innerHeight <= 620 ? 7 : 9;
+  /* height-capped too: on a short screen the tray band is the thing that
+     shrank, and a die wider than the band it sits in overflows the row */
+  const cap = Math.min(66, Math.max(34, tray.clientHeight - 14));
+  const d = Math.max(30, Math.floor(Math.min(cap, (tray.clientWidth - gap * 4) / 5)));
+  document.documentElement.style.setProperty('--d', d + 'px');
+}
+
+function refreshTitleStat() {
+  const runs = loadRuns();
+  const box = $('title-stat');
+  if (!runs.length) { box.hidden = true; return; }
+  box.hidden = false;
+  $('ts-best').textContent = Math.max.apply(null, runs.map(function (r) { return r.v; }));
+  $('ts-avg').textContent = Math.round(
+    runs.reduce(function (a, r) { return a + r.v; }, 0) / runs.length);
+  $('ts-par').textContent = PACE[12];
+}
+
+/* ───────────────────────── WIRING ───────────────────────── */
+function wire() {
+  SHAKE.root = $('screen-game');
+  SHAKE.reduced = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  buildCard();
+  buildTitle();
+  sizeDice();
+  window.addEventListener('resize', sizeDice);
+  window.addEventListener('orientationchange', function () { setTimeout(sizeDice, 120); });
+
+  $('btn-daily').addEventListener('click', function () { start('daily'); });
+  $('btn-free').addEventListener('click', function () { start('free'); });
+  $('btn-roll').addEventListener('click', doRoll);
+  $('btn-again').addEventListener('click', function () { start(G.mode, G.mode === 'daily' ? G.seed : null); });
+  $('btn-home').addEventListener('click', function () {
+    refreshTitleStat(); show('screen-title'); tumbleTitle();
+  });
+  $('btn-card').addEventListener('click', function () { openSheet(scoringSheet()); });
+  $('btn-best').addEventListener('click', function () { openSheet(runsSheet()); });
+  $('sheet-x').addEventListener('click', closeSheet);
+  $('sheet').addEventListener('click', function (e) { if (e.target === $('sheet')) closeSheet(); });
+
+  refreshTitleStat();
+
+  const dl = $('daily-label');
+  const d = new Date();
+  dl.textContent = 'everyone rolls the same · ' + (d.getMonth() + 1) + '/' + d.getDate();
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) clearTimeout(titleTimer);
+    else tumbleTitle();
+  });
+}
+
+/* ───────────────────────── HARNESS ─────────────────────────
+   A backgrounded tab never fires requestAnimationFrame and clamps
+   setTimeout to about 1/s, so any verification pass has to drive the game
+   rather than watch it. `freeze(true)` also stops the roll settle timer,
+   which is what otherwise moves the dice out from under a screenshot.
+
+   Two paths on purpose:
+     roll/hold/take   drive the engine directly (fast, headless)
+     tap*             dispatch REAL clicks on the REAL nodes
+   Bugs live in the second one. Test both.
+   ───────────────────────────────────────────────────────── */
+const H = {
+  E: E, G: G, AU: AU, PACE: PACE,
+
+  freeze: function (on, lockInput) {
+    G.frozen = !!on;
+    SHAKE.reduced = !!on || SHAKE.reduced;
+    if (on) { clearTimeout(titleTimer); SHAKE.t = 0; }
+    if (lockInput !== false) $('app').style.pointerEvents = on ? 'none' : '';
+    return G.frozen;
+  },
+  mute: function (on) { AU.on = !on; return AU.on; },
+  start: function (seed, mode) { start(mode || 'free', seed); return G.S; },
+  state: function () { return G.S; },
+  render: render,
+
+  /* engine path */
+  roll: function () { const r = E.roll(G.S); paintDice(null); render(); return r; },
+  hold: function (i) { const r = E.hold(G.S, i); paintDice(null); render(); return r; },
+  keep: function (counts) { E.holdKeep(G.S, counts); paintDice(null); render(); return G.S.held.slice(); },
+  take: function (c) { const r = E.take(G.S, c); paintDice(null); render(); return r; },
+  setDice: function (arr) {                    /* force a board, for edge cases */
+    for (let i = 0; i < 5; i++) G.S.dice[i] = arr[i];
+    if (G.S.rollsUsed === 0) G.S.rollsUsed = 1;
+    paintDice(null); render(); return G.S.dice.slice();
+  },
+
+  /* real DOM path */
+  tapRoll: function () { $('btn-roll').click(); return !$('btn-roll').disabled; },
+  tapDie: function (i) { DICE[i].node.click(); return G.S.held[i]; },
+  tapRow: function (c) { ROWS[c].click(); return G.S.used[c]; },
+  faceShown: function (i) { return DICE[i].val; },
+  rowText: function (c) { return ROWS[c].textContent; },
+  screen: function () {
+    return ['screen-title', 'screen-game', 'screen-over']
+      .filter(function (s) { return $(s).classList.contains('is-on'); })[0];
+  },
+  HUD: function () {
+    const box = function (n) {
+      const a = n.getBoundingClientRect();
+      return { x: a.left + a.width / 2, y: a.top + a.height / 2, w: a.width, h: a.height };
+    };
+    return {
+      roll: box($('btn-roll')),
+      dice: DICE.map(function (d) { return box(d.node); }),
+      rows: ROWS.map(function (r) { return box(r); }),
+      total: $('hud-total').textContent,
+      turn: $('hud-turn').textContent,
+      bonus: $('hud-bonus').textContent,
+      pace: $('pace').textContent
+    };
+  },
+
+  /* play a whole game through the ENGINE with a fleet strategy, then paint */
+  autoplay: function (name) {
+    const strat = E.STRATS[name || 'expert'];
+    const rnd = E.mulberry32(E.hash32(G.seed, 7, 11));
+    while (!G.S.over) {
+      E.roll(G.S);
+      while (G.S.rollsUsed < 3) {
+        const k = strat.keep(G.S, 3 - G.S.rollsUsed, rnd);
+        let n = 0; for (let f = 1; f <= 6; f++) n += k[f];
+        if (n >= 5) break;
+        E.holdKeep(G.S, k); E.roll(G.S);
+      }
+      E.take(G.S, strat.cat(G.S, rnd));
+    }
+    paintDice(null); render();
+    /* run the REAL end-of-game path, or the result screen never gets tested */
+    if (G.S.over) finish();
+    return E.total(G.S);
+  },
+  finish: function () { finish(); return $('over-score').textContent; },
+
+  fleet: function (n, mode, only) { return E.fleet(n, mode, only); },
+  simGame: function (seed, name, mode) { return E.simGame(seed, name, mode); }
+};
+window.__YZ = H;
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+else wire();
+
+})();
+</script>
+</body>
+</html>
