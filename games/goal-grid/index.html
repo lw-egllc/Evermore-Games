@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#8ED081">
+<title>GOAL GRID — Swipe the ball into the net</title>
+<style>
+  /* House style shared with Parking Jam Rush: bright daytime green, white
+     rounded cards and pills, dark blue-grey ink, coral buttons with a hard
+     bottom shadow, system sans. */
+  :root{
+    --ground:#8ED081; --ink:#2B3A4A; --ink-soft:#7A8A99; --ink-faint:#9AA7B4;
+    --coral:#FF6B6B; --coral-dark:#D14D4D; --yellow:#FFD93D; --yellow-dark:#D9B21E;
+    --green:#6BCB77; --green-dark:#4CA658; --blue:#4D96FF;
+    --card-shadow:0 12px 40px rgba(0,0,0,.35);
+    --sans:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;
+    user-select:none;-webkit-user-select:none;}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--ground);
+    font-family:var(--sans);color:var(--ink);overscroll-behavior:none;touch-action:none;}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;}
+  .hide{display:none !important;}
+  button{font-family:var(--sans);}
+
+  #ui{position:fixed;inset:0;pointer-events:none;
+      padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right))
+              max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));}
+
+  /* ---------- HUD: white pills, label over number ---------- */
+  #hud{position:absolute;left:0;right:0;top:0;padding:inherit;display:flex;flex-direction:column;
+       align-items:center;gap:8px;}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;justify-content:center;width:100%;}
+  .pill{background:rgba(255,255,255,.92);border-radius:16px;padding:8px 14px 7px;min-width:96px;
+        display:flex;flex-direction:column;gap:1px;color:var(--ink);white-space:nowrap;
+        box-shadow:0 3px 0 rgba(0,0,0,.12);}
+  .pill small{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);}
+  .pill span{font-size:22px;font-weight:800;line-height:1.05;font-variant-numeric:tabular-nums;}
+  .pill span b{color:var(--coral);font-weight:800;}
+  .pill.name span{font-size:17px;padding-top:3px;}
+  #hint{max-width:min(92vw,400px);text-align:center;font-size:14px;font-weight:700;line-height:1.35;
+        color:#fff;text-shadow:0 1px 0 rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.18);padding:0 6px;}
+  #hint:empty{display:none;}
+
+  /* ---------- Bottom controls: white rounded buttons ---------- */
+  #foot{position:absolute;left:0;right:0;bottom:0;padding:inherit;display:flex;justify-content:center;gap:10px;}
+  .ctl{pointer-events:auto;width:64px;height:58px;border-radius:18px;border:none;cursor:pointer;
+       background:rgba(255,255,255,.95);color:var(--ink);box-shadow:0 4px 0 rgba(0,0,0,.18);
+       font-size:22px;font-weight:800;display:flex;flex-direction:column;align-items:center;justify-content:center;
+       gap:1px;transition:transform .06s,box-shadow .06s;}
+  .ctl small{font-size:10px;letter-spacing:.6px;font-weight:800;text-transform:uppercase;color:var(--ink-soft);}
+  .ctl:active{transform:translateY(3px);box-shadow:0 1px 0 rgba(0,0,0,.18);}
+  .ctl:disabled{color:var(--ink-faint);background:rgba(255,255,255,.55);pointer-events:none;box-shadow:none;}
+  .ctl.hot{background:var(--coral);color:#fff;box-shadow:0 4px 0 var(--coral-dark);}
+  .ctl.hot small{color:rgba(255,255,255,.85);}
+  .ctl.hot:active{box-shadow:0 1px 0 var(--coral-dark);}
+
+  /* ---------- Overlays: dim blur + white card ---------- */
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+           text-align:center;pointer-events:auto;padding:24px;
+           background:rgba(30,42,54,.72);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);}
+  .card{background:#fff;border-radius:24px;padding:30px 34px 32px;box-shadow:var(--card-shadow);
+        max-width:360px;width:100%;display:flex;flex-direction:column;align-items:center;}
+  .emoji{font-size:52px;line-height:1;margin-bottom:10px;}
+  h1{font-size:34px;font-weight:800;color:var(--ink);letter-spacing:-.5px;line-height:1.05;text-wrap:balance;}
+  h1 span{color:var(--coral);}
+  .sub{color:var(--ink-soft);font-size:15px;line-height:1.45;margin:12px 0 22px;max-width:280px;text-wrap:balance;}
+  .btn{pointer-events:auto;border:none;cursor:pointer;background:var(--coral);color:#fff;font-size:20px;font-weight:700;
+       padding:16px 44px;border-radius:16px;box-shadow:0 5px 0 var(--coral-dark);transition:transform .06s,box-shadow .06s;}
+  .btn:active{transform:translateY(4px);box-shadow:0 1px 0 var(--coral-dark);}
+  .btn.ghost{background:#fff;color:var(--ink);font-size:15px;padding:12px 26px;margin-top:12px;
+             box-shadow:0 4px 0 rgba(0,0,0,.14);}
+  .btn.ghost:active{box-shadow:0 1px 0 rgba(0,0,0,.14);}
+  .keys{margin-top:16px;font-size:12px;color:var(--ink-faint);font-weight:600;}
+
+  /* GOAL card */
+  #win h1{font-size:44px;color:var(--ink);animation:pop .45s cubic-bezier(.2,1.6,.4,1);}
+  #win h1 span{color:var(--green-dark);}
+  @keyframes pop{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+  .big-score{font-size:56px;font-weight:800;color:var(--ink);margin:4px 0 0;line-height:1;font-variant-numeric:tabular-nums;}
+  .big-score em{font-style:normal;font-size:20px;color:var(--ink-soft);font-weight:700;}
+  #stars{font-size:34px;letter-spacing:4px;margin:6px 0 2px;color:var(--yellow);text-shadow:0 2px 0 var(--yellow-dark);}
+  #stars .dim{color:#E3E8EC;text-shadow:none;}
+  #winBest{color:var(--ink-soft);font-size:14px;margin:6px 0 20px;}
+
+  /* OUT toast: floating text with a dark stroke, like the lot's pop-ups */
+  #out{position:absolute;left:0;right:0;top:42%;display:flex;justify-content:center;pointer-events:none;}
+  #out div{color:#fff;font-size:clamp(30px,9vw,46px);font-weight:800;letter-spacing:-.5px;
+           -webkit-text-stroke:2px rgba(0,0,0,.4);paint-order:stroke fill;
+           text-shadow:0 4px 0 rgba(0,0,0,.18);transform:rotate(-3deg);
+           animation:pop .35s cubic-bezier(.2,1.6,.4,1);}
+
+  /* Level select */
+  #levels .card{padding:26px 22px 24px;}
+  #levels h1{font-size:26px;margin-bottom:16px;}
+  #grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:100%;}
+  .lv{pointer-events:auto;aspect-ratio:1;border-radius:16px;border:none;cursor:pointer;
+      background:#F1F4F6;color:var(--ink);box-shadow:0 4px 0 rgba(0,0,0,.12);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+      font-size:22px;font-weight:800;transition:transform .06s,box-shadow .06s;}
+  .lv small{font-size:10px;font-weight:700;color:var(--ink-soft);letter-spacing:.3px;}
+  .lv.done{background:var(--green);color:#fff;box-shadow:0 4px 0 var(--green-dark);}
+  .lv.done small{color:rgba(255,255,255,.9);}
+  .lv.star{background:var(--yellow);color:var(--ink);box-shadow:0 4px 0 var(--yellow-dark);}
+  .lv.star small{color:rgba(43,58,74,.75);}
+  .lv:active{transform:translateY(3px);box-shadow:0 1px 0 rgba(0,0,0,.12);}
+  .lv:focus-visible,.btn:focus-visible,.ctl:focus-visible{outline:3px solid var(--blue);outline-offset:2px;}
+  @media (prefers-reduced-motion:reduce){ #win h1,#out div{animation:none;} }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div id="hud" class="hide">
+    <div class="row">
+      <div class="pill name"><small>Pitch</small><span id="lvPill">1 · Kick-off</span></div>
+      <div class="pill"><small>Kicks</small><span id="movePill"><b>0</b> / 2</span></div>
+      <div class="pill hide" id="cupPill"><small>Trophies</small><span><b>0</b>/1</span></div>
+    </div>
+    <div id="hint"></div>
+  </div>
+
+  <div id="foot" class="hide">
+    <button class="ctl" id="btnUndo" title="Undo (Z)">↶<small>Undo</small></button>
+    <button class="ctl hot" id="btnRestart" title="Restart (R)">↻<small>Retry</small></button>
+    <button class="ctl" id="btnLevels" title="Levels (Esc)">▦<small>Levels</small></button>
+    <button class="ctl" id="btnMute" title="Sound">🔊<small>Sound</small></button>
+  </div>
+
+  <div id="out" class="hide"><div>OUT OF BOUNDS!</div></div>
+
+  <div id="title" class="overlay">
+    <div class="card">
+      <div class="emoji">⚽</div>
+      <h1>Goal <span>Grid</span></h1>
+      <div class="sub">Swipe to kick. The ball rolls until something stops it. Find the front of the net.</div>
+      <button class="btn" id="btnPlay">Play</button>
+      <button class="btn ghost" id="btnTitleLevels">Pick a pitch</button>
+      <div class="keys">Arrow keys work too · Z undo · R retry</div>
+    </div>
+  </div>
+
+  <div id="levels" class="overlay hide">
+    <div class="card">
+      <h1>Pick a <span>pitch</span></h1>
+      <div id="grid"></div>
+      <button class="btn ghost" id="btnBack">Back</button>
+    </div>
+  </div>
+
+  <div id="win" class="overlay hide">
+    <div class="card">
+      <h1>GOAL<span>!</span></h1>
+      <div id="stars"></div>
+      <div class="big-score" id="winStat"></div>
+      <div id="winBest"></div>
+      <button class="btn" id="btnNext">Next</button>
+      <button class="btn ghost" id="btnAgain">Play again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+window.GG = window.GG || {};
+/* ===== config.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — config.js
+   Timing and palette. Pure data, safe to load in node.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.CFG = {
+  MOVE_MS: 135,     // one tile, a normal kick
+  SLIDE_MS: 70,     // one tile while skidding across wet grass
+  BUMP_MS: 140,     // nudge into a cone and back
+  PASS_MS: 460,     // lob between teammates
+  OUT_MS: 560,      // roll off the edge and drop
+  GOAL_MS: 1150,    // celebrate before the results card
+  CRUMBLE_MS: 380,  // dry turf falling away
+  SWIPE_MIN: 18,    // px before a drag counts as a swipe
+  TILE_DEPTH: 0.08, // offset drop shadow under the pitch slab, as a fraction of tile size
+  MAX_DPR: 2
+};
+
+/* Palette borrowed from Parking Jam Rush: flat fills paired with a darker
+   outline, on a bright daytime green. [fill, outline] pairs throughout. */
+GG.COLORS = {
+  ground: '#8ED081',
+  pitch: '#6BCB77', pitchAlt: '#63C070', pitchLine: '#4CA658', lines: 'rgba(255,255,255,.28)',
+  goalTop: '#7FD68A', hole: '#3E7F47',
+  ink: '#2B3A4A', inkSoft: '#7A8A99',
+  shadow: 'rgba(0,0,0,.22)',
+  crack: '#E9C46A', crackLine: '#C9A24A', crackMark: '#A9843A',
+  mud: '#9C7150', mudLine: '#75513A', mudDark: '#7D5A3F',
+  cone: '#FF9F45', coneLine: '#D97E2A', coneStripe: '#ffffff',
+  board: '#FF6B6B', boardLine: '#D14D4D',
+  gold: '#FFD93D', goldDark: '#D9B21E',
+  jersey: '#4D96FF', jerseyLine: '#3572CF', jerseyAlt: '#FF8FAB', jerseyAltLine: '#D96C89', skin: '#F3C9A3',
+  keeper: '#FFD93D', keeperLine: '#D9B21E', glove: '#ffffff',
+  groups: { 1: '#B983FF', 2: '#FF8FAB', 3: '#2EC4B6' },
+  groupsLine: { 1: '#9463D9', 2: '#D96C89', 3: '#1E9E92' },
+  matTop: '#2EC4B6', matLine: '#1E9E92',
+  ballLine: '#9AA7B4', panel: '#2B3A4A',
+  net: 'rgba(43,58,74,.35)', post: '#ffffff', postLine: '#C9D3DC'
+};
+
+/* localStorage throws in sandboxed viewers (file previews, some file:// and
+   private contexts). One unguarded call used to abort the whole game
+   constructor, leaving a title screen whose Play button did nothing. */
+GG.store = {
+  mem: {},
+  get: function (k) {
+    try { var v = window.localStorage.getItem(k); if (v !== null) return v; } catch (e) {}
+    return this.mem[k] === undefined ? null : this.mem[k];
+  },
+  set: function (k, v) {
+    this.mem[k] = v;
+    try { window.localStorage.setItem(k, v); } catch (e) {}
+  }
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = GG;
+
+})(window.GG);
+
+/* ===== engine.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — engine.js
+   Pure rules. No DOM, no canvas, so it loads in node for the test suite and
+   the solver. Everything the renderer needs to animate comes back as a list
+   of events from step().
+
+   THE RULE: a kicked ball rolls until something stops it. Roll off the pitch
+   and it is out of bounds. So every level is about what you can stop against.
+
+   Map legend (one char per tile):
+     .  out of bounds (the drop)      #  grass
+     S  kick-off spot (start)         G  goal (enter from its open side only)
+     ^  cone      =  advertising board     both block the ball, costing no move
+     M  mud: the ball stops dead when it lands here
+     *  trophy: collect by rolling over it. The keeper stays in the net
+        until every trophy on the pitch is collected.
+     X  dry turf: crumbles once you roll OFF it (crossing it counts)
+     @  teammate: the ball stops here and gets passed to the other @
+     1 2 3  whistles: toggle mat group 1/2/3 every time the ball rolls over
+     a b c  turf mats of group 1/2/3, closed until toggled
+     A B C  turf mats of group 1/2/3, open until toggled
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.DIRS = {
+  up:    { dr: -1, dc: 0 },
+  down:  { dr:  1, dc: 0 },
+  left:  { dr:  0, dc: -1 },
+  right: { dr:  0, dc: 1 }
+};
+GG.DIR_NAMES = ['up', 'down', 'left', 'right'];
+GG.STOPS = { M: true, '@': true, G: true };
+GG.BLOCKERS = { '^': true, '=': true };
+
+GG.key = function (r, c) { return r + ',' + c; };
+
+GG.parseLevel = function (def, index) {
+  var rows = def.map.length, cols = 0, r, c;
+  for (r = 0; r < rows; r++) cols = Math.max(cols, def.map[r].length);
+
+  var lv = {
+    index: index || 0,
+    name: def.name || ('Level ' + ((index || 0) + 1)),
+    hint: def.hint || '',
+    goalDir: def.goal || 'up',
+    rows: rows, cols: cols,
+    cells: [], start: null, goal: null, pass: [], switches: [], cups: [], groups: {}
+  };
+
+  for (r = 0; r < rows; r++) {
+    lv.cells.push([]);
+    for (c = 0; c < cols; c++) {
+      var ch = def.map[r][c] || '.';
+      if (ch === ' ') ch = '.';
+      lv.cells[r].push(ch);
+      if (ch === 'S') lv.start = { r: r, c: c };
+      else if (ch === 'G') lv.goal = { r: r, c: c };
+      else if (ch === '@') lv.pass.push({ r: r, c: c });
+      else if (ch === '*') lv.cups.push({ r: r, c: c });
+      else if (ch >= '1' && ch <= '3') { lv.switches.push({ r: r, c: c, group: +ch }); lv.groups[+ch] = true; }
+      else if (/[a-cA-C]/.test(ch)) lv.groups[ch.toLowerCase().charCodeAt(0) - 96] = true;
+    }
+  }
+  if (!lv.start) throw new Error('level "' + lv.name + '" has no S');
+  if (!lv.goal) throw new Error('level "' + lv.name + '" has no G');
+  if (lv.pass.length !== 0 && lv.pass.length !== 2) {
+    throw new Error('level "' + lv.name + '" needs exactly two @ tiles, has ' + lv.pass.length);
+  }
+  return lv;
+};
+
+GG.tileAt = function (lv, r, c) {
+  if (r < 0 || c < 0 || r >= lv.rows || c >= lv.cols) return '.';
+  return lv.cells[r][c];
+};
+
+GG.bridgeGroup = function (ch) {
+  return /[a-cA-C]/.test(ch) ? ch.toLowerCase().charCodeAt(0) - 96 : 0;
+};
+
+GG.initState = function (lv) {
+  return { r: lv.start.r, c: lv.start.c, broken: {}, toggled: {}, cups: {}, moves: 0, status: 'play' };
+};
+
+GG.cloneState = function (s) {
+  var b = {}, t = {}, u = {}, k;
+  for (k in s.broken) b[k] = true;
+  for (k in s.toggled) t[k] = s.toggled[k];
+  for (k in s.cups) u[k] = true;
+  return { r: s.r, c: s.c, broken: b, toggled: t, cups: u, moves: s.moves, status: s.status };
+};
+
+GG.cupsLeft = function (lv, s) {
+  var n = 0;
+  for (var i = 0; i < lv.cups.length; i++) if (!s.cups[GG.key(lv.cups[i].r, lv.cups[i].c)]) n++;
+  return n;
+};
+
+/* Can the ball roll onto this tile right now? (false = it drops) */
+GG.isOpen = function (lv, s, r, c) {
+  var ch = GG.tileAt(lv, r, c);
+  if (ch === '.' || GG.BLOCKERS[ch]) return false;
+  if (ch === 'X') return !s.broken[GG.key(r, c)];
+  var g = GG.bridgeGroup(ch);
+  if (g) {
+    var normallyOpen = ch === ch.toUpperCase();
+    return normallyOpen !== !!s.toggled[g];
+  }
+  return true;
+};
+
+/* Something solid stands in the way: the ball stops in front of it. */
+GG.isBlocked = function (lv, s, r, c, dir) {
+  var ch = GG.tileAt(lv, r, c);
+  if (GG.BLOCKERS[ch]) return true;
+  if (ch === 'G') return dir !== lv.goalDir || GG.cupsLeft(lv, s) > 0;
+  return false;
+};
+
+GG.step = function (lv, state, dir) {
+  var d = GG.DIRS[dir];
+  var ev = [];
+  if (!d || state.status !== 'play') return { state: state, events: ev };
+
+  var nr = state.r + d.dr, nc = state.c + d.dc;
+  if (GG.isBlocked(lv, state, nr, nc, dir)) {
+    ev.push({ type: 'blocked', r: nr, c: nc, dir: dir });
+    return { state: state, events: ev };
+  }
+
+  var s = GG.cloneState(state);
+  s.moves++;
+
+  for (;;) {
+    /* Leaving a tile. Dry turf gives way behind the ball. */
+    if (GG.tileAt(lv, s.r, s.c) === 'X') {
+      s.broken[GG.key(s.r, s.c)] = true;
+      ev.push({ type: 'break', r: s.r, c: s.c });
+    }
+    if (!GG.isOpen(lv, s, nr, nc)) {
+      s.r = nr; s.c = nc; s.status = 'out';
+      ev.push({ type: 'out', r: nr, c: nc, dir: dir });
+      return { state: s, events: ev };
+    }
+    s.r = nr; s.c = nc;
+    ev.push({ type: 'move', r: nr, c: nc, dir: dir });
+
+    /* Things that happen as the ball rolls over a tile. */
+    var ch = GG.tileAt(lv, nr, nc);
+    if (ch === '*' && !s.cups[GG.key(nr, nc)]) {
+      s.cups[GG.key(nr, nc)] = true;
+      ev.push({ type: 'collect', r: nr, c: nc, left: GG.cupsLeft(lv, s) });
+    } else if (ch >= '1' && ch <= '3') {
+      var g = +ch;
+      s.toggled[g] = !s.toggled[g];
+      ev.push({ type: 'switch', r: nr, c: nc, group: g, on: s.toggled[g] });
+    }
+    if (GG.STOPS[ch]) break;
+
+    var rr = nr + d.dr, cc = nc + d.dc;
+    if (GG.isBlocked(lv, s, rr, cc, dir)) { ev.push({ type: 'stop', r: rr, c: cc, dir: dir }); break; }
+    nr = rr; nc = cc;
+  }
+
+  /* Where it came to rest. */
+  var here = GG.tileAt(lv, s.r, s.c);
+  if (here === 'G') {
+    s.status = 'goal';
+    ev.push({ type: 'goal', r: s.r, c: s.c });
+  } else if (here === '@') {
+    var other = (lv.pass[0].r === s.r && lv.pass[0].c === s.c) ? lv.pass[1] : lv.pass[0];
+    ev.push({ type: 'pass', fromR: s.r, fromC: s.c, r: other.r, c: other.c });
+    s.r = other.r; s.c = other.c;
+  }
+  return { state: s, events: ev };
+};
+
+/* --- Solver -----------------------------------------------------------------
+   Breadth-first over (position, broken turf, whistle states, trophies).
+   Returns the shortest solution AND how many different shortest solutions
+   exist, so a level can be required to have exactly one. */
+GG.stateKey = function (s) {
+  var b = Object.keys(s.broken).sort().join(';');
+  var u = Object.keys(s.cups).sort().join(';');
+  var t = '';
+  for (var g = 1; g <= 3; g++) t += s.toggled[g] ? '1' : '0';
+  return s.r + ',' + s.c + '|' + b + '|' + t + '|' + u;
+};
+
+GG.solve = function (lv, maxStates) {
+  maxStates = maxStates || 400000;
+  var start = GG.initState(lv);
+  var seen = {}; seen[GG.stateKey(start)] = true;
+  var layer = [{ s: start, ways: 1, path: [] }];
+  var depth = 0, total = 1;
+  while (layer.length) {
+    var next = {}, order = [], goalWays = 0, goalPath = null;
+    for (var i = 0; i < layer.length; i++) {
+      var cur = layer[i];
+      for (var j = 0; j < 4; j++) {
+        var dir = GG.DIR_NAMES[j];
+        var res = GG.step(lv, cur.s, dir);
+        var ns = res.state;
+        if (ns === cur.s || ns.status === 'out') continue;
+        if (ns.status === 'goal') {
+          goalWays += cur.ways;
+          if (!goalPath) goalPath = cur.path.concat([dir]);
+          continue;
+        }
+        var k = GG.stateKey(ns);
+        if (seen[k]) continue;
+        if (next[k]) { next[k].ways += cur.ways; continue; }
+        next[k] = { s: ns, ways: cur.ways, path: cur.path.concat([dir]) };
+        order.push(k);
+      }
+    }
+    if (goalWays) return { moves: depth + 1, path: goalPath, count: goalWays };
+    layer = [];
+    for (var q = 0; q < order.length; q++) { seen[order[q]] = true; layer.push(next[order[q]]); }
+    total += layer.length;
+    if (total > maxStates) return null;
+    depth++;
+  }
+  return null;
+};
+
+if (typeof module !== 'undefined') module.exports = GG;
+
+})(window.GG);
+
+/* ===== levels.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — levels.js
+   Hand-built pitches. Par is not stored: the solver in engine.js computes it,
+   and test/levels.test.js insists every level has exactly ONE shortest
+   solution. Keep grids at most 7 wide so they fit a phone in portrait.
+   Legend is documented at the top of engine.js.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+if (typeof require !== 'undefined' && typeof GG.step === 'undefined') GG = require('./engine.js');
+
+GG.LEVELS = [
+  {
+    name: 'Kick-off',
+    hint: 'Swipe to kick. The ball rolls until something stops it.',
+    map: [
+      '.....G.',
+      '.....#.',
+      '.....#.',
+      '.S####^'
+    ]
+  },
+  {
+    name: 'Mud',
+    hint: 'Mud stops the ball dead. Roll off the pitch and it is out.',
+    map: [
+      '....G..',
+      '....#..',
+      'M###M..',
+      '#......',
+      '#......',
+      'M####S.'
+    ]
+  },
+  {
+    name: 'Front of net',
+    hint: 'The net only opens on one side. Come in from the front.',
+    map: [
+      '.......',
+      '.^.....',
+      '.###G..',
+      '.#..#..',
+      '.M##M..',
+      '.#.....',
+      '.S.....'
+    ]
+  },
+  {
+    name: 'Trophy',
+    hint: 'The keeper stays in the net until you collect every trophy.',
+    map: [
+      '...G...',
+      '...#...',
+      'M##M##M',
+      '#..#..#',
+      '#..#..#',
+      'M*#S##M'
+    ]
+  },
+  {
+    name: 'Dry turf',
+    hint: 'Dry turf crumbles once you roll off it. No going back over it.',
+    map: [
+      '.G.....',
+      '.#....M',
+      '.X....#',
+      '.#....#',
+      '.M#*##M',
+      '.#.....',
+      '.S.....'
+    ]
+  },
+  {
+    name: 'Whistle',
+    hint: 'Rolling over the whistle lays the turf mats down. Roll over it again and they lift.',
+    map: [
+      '...G...',
+      '...#...',
+      '#..a..M',
+      'M##M..#',
+      '#..#..#',
+      'M#1S##M'
+    ]
+  },
+  {
+    name: 'Teammate',
+    hint: 'Roll to a teammate and they will pass it to the other one.',
+    map: [
+      'G......',
+      '#......',
+      '@......',
+      '.......',
+      '.......',
+      '.M#*##M',
+      '.S....@'
+    ]
+  },
+  {
+    name: 'Set piece',
+    hint: 'Some mats start down. The whistle lifts those as it lays the others.',
+    map: [
+      '..G....',
+      '..a....',
+      'M#M#1M.',
+      '#.A..#.',
+      'a.#..#.',
+      'M####M.',
+      '..S....'
+    ]
+  },
+  {
+    name: 'Slalom',
+    hint: 'Open pitch. Every kick has to end against something.',
+    map: [
+      '^#G##^#',
+      '^####M#',
+      '#####M#',
+      '##M####',
+      '#^#####',
+      '###^.#.',
+      'S###.##'
+    ]
+  },
+  {
+    name: 'Golden run',
+    map: [
+      '##G#.##',
+      '####^##',
+      '####M##',
+      '###*###',
+      '.^##*#^',
+      '##M^###',
+      '#.SM###'
+    ]
+  },
+  {
+    name: 'Divots',
+    map: [
+      '#.G###M',
+      '###XXM#',
+      '.^##*M#',
+      '###^X#X',
+      '.######',
+      '#######',
+      '#S##.#^'
+    ]
+  },
+  {
+    name: 'Double',
+    map: [
+      '####G##',
+      '###M*##',
+      '##^#M##',
+      '###M###',
+      '#^##*^#',
+      '###^#.#',
+      '#S###.#'
+    ]
+  },
+  {
+    name: 'Extra time',
+    map: [
+      '#G#M###',
+      '##*####',
+      '#*#M..#',
+      '##^####',
+      '^##M##X',
+      '#######',
+      '^X.##.^',
+      '##S#^##'
+    ]
+  },
+  {
+    name: 'Final whistle',
+    map: [
+      '.#GM#*^',
+      '#######',
+      '#^###.#',
+      '#*##^##',
+      '#M#####',
+      '^#M####',
+      '#.#^###',
+      '##S#XX#'
+    ]
+  }
+];
+
+if (typeof module !== 'undefined') module.exports = GG;
+
+})(window.GG);
+
+/* ===== audio.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — audio.js
+   Tiny WebAudio synth: kicks, whistles and a crowd. No samples to ship.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.Audio = function () {
+  this.ctx = null;
+  this.muted = GG.store.get('goalgrid.muted') === '1';
+  this._noise = null;
+};
+
+GG.Audio.prototype.unlock = function () {
+  if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  this.ctx = new AC();
+  this.master = this.ctx.createGain();
+  this.master.gain.value = this.muted ? 0 : 0.8;
+  this.master.connect(this.ctx.destination);
+  var len = this.ctx.sampleRate * 2, buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  this._noise = buf;
+};
+
+GG.Audio.prototype.toggleMute = function () {
+  this.muted = !this.muted;
+  GG.store.set('goalgrid.muted', this.muted ? '1' : '0');
+  if (this.master) this.master.gain.value = this.muted ? 0 : 0.8;
+  return this.muted;
+};
+
+GG.Audio.prototype._tone = function (type, f0, f1, t0, dur, vol, curve) {
+  var c = this.ctx, o = c.createOscillator(), g = c.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t0);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + (curve || 0.01));
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(this.master);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+};
+
+GG.Audio.prototype._burst = function (t0, dur, vol, hp, lp) {
+  var c = this.ctx, s = c.createBufferSource(), g = c.createGain();
+  s.buffer = this._noise;
+  var f = c.createBiquadFilter(); f.type = 'bandpass';
+  f.frequency.value = (hp + lp) / 2; f.Q.value = 0.7;
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(this.master);
+  s.start(t0); s.stop(t0 + dur + 0.05);
+};
+
+GG.Audio.prototype.kick = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._tone('sine', 160, 60, t, 0.12, 0.5);
+  this._burst(t, 0.06, 0.35, 800, 2500);
+};
+GG.Audio.prototype.slide = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._burst(t, 0.22, 0.18, 1500, 5000);
+};
+GG.Audio.prototype.bump = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._tone('square', 220, 140, t, 0.07, 0.15);
+  this._burst(t, 0.05, 0.25, 300, 1200);
+};
+GG.Audio.prototype.crumble = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._burst(t, 0.3, 0.35, 150, 900);
+  this._tone('triangle', 120, 45, t, 0.3, 0.25);
+};
+GG.Audio.prototype.click = function (on) {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._tone('square', on ? 660 : 520, on ? 990 : 390, t, 0.09, 0.18);
+  this._tone('sine', on ? 1320 : 780, on ? 1320 : 780, t + 0.06, 0.08, 0.12);
+};
+GG.Audio.prototype.collect = function (last) {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._tone('sine', 880, 880, t, 0.12, 0.2, 0.01);
+  this._tone('sine', 1320, 1320, t + 0.08, 0.16, 0.2, 0.01);
+  if (last) { this._tone('sine', 1760, 1760, t + 0.18, 0.25, 0.2, 0.01); this._tone('triangle', 660, 660, t + 0.18, 0.3, 0.12, 0.02); }
+};
+GG.Audio.prototype.pass = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this._tone('sine', 300, 900, t, 0.25, 0.22, 0.08);
+  this._burst(t, 0.3, 0.2, 2000, 7000);
+};
+GG.Audio.prototype.whistle = function (t, dur, vol) {
+  /* A referee's whistle: a shrill tone with a fast warble on top. */
+  var c = this.ctx, o = c.createOscillator(), g = c.createGain(), l = c.createOscillator(), lg = c.createGain();
+  o.type = 'square'; o.frequency.value = 2650;
+  l.type = 'sine'; l.frequency.value = 38; lg.gain.value = 180;
+  l.connect(lg); lg.connect(o.frequency);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+  g.gain.setValueAtTime(vol, t + dur - 0.04);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(this.master);
+  o.start(t); l.start(t); o.stop(t + dur + 0.05); l.stop(t + dur + 0.05);
+};
+GG.Audio.prototype.goal = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this.whistle(t, 0.14, 0.12); this.whistle(t + 0.19, 0.14, 0.12); this.whistle(t + 0.38, 0.5, 0.12);
+  /* Crowd roar: filtered noise that swells and lingers. */
+  var c = this.ctx, s = c.createBufferSource(), g = c.createGain(), f = c.createBiquadFilter();
+  s.buffer = this._noise; s.loop = true;
+  f.type = 'lowpass'; f.frequency.value = 900;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.5, t + 0.35);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+  s.connect(f); f.connect(g); g.connect(this.master);
+  s.start(t); s.stop(t + 2.3);
+  var notes = [523, 659, 784, 1047];
+  for (var i = 0; i < notes.length; i++) this._tone('triangle', notes[i], notes[i], t + 0.5 + i * 0.11, 0.3, 0.16, 0.02);
+};
+GG.Audio.prototype.out = function () {
+  if (!this.ctx) return; var t = this.ctx.currentTime;
+  this.whistle(t, 0.55, 0.12);
+  var c = this.ctx, s = c.createBufferSource(), g = c.createGain(), f = c.createBiquadFilter();
+  s.buffer = this._noise; f.type = 'lowpass'; f.frequency.value = 500;
+  g.gain.setValueAtTime(0.0001, t + 0.2);
+  g.gain.exponentialRampToValueAtTime(0.3, t + 0.5);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
+  s.connect(f); f.connect(g); g.connect(this.master);
+  s.start(t); s.stop(t + 1.5);
+  this._tone('sawtooth', 220, 110, t + 0.25, 0.7, 0.08, 0.1);
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = GG;
+
+})(window.GG);
+
+/* ===== render.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — render.js
+   Canvas 2D drawing in the Parking Jam Rush house style: a flat daytime
+   ground, one rounded slab for the pitch with dashed white lines, and every
+   object drawn as a rounded shape with a solid fill, a darker 2.5px outline,
+   a lighter inner panel and an offset solid shadow. No gradients, no 3D.
+
+   Knows nothing about rules: it draws a level, a "view" (which tiles have
+   crumbled / which mats are down right now, which can lag the logical state
+   while animations play) and a ball with a visual position.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.Renderer = function (canvas) {
+  this.canvas = canvas;
+  this.ctx = canvas.getContext('2d');
+  this.W = 0; this.H = 0; this.dpr = 1;
+  this.t = 40; this.ox = 0; this.oy = 0; this.depth = 4;
+  this.particles = [];
+  this.pulses = [];
+};
+
+GG.Renderer.prototype.resize = function () {
+  this.dpr = Math.min(window.devicePixelRatio || 1, GG.CFG.MAX_DPR);
+  this.W = window.innerWidth; this.H = window.innerHeight;
+  this.canvas.width = Math.round(this.W * this.dpr);
+  this.canvas.height = Math.round(this.H * this.dpr);
+  this.canvas.style.width = this.W + 'px';
+  this.canvas.style.height = this.H + 'px';
+};
+
+/* Fit the grid between the HUD and the buttons. */
+GG.Renderer.prototype.layout = function (lv, top, bottom) {
+  var pad = 18;
+  var availW = this.W - pad * 2;
+  var availH = (this.H - bottom) - top - pad * 2;
+  var t = Math.floor(Math.min(availW / lv.cols, availH / (lv.rows + 0.3), 96));
+  this.t = Math.max(t, 16);
+  this.depth = Math.round(this.t * GG.CFG.TILE_DEPTH);
+  this.ox = Math.round((this.W - lv.cols * this.t) / 2);
+  this.oy = Math.round(top + pad + (availH - lv.rows * this.t) / 2);
+};
+
+GG.Renderer.prototype.tileX = function (c) { return this.ox + c * this.t; };
+GG.Renderer.prototype.tileY = function (r) { return this.oy + r * this.t; };
+GG.Renderer.prototype.centre = function (r, c) {
+  return { x: this.ox + (c + 0.5) * this.t, y: this.oy + (r + 0.5) * this.t };
+};
+GG.Renderer.prototype.tileFromPoint = function (x, y) {
+  return { r: Math.floor((y - this.oy) / this.t), c: Math.floor((x - this.ox) / this.t) };
+};
+
+/* --- helpers ---------------------------------------------------------------- */
+function rrect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+/* Parking-lot object: shadow, fill, outline, inner panel. */
+function slab(ctx, x, y, w, h, r, fill, line, opts) {
+  opts = opts || {};
+  var sx = opts.shadow === undefined ? 3 : opts.shadow;
+  if (sx) { ctx.fillStyle = 'rgba(0,0,0,.22)'; rrect(ctx, x + sx, y + sx * 1.3, w, h, r); ctx.fill(); }
+  ctx.fillStyle = fill; rrect(ctx, x, y, w, h, r); ctx.fill();
+  if (line) { ctx.lineWidth = opts.lw || 2.5; ctx.strokeStyle = line; rrect(ctx, x, y, w, h, r); ctx.stroke(); }
+  if (opts.panel) {
+    var ri = opts.panel;
+    ctx.fillStyle = 'rgba(255,255,255,.25)';
+    rrect(ctx, x + ri, y + ri, w - ri * 2, h - ri * 2, Math.max(2, r * 0.6)); ctx.fill();
+  }
+}
+function hash(r, c) { var h = (r * 73856093) ^ (c * 19349663); h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967295; }
+var ROT = { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 };
+
+/* Fill the union of a set of tiles as one rounded shape. Rounded squares per
+   tile, then rectangles over every shared edge and every 2x2 centre so the
+   seams and inner notches disappear. `grow` expands each tile (negative
+   shrinks), which is how the outline is drawn: a grown union in the line
+   colour under the real one. */
+GG.Renderer.prototype.fillUnion = function (open, rows, cols, grow, radius, color, dx, dy) {
+  var ctx = this.ctx, t = this.t, r, c;
+  dx = dx || 0; dy = dy || 0;
+  ctx.fillStyle = color;
+  for (r = 0; r < rows; r++) for (c = 0; c < cols; c++) if (open[r][c]) {
+    var x = this.tileX(c) + dx, y = this.tileY(r) + dy;
+    rrect(ctx, x - grow, y - grow, t + grow * 2, t + grow * 2, radius); ctx.fill();
+    if (c + 1 < cols && open[r][c + 1]) ctx.fillRect(x + t / 2, y - grow, t, t + grow * 2);
+    if (r + 1 < rows && open[r + 1][c]) ctx.fillRect(x - grow, y + t / 2, t + grow * 2, t);
+    if (c + 1 < cols && r + 1 < rows && open[r][c + 1] && open[r + 1][c] && open[r + 1][c + 1]) {
+      ctx.fillRect(x + t / 2, y + t / 2, t, t);
+    }
+  }
+};
+
+/* --- main draw -------------------------------------------------------------- */
+GG.Renderer.prototype.draw = function (lv, view, ball, now, dt) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS;
+  ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+  ctx.fillStyle = C.ground; ctx.fillRect(0, 0, this.W, this.H);
+  if (!lv) return;
+
+  var r, c, ch, x, y, open, key;
+  var opens = [];
+  for (r = 0; r < lv.rows; r++) {
+    opens.push([]);
+    for (c = 0; c < lv.cols; c++) {
+      ch = lv.cells[r][c];
+      open = ch !== '.';
+      if (ch === 'X') {
+        key = GG.key(r, c);
+        if (view.broken[key] !== undefined && now - view.broken[key] > GG.CFG.CRUMBLE_MS) open = false;
+      } else {
+        var g = GG.bridgeGroup(ch);
+        if (g) open = (ch === ch.toUpperCase()) !== !!view.toggled[g];
+      }
+      opens[r].push(open);
+    }
+  }
+  var cupsLeft = 0;
+  for (var q = 0; q < lv.cups.length; q++) if (!view.cups[GG.key(lv.cups[q].r, lv.cups[q].c)]) cupsLeft++;
+
+  /* The pitch: one slab with a shadow, an outline and dashed lines. */
+  var rad = t * 0.22, lw = Math.max(2.5, t * 0.045);
+  this.fillUnion(opens, lv.rows, lv.cols, lw, rad, C.shadow, this.depth * 0.8, this.depth);
+  this.fillUnion(opens, lv.rows, lv.cols, lw, rad, C.pitchLine);
+  this.fillUnion(opens, lv.rows, lv.cols, 0, rad - lw, C.pitch);
+  /* mowing stripes, clipped to the slab */
+  ctx.save();
+  ctx.beginPath();
+  for (r = 0; r < lv.rows; r++) for (c = 0; c < lv.cols; c++) if (opens[r][c]) ctx.rect(this.tileX(c), this.tileY(r), t, t);
+  ctx.clip();
+  ctx.fillStyle = C.pitchAlt;
+  for (r = 0; r < lv.rows; r += 2) ctx.fillRect(this.ox, this.tileY(r), lv.cols * t, t);
+  /* dashed lines between tiles, like parking bays */
+  ctx.strokeStyle = C.lines; ctx.lineWidth = 2; ctx.setLineDash([t * 0.3, t * 0.22]); ctx.lineDashOffset = t * 0.24;
+  for (r = 0; r < lv.rows; r++) for (c = 0; c < lv.cols; c++) if (opens[r][c]) {
+    x = this.tileX(c); y = this.tileY(r);
+    if (c + 1 < lv.cols && opens[r][c + 1]) { ctx.beginPath(); ctx.moveTo(x + t, y + 3); ctx.lineTo(x + t, y + t - 3); ctx.stroke(); }
+    if (r + 1 < lv.rows && opens[r + 1][c]) { ctx.beginPath(); ctx.moveTo(x + 3, y + t); ctx.lineTo(x + t - 3, y + t); ctx.stroke(); }
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  /* Holes: void tiles with pitch on both sides read as pits dug out of the
+     slab, so they get an inset dark well instead of showing bare ground. */
+  for (r = 0; r < lv.rows; r++) for (c = 0; c < lv.cols; c++) if (!opens[r][c]) {
+    var lr = c > 0 && opens[r][c - 1] && c + 1 < lv.cols && opens[r][c + 1];
+    var ud = r > 0 && opens[r - 1][c] && r + 1 < lv.rows && opens[r + 1][c];
+    if (!lr && !ud) continue;
+    x = this.tileX(c); y = this.tileY(r);
+    ctx.fillStyle = C.pitchLine; rrect(ctx, x - lw, y - lw, t + lw * 2, t + lw * 2, rad * 0.6); ctx.fill();
+    ctx.fillStyle = C.hole; rrect(ctx, x, y, t, t, rad * 0.5); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,.18)'; rrect(ctx, x, y, t, t * 0.22, rad * 0.5); ctx.fill();
+  }
+
+  /* Special tile surfaces. */
+  for (r = 0; r < lv.rows; r++) for (c = 0; c < lv.cols; c++) {
+    ch = lv.cells[r][c];
+    x = this.tileX(c); y = this.tileY(r);
+    if (ch === '.') continue;
+    var grp = GG.bridgeGroup(ch);
+    if (grp && !opens[r][c]) { this.drawClosedMat(x, y, grp, now); continue; }
+    if (ch === 'X' && !opens[r][c]) continue;
+    ctx.save();
+    if (ch === 'X' && view.broken[GG.key(r, c)] !== undefined) {
+      var k = (now - view.broken[GG.key(r, c)]) / GG.CFG.CRUMBLE_MS;
+      ctx.globalAlpha = 1 - k;
+      ctx.translate(x + t / 2, y + t / 2 + k * t * 0.4);
+      ctx.scale(1 - k * 0.4, 1 - k * 0.4);
+      ctx.translate(-x - t / 2, -y - t / 2);
+    }
+    this.drawTop(lv, r, c, ch, x, y, view, now);
+    ctx.restore();
+  }
+  /* Things standing on tiles, drawn after all surfaces. */
+  for (r = 0; r < lv.rows; r++) for (c = 0; c < lv.cols; c++) {
+    ch = lv.cells[r][c];
+    x = this.tileX(c); y = this.tileY(r);
+    if (ch === '^') this.drawCone(x, y);
+    else if (ch === '=') this.drawBoard(x, y);
+    else if (ch === '*' && !view.cups[GG.key(r, c)]) this.drawCup(x, y, now);
+    else if (ch === '@') this.drawPlayer(x, y, (lv.pass[0].r === r && lv.pass[0].c === c) ? 0 : 1);
+    else if (ch === 'G') this.drawGoal(x, y, lv.goalDir, view.goalFlash ? now - view.goalFlash : -1, cupsLeft > 0);
+  }
+
+  this.drawPulses(now);
+  if (ball && ball.visible) this.drawBall(ball);
+  this.drawParticles(dt);
+};
+
+GG.Renderer.prototype.drawTop = function (lv, r, c, ch, x, y, view, now) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS;
+  var grp = GG.bridgeGroup(ch);
+  var inset = t * 0.09, rad = t * 0.22;
+
+  if (ch === 'S') {
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = Math.max(2, t * 0.045);
+    ctx.beginPath(); ctx.arc(x + t / 2, y + t / 2, t * 0.3, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.beginPath(); ctx.arc(x + t / 2, y + t / 2, t * 0.06, 0, Math.PI * 2); ctx.fill();
+  } else if (ch === 'G') {
+    ctx.fillStyle = C.goalTop; ctx.fillRect(x + 1, y + 1, t - 2, t - 2);
+  } else if (ch === 'X') {
+    slab(ctx, x + inset, y + inset, t - inset * 2, t - inset * 2, rad, C.crack, C.crackLine, { shadow: 0 });
+    ctx.strokeStyle = C.crackMark; ctx.lineWidth = Math.max(1.5, t * 0.035); ctx.lineCap = 'round';
+    var h = hash(r, c);
+    var cx = x + t * (0.38 + h * 0.24), cy = y + t * (0.38 + hash(c, r) * 0.24);
+    for (var i = 0; i < 4; i++) {
+      var a = h * 6.28 + i * 1.6 + hash(r + i, c) * 0.8;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      var mx = cx + Math.cos(a) * t * 0.18, my = cy + Math.sin(a) * t * 0.18;
+      ctx.lineTo(mx, my);
+      ctx.lineTo(mx + Math.cos(a + 0.6) * t * 0.15, my + Math.sin(a + 0.6) * t * 0.15);
+      ctx.stroke();
+    }
+  } else if (ch === 'M') {
+    var mh = hash(r, c);
+    slab(ctx, x + inset, y + inset, t - inset * 2, t - inset * 2, t * 0.34, C.mud, C.mudLine, { shadow: 0 });
+    ctx.fillStyle = C.mudDark;
+    ctx.beginPath(); ctx.ellipse(x + t * (0.34 + mh * 0.16), y + t * 0.42, t * 0.15, t * 0.09, 0.4, 0, 6.29); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + t * 0.64, y + t * (0.56 + mh * 0.12), t * 0.12, t * 0.07, -0.5, 0, 6.29); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.22)';
+    ctx.beginPath(); ctx.ellipse(x + t * 0.36, y + t * 0.3, t * 0.13, t * 0.045, -0.3, 0, 6.29); ctx.fill();
+  } else if (ch >= '1' && ch <= '3') {
+    var g = +ch, on = !!view.toggled[g];
+    var cxs = x + t / 2, cys = y + t / 2, R = t * 0.3;
+    /* housing */
+    ctx.fillStyle = C.shadow; ctx.beginPath(); ctx.arc(cxs + 3, cys + 4, R, 0, 6.29); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cxs, cys, R, 0, 6.29); ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = C.postLine; ctx.beginPath(); ctx.arc(cxs, cys, R, 0, 6.29); ctx.stroke();
+    /* button, pressed when on */
+    var br = on ? R * 0.62 : R * 0.72;
+    ctx.fillStyle = C.groups[g]; ctx.beginPath(); ctx.arc(cxs, cys, br, 0, 6.29); ctx.fill();
+    ctx.strokeStyle = C.groupsLine[g]; ctx.beginPath(); ctx.arc(cxs, cys, br, 0, 6.29); ctx.stroke();
+    if (!on) { ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.arc(cxs, cys - br * 0.25, br * 0.55, 0, 6.29); ctx.fill(); }
+    /* whistle glyph */
+    ctx.fillStyle = C.ink;
+    ctx.beginPath(); ctx.arc(cxs - t * 0.03, cys + t * 0.03, t * 0.08, 0, 6.29); ctx.fill();
+    rrect(ctx, cxs - t * 0.03, cys - t * 0.06, t * 0.19, t * 0.07, 2); ctx.fill();
+  } else if (grp) {
+    slab(ctx, x + inset, y + inset, t - inset * 2, t - inset * 2, rad, C.groups[grp], C.groupsLine[grp], { shadow: 0, panel: t * 0.14 });
+    ctx.strokeStyle = 'rgba(0,0,0,.14)'; ctx.lineWidth = 1.5;
+    for (var q2 = 1; q2 < 3; q2++) { ctx.beginPath(); ctx.moveTo(x + t * 0.22, y + q2 * t / 3); ctx.lineTo(x + t * 0.78, y + q2 * t / 3); ctx.stroke(); }
+  }
+};
+
+GG.Renderer.prototype.drawClosedMat = function (x, y, grp, now) {
+  var ctx = this.ctx, t = this.t;
+  ctx.save();
+  ctx.setLineDash([t * 0.14, t * 0.1]);
+  ctx.lineDashOffset = -now * 0.02;
+  ctx.strokeStyle = GG.COLORS.groupsLine[grp]; ctx.globalAlpha = 0.7; ctx.lineWidth = 2.5;
+  rrect(ctx, x + t * 0.1, y + t * 0.1, t * 0.8, t * 0.8, t * 0.2); ctx.stroke();
+  ctx.restore();
+};
+
+GG.Renderer.prototype.drawCone = function (x, y) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS, cx = x + t / 2, cy = y + t / 2;
+  ctx.lineJoin = 'round';
+  /* shadow */
+  ctx.fillStyle = C.shadow;
+  ctx.beginPath(); ctx.moveTo(cx - t * 0.27 + 3, cy + t * 0.3 + 4); ctx.lineTo(cx + 3, cy - t * 0.36 + 4); ctx.lineTo(cx + t * 0.27 + 3, cy + t * 0.3 + 4); ctx.closePath(); ctx.fill();
+  /* base */
+  slab(ctx, cx - t * 0.34, cy + t * 0.18, t * 0.68, t * 0.16, t * 0.06, C.coneLine, null, { shadow: 0 });
+  /* body */
+  ctx.fillStyle = C.cone;
+  ctx.beginPath(); ctx.moveTo(cx - t * 0.25, cy + t * 0.26); ctx.lineTo(cx, cy - t * 0.36); ctx.lineTo(cx + t * 0.25, cy + t * 0.26); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = C.coneLine; ctx.stroke();
+  /* stripe */
+  ctx.fillStyle = C.coneStripe;
+  ctx.beginPath(); ctx.moveTo(cx - t * 0.13, cy - t * 0.04); ctx.lineTo(cx + t * 0.13, cy - t * 0.04); ctx.lineTo(cx + t * 0.17, cy + t * 0.07); ctx.lineTo(cx - t * 0.17, cy + t * 0.07); ctx.closePath(); ctx.fill();
+};
+
+GG.Renderer.prototype.drawBoard = function (x, y) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS;
+  slab(ctx, x + t * 0.06, y + t * 0.24, t * 0.88, t * 0.5, t * 0.1, C.board, C.boardLine, { panel: t * 0.07 });
+  ctx.fillStyle = '#fff';
+  for (var i = 0; i < 3; i++) rrect(ctx, x + t * (0.15 + i * 0.27), y + t * 0.36, t * 0.17, t * 0.26, 3), ctx.fill();
+};
+
+GG.Renderer.prototype.drawCup = function (x, y, now) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS, cx = x + t / 2;
+  var bob = Math.sin(now * 0.004 + x * 0.01) * t * 0.04;
+  var cy = y + t / 2 + bob;
+  ctx.lineJoin = 'round'; ctx.lineWidth = 2.5;
+  ctx.fillStyle = C.shadow;
+  ctx.beginPath(); ctx.ellipse(cx + 2, y + t * 0.82, t * 0.2, t * 0.07, 0, 0, 6.29); ctx.fill();
+  /* base and stem */
+  slab(ctx, cx - t * 0.17, cy + t * 0.2, t * 0.34, t * 0.09, 3, C.gold, C.goldDark, { shadow: 0 });
+  ctx.fillStyle = C.gold; ctx.fillRect(cx - t * 0.05, cy + t * 0.06, t * 0.1, t * 0.16);
+  ctx.strokeStyle = C.goldDark; ctx.strokeRect(cx - t * 0.05, cy + t * 0.06, t * 0.1, t * 0.16);
+  /* bowl */
+  ctx.beginPath();
+  ctx.moveTo(cx - t * 0.2, cy - t * 0.28); ctx.lineTo(cx + t * 0.2, cy - t * 0.28);
+  ctx.quadraticCurveTo(cx + t * 0.2, cy + t * 0.1, cx, cy + t * 0.1);
+  ctx.quadraticCurveTo(cx - t * 0.2, cy + t * 0.1, cx - t * 0.2, cy - t * 0.28);
+  ctx.closePath();
+  ctx.fillStyle = C.gold; ctx.fill(); ctx.strokeStyle = C.goldDark; ctx.stroke();
+  /* handles */
+  ctx.beginPath(); ctx.arc(cx - t * 0.24, cy - t * 0.12, t * 0.09, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx + t * 0.24, cy - t * 0.12, t * 0.09, -Math.PI * 0.5, Math.PI * 0.5); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  rrect(ctx, cx - t * 0.13, cy - t * 0.22, t * 0.06, t * 0.2, 2); ctx.fill();
+};
+
+/* A little top-down figure: rounded jersey, head, number. */
+GG.Renderer.prototype.drawFigure = function (cx, cy, s, fill, line, label, hair) {
+  var ctx = this.ctx, C = GG.COLORS;
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = C.shadow;
+  ctx.beginPath(); ctx.ellipse(cx + 2, cy + s * 0.38, s * 0.28, s * 0.09, 0, 0, 6.29); ctx.fill();
+  /* shorts + legs */
+  slab(ctx, cx - s * 0.17, cy + s * 0.1, s * 0.34, s * 0.17, s * 0.05, '#fff', C.postLine, { shadow: 0 });
+  ctx.fillStyle = C.skin;
+  ctx.fillRect(cx - s * 0.13, cy + s * 0.24, s * 0.09, s * 0.1);
+  ctx.fillRect(cx + s * 0.04, cy + s * 0.24, s * 0.09, s * 0.1);
+  /* sleeves + jersey */
+  slab(ctx, cx - s * 0.32, cy - s * 0.12, s * 0.64, s * 0.16, s * 0.05, fill, line, { shadow: 0 });
+  slab(ctx, cx - s * 0.21, cy - s * 0.16, s * 0.42, s * 0.3, s * 0.08, fill, line, { shadow: 0 });
+  ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(s * 0.17) + 'px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, cx, cy + s * 0.01);
+  /* head */
+  ctx.fillStyle = C.skin; ctx.beginPath(); ctx.arc(cx, cy - s * 0.29, s * 0.14, 0, 6.29); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.stroke();
+  ctx.fillStyle = hair; ctx.beginPath(); ctx.arc(cx, cy - s * 0.32, s * 0.14, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
+};
+
+GG.Renderer.prototype.drawPlayer = function (x, y, which) {
+  var C = GG.COLORS, t = this.t;
+  this.drawFigure(x + t / 2, y + t / 2, t, which ? C.jerseyAlt : C.jersey, which ? C.jerseyAltLine : C.jerseyLine,
+                  which ? '7' : '10', which ? '#F2D16B' : '#2A1A10');
+};
+
+GG.Renderer.prototype.drawGoal = function (x, y, dir, flashAge, keeper) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS;
+  ctx.save();
+  ctx.translate(x + t / 2, y + t / 2);
+  ctx.rotate(ROT[dir] || 0);
+  var w = t * 0.84, nh = t * 0.6, left = -w / 2, top = -t / 2 + t * 0.06;
+  var bulge = flashAge >= 0 && flashAge < 500 ? Math.sin(flashAge / 500 * Math.PI) * t * 0.08 : 0;
+  /* net: pale panel with a mesh */
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  rrect(ctx, left, top, w, nh + bulge, 4); ctx.fill();
+  ctx.strokeStyle = C.net; ctx.lineWidth = 1;
+  var n = 6, i;
+  for (i = 1; i < n; i++) { ctx.beginPath(); ctx.moveTo(left + i * w / n, top); ctx.lineTo(left + i * w / n, top + nh + bulge); ctx.stroke(); }
+  for (i = 1; i < 4; i++) { ctx.beginPath(); ctx.moveTo(left, top + i * (nh + bulge) / 4); ctx.lineTo(left + w, top + i * (nh + bulge) / 4); ctx.stroke(); }
+  /* posts + crossbar (front stays open), outlined like everything else */
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = C.postLine; ctx.lineWidth = Math.max(5, t * 0.11);
+  ctx.beginPath();
+  ctx.moveTo(left, top + nh + t * 0.14); ctx.lineTo(left, top); ctx.lineTo(left + w, top); ctx.lineTo(left + w, top + nh + t * 0.14);
+  ctx.stroke();
+  ctx.strokeStyle = C.post; ctx.lineWidth = Math.max(3, t * 0.065);
+  ctx.stroke();
+  if (keeper) {
+    ctx.save(); ctx.translate(0, top + nh * 0.55);
+    this.drawFigure(0, 0, t * 0.8, C.keeper, C.keeperLine, '1', '#3A2314');
+    /* gloves out wide */
+    ctx.fillStyle = C.glove; ctx.strokeStyle = C.postLine; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(-t * 0.34, -t * 0.03, t * 0.08, 0, 6.29); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(t * 0.34, -t * 0.03, t * 0.08, 0, 6.29); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+};
+
+/* --- the ball ---------------------------------------------------------------
+   Flat white disc with an outline; the panel pattern scrolls with the
+   ball's travel, clipped to the disc, so it reads as rolling. */
+GG.Renderer.prototype.drawBall = function (b) {
+  var ctx = this.ctx, t = this.t, C = GG.COLORS, R = t * 0.33 * b.scale;
+  var lift = b.z * t * 0.9;
+  ctx.save();
+  ctx.globalAlpha = b.alpha;
+  ctx.fillStyle = C.shadow;
+  var sk = 1 - b.z * 0.35;
+  ctx.beginPath(); ctx.ellipse(b.x + 3, b.y + R * 0.9 + b.drop, R * sk, R * 0.4 * sk, 0, 0, 6.29); ctx.fill();
+
+  var cx = b.x, cy = b.y - lift + b.drop;
+  var sr = R * (1 + b.z * 0.3);
+  ctx.translate(cx, cy);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(0, 0, sr, 0, 6.29); ctx.closePath();
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.clip();
+  var L = sr * 0.95, rowH = L * 0.87;
+  var offx = ((b.rx % L) + L) % L, offy = ((b.ry % (rowH * 2)) + rowH * 2) % (rowH * 2);
+  ctx.fillStyle = C.panel;
+  for (var j = -3; j <= 3; j++) {
+    for (var i = -3; i <= 3; i++) {
+      var px = i * L + (j & 1 ? L / 2 : 0) + offx - L, py = j * rowH + offy - rowH;
+      var d = Math.sqrt(px * px + py * py) / sr;
+      if (d > 1.15) continue;
+      var sq = Math.max(0.35, Math.sqrt(Math.max(0, 1 - d * d * 0.8)));
+      var pr = sr * 0.27 * sq;
+      ctx.beginPath();
+      for (var k = 0; k < 5; k++) {
+        var a = -Math.PI / 2 + k * Math.PI * 2 / 5;
+        var vx = px + Math.cos(a) * pr, vy = py + Math.sin(a) * pr;
+        if (k === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  /* flat inner highlight, the way cars get a lighter roof panel */
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.beginPath(); ctx.ellipse(-sr * 0.3, -sr * 0.35, sr * 0.28, sr * 0.16, -0.6, 0, 6.29); ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = C.ballLine;
+  ctx.beginPath(); ctx.arc(0, 0, sr, 0, 6.29); ctx.stroke();
+  ctx.restore();
+};
+
+/* --- effects ---------------------------------------------------------------- */
+GG.Renderer.prototype.confetti = function (x, y, n) {
+  var cols = ['#FFD93D', '#FF6B6B', '#4D96FF', '#ffffff', '#6BCB77', '#FF8FAB', '#B983FF'];
+  for (var i = 0; i < n; i++) {
+    var a = Math.random() * Math.PI * 2, sp = 150 + Math.random() * 380;
+    this.particles.push({
+      x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 260, g: 720,
+      rot: Math.random() * 6.28, vr: (Math.random() - 0.5) * 14,
+      w: 5 + Math.random() * 6, h: 4 + Math.random() * 4,
+      col: cols[i % cols.length], life: 1.3 + Math.random() * 0.8, age: 0, kind: 'rect'
+    });
+  }
+};
+GG.Renderer.prototype.dust = function (x, y, n, col) {
+  for (var i = 0; i < n; i++) {
+    var a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 120;
+    this.particles.push({
+      x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, g: 380,
+      rot: 0, vr: 0, w: 4 + Math.random() * 6, h: 0,
+      col: col || '#B0BEC5', life: 0.5 + Math.random() * 0.4, age: 0, kind: 'dot'
+    });
+  }
+};
+GG.Renderer.prototype.pulse = function (x, y, col) {
+  this.pulses.push({ x: x, y: y, col: col, t0: performance.now() });
+};
+GG.Renderer.prototype.drawPulses = function (now) {
+  var ctx = this.ctx, keep = [];
+  for (var i = 0; i < this.pulses.length; i++) {
+    var p = this.pulses[i], k = (now - p.t0) / 500;
+    if (k > 1) continue;
+    keep.push(p);
+    ctx.save(); ctx.globalAlpha = 1 - k; ctx.strokeStyle = p.col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, this.t * (0.2 + k * 0.7), 0, 6.29); ctx.stroke();
+    ctx.restore();
+  }
+  this.pulses = keep;
+};
+GG.Renderer.prototype.drawParticles = function (dt) {
+  var ctx = this.ctx, keep = [];
+  for (var i = 0; i < this.particles.length; i++) {
+    var p = this.particles[i];
+    p.age += dt; if (p.age > p.life) continue;
+    p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+    p.vx *= 0.99;
+    keep.push(p);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (p.life - p.age) / 0.4);
+    ctx.fillStyle = p.col;
+    if (p.kind === 'rect') {
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      rrect(ctx, -p.w / 2, -p.h / 2, p.w, p.h, 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.w / 2 * (1 - p.age / p.life * 0.5), 0, 6.29); ctx.fill();
+    }
+    ctx.restore();
+  }
+  this.particles = keep;
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = GG;
+
+})(window.GG);
+
+/* ===== ui.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — ui.js
+   DOM overlays and HUD. The game calls in; the UI never touches game state.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.UI = function () {
+  var ids = ['hud', 'foot', 'hint', 'lvPill', 'movePill', 'cupPill', 'btnUndo', 'btnRestart', 'btnLevels', 'btnMute',
+             'out', 'title', 'btnPlay', 'btnTitleLevels', 'levels', 'grid', 'btnBack',
+             'win', 'stars', 'winStat', 'winBest', 'btnNext', 'btnAgain'];
+  this.el = {};
+  for (var i = 0; i < ids.length; i++) this.el[ids[i]] = document.getElementById(ids[i]);
+};
+
+GG.UI.prototype.on = function (name, fn) {
+  var el = this.el[name];
+  el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); fn(); });
+  el.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+};
+
+function show(el, on) { el.classList.toggle('hide', !on); }
+
+GG.UI.prototype.showTitle = function () {
+  show(this.el.title, true); show(this.el.levels, false); show(this.el.win, false);
+  show(this.el.hud, false); show(this.el.foot, false); show(this.el.out, false);
+};
+GG.UI.prototype.showPlay = function () {
+  show(this.el.title, false); show(this.el.levels, false); show(this.el.win, false);
+  show(this.el.hud, true); show(this.el.foot, true); show(this.el.out, false);
+};
+GG.UI.prototype.showLevels = function (levels, best, onPick) {
+  var grid = this.el.grid;
+  grid.innerHTML = '';
+  for (var i = 0; i < levels.length; i++) {
+    (function (idx) {
+      var b = document.createElement('button');
+      b.className = 'lv';
+      var got = best[idx];
+      var par = levels[idx].par;
+      if (got !== undefined) b.className += got <= par ? ' star' : ' done';
+      b.innerHTML = (idx + 1) + '<small>' + (got !== undefined ? (got <= par ? '★ ' + got : got + '/' + par) : 'par ' + par) + '</small>';
+      b.addEventListener('click', function (e) { e.stopPropagation(); onPick(idx); });
+      b.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      grid.appendChild(b);
+    })(i);
+  }
+  show(this.el.title, false); show(this.el.win, false); show(this.el.levels, true);
+  show(this.el.hud, false); show(this.el.foot, false); show(this.el.out, false);
+};
+GG.UI.prototype.showWin = function (moves, par, best, isLast) {
+  var stars = moves <= par ? 3 : moves <= par * 1.5 ? 2 : 1;
+  var s = '';
+  for (var i = 0; i < 3; i++) s += '<span class="' + (i < stars ? '' : 'dim') + '">★</span>';
+  this.el.stars.innerHTML = s;
+  this.el.winStat.innerHTML = moves + ' <em>kicks · par ' + par + '</em>';
+  this.el.winBest.textContent = moves <= par ? 'Top corner. Perfect run.' :
+    best < moves ? 'Your best: ' + best : stars === 2 ? 'Nearly clinical. Par is ' + par + '.' : 'In the net. Now try it in ' + par + '.';
+  this.el.btnNext.textContent = isLast ? 'Level select' : 'Next';
+  show(this.el.win, true); show(this.el.foot, false);
+};
+GG.UI.prototype.showOut = function (on) { show(this.el.out, on); };
+
+GG.UI.prototype.setHud = function (level, moves, par) {
+  this.el.lvPill.textContent = (level.index + 1) + ' · ' + level.name;
+  this.el.movePill.innerHTML = '<b>' + moves + '</b> / ' + par;
+};
+GG.UI.prototype.setCups = function (got, total) {
+  show(this.el.cupPill, total > 0);
+  this.el.cupPill.innerHTML = '<small>Trophies</small><span><b>' + got + '</b>/' + total + '</span>';
+};
+GG.UI.prototype.setHint = function (text) { this.el.hint.textContent = text || ''; };
+GG.UI.prototype.setUndo = function (enabled) { this.el.btnUndo.disabled = !enabled; };
+GG.UI.prototype.setMute = function (muted) {
+  this.el.btnMute.innerHTML = (muted ? '🔇' : '🔊') + '<small>Sound</small>';
+};
+/* Space the board must leave free, in CSS px. */
+GG.UI.prototype.reserved = function () {
+  var hud = this.el.hud.getBoundingClientRect();
+  var foot = this.el.foot.getBoundingClientRect();
+  var top = this.el.hud.classList.contains('hide') ? 70 : hud.bottom;
+  var bottom = this.el.foot.classList.contains('hide') ? 90 : (window.innerHeight - foot.top);
+  return { top: top, bottom: bottom };
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = GG;
+
+})(window.GG);
+
+/* ===== game.js ===== */
+(function(GG){
+/* ===========================================================================
+   GOAL GRID — game.js
+   Input, level flow and the animation timeline that turns engine events into
+   a rolling ball. Logic state (GG.step) updates instantly; the "view" the
+   renderer sees is updated as the timeline reaches each event, so mats lay
+   down and turf crumbles when the ball actually gets there.
+   ===========================================================================*/
+var GG = (typeof GG !== 'undefined') ? GG : {};
+
+GG.Game = function (canvas) {
+  var self = this;
+  this.canvas = canvas;
+  this.ui = new GG.UI();
+  this.audio = new GG.Audio();
+  this.rend = new GG.Renderer(canvas);
+  this.mode = 'TITLE';
+  this.levelIndex = 0;
+  this.level = null; this.state = null; this.view = null; this.history = [];
+  this.timeline = []; this.cur = null; this.buffered = null;
+  this.ball = { x: 0, y: 0, z: 0, rx: 0, ry: 0, scale: 1, alpha: 1, drop: 0, visible: true };
+  this.parCache = {};
+  try { this.progress = JSON.parse(GG.store.get('goalgrid.progress') || '{}'); } catch (e) { this.progress = {}; }
+  if (!this.progress || typeof this.progress !== 'object') this.progress = {};
+  this.progress.best = this.progress.best || {};
+
+  this.levels = GG.LEVELS.map(function (def, i) { return GG.parseLevel(def, i); });
+  for (var i = 0; i < this.levels.length; i++) this.levels[i].par = this.par(i);
+
+  this.ui.setMute(this.audio.muted);
+  this._bindUI();
+  this._bindInput();
+  window.addEventListener('resize', function () { self._resize(); });
+  this._resize();
+  this._load(this.progress.last || 0);
+  this.ui.showTitle();
+  this.mode = 'TITLE';
+
+  this._last = performance.now();
+  var loop = function (now) {
+    var dt = Math.min(0.05, (now - self._last) / 1000);
+    self._last = now;
+    self._update(dt, now);
+    self.rend.draw(self.level, self.view, self.ball, now, dt);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+};
+
+GG.Game.prototype.par = function (i) {
+  if (this.parCache[i] === undefined) {
+    var sol = GG.solve(this.levels[i]);
+    this.parCache[i] = sol ? sol.moves : 99;
+  }
+  return this.parCache[i];
+};
+
+/* --- flow ------------------------------------------------------------------- */
+GG.Game.prototype._bindUI = function () {
+  var self = this, ui = this.ui;
+  ui.on('btnPlay', function () { self.audio.unlock(); self.play(self.progress.last || 0); });
+  ui.on('btnTitleLevels', function () { self.audio.unlock(); self.levelSelect(); });
+  ui.on('btnBack', function () { self.ui.showTitle(); self.mode = 'TITLE'; });
+  ui.on('btnUndo', function () { self.undo(); });
+  ui.on('btnRestart', function () { self.restart(); });
+  ui.on('btnLevels', function () { self.levelSelect(); });
+  ui.on('btnMute', function () { self.audio.unlock(); ui.setMute(self.audio.toggleMute()); });
+  ui.on('btnNext', function () {
+    if (self.levelIndex + 1 < self.levels.length) self.play(self.levelIndex + 1);
+    else self.levelSelect();
+  });
+  ui.on('btnAgain', function () { self.play(self.levelIndex); });
+};
+
+GG.Game.prototype.levelSelect = function () {
+  var self = this;
+  this.mode = 'LEVELS';
+  this.ui.showLevels(this.levels, this.progress.best, function (i) { self.play(i); });
+};
+
+GG.Game.prototype.play = function (i) {
+  this._load(i);
+  this.progress.last = i; this._save();
+  this.ui.showPlay();
+  this.mode = 'PLAY';
+  this._resize();
+};
+
+GG.Game.prototype._load = function (i) {
+  this.levelIndex = i;
+  this.level = this.levels[i];
+  this.state = GG.initState(this.level);
+  this.history = [];
+  this.timeline = []; this.cur = null; this.buffered = null;
+  this._rebuildView();
+  this.ui.setHint(this.level.hint);
+  this.ui.setHud(this.level, 0, this.level.par);
+  this.ui.setUndo(false);
+  this.ui.showOut(false);
+  this._resize();
+};
+
+GG.Game.prototype._rebuildView = function () {
+  var v = { toggled: {}, broken: {}, cups: {}, goalFlash: 0 }, k;
+  for (k in this.state.toggled) v.toggled[k] = this.state.toggled[k];
+  for (k in this.state.broken) v.broken[k] = -1e9;
+  for (k in this.state.cups) v.cups[k] = true;
+  this.view = v;
+  this.ui.setCups(this.level.cups.length - GG.cupsLeft(this.level, this.state), this.level.cups.length);
+  this._snapBall();
+};
+
+GG.Game.prototype._snapBall = function () {
+  var p = this.rend.centre(this.state.r, this.state.c);
+  var b = this.ball;
+  b.x = p.x; b.y = p.y; b.z = 0; b.scale = 1; b.alpha = 1; b.drop = 0; b.visible = true;
+};
+
+GG.Game.prototype._resize = function () {
+  this.rend.resize();
+  if (this.level) {
+    var res = this.ui.reserved();
+    this.rend.layout(this.level, res.top, res.bottom);
+    if (!this.cur && !this.timeline.length) this._snapBall();
+  }
+};
+
+GG.Game.prototype._save = function () {
+  GG.store.set('goalgrid.progress', JSON.stringify(this.progress));
+};
+
+GG.Game.prototype.restart = function () {
+  if (this.mode !== 'PLAY') return;
+  this._load(this.levelIndex);
+  this.audio.click(false);
+};
+
+GG.Game.prototype.undo = function () {
+  if (this.mode !== 'PLAY' || this.cur || this.timeline.length || !this.history.length) return;
+  this.state = this.history.pop();
+  this._rebuildView();
+  this.ui.setHud(this.level, this.state.moves, this.level.par);
+  this.ui.setUndo(this.history.length > 0);
+  this.audio.click(false);
+};
+
+/* --- input ------------------------------------------------------------------ */
+GG.Game.prototype._bindInput = function () {
+  var self = this, start = null;
+  var cv = this.canvas;
+  cv.addEventListener('pointerdown', function (e) {
+    self.audio.unlock();
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  cv.addEventListener('pointerup', function (e) {
+    if (!start || start.id !== e.pointerId) return;
+    var dx = e.clientX - start.x, dy = e.clientY - start.y;
+    start = null;
+    var dist = Math.abs(dx) + Math.abs(dy);
+    if (dist < GG.CFG.SWIPE_MIN) {
+      /* A tap kicks the ball toward the tap. */
+      dx = e.clientX - self.ball.x; dy = e.clientY - self.ball.y;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < self.rend.t * 0.55) return;
+    }
+    self.move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  });
+  cv.addEventListener('pointercancel', function () { start = null; });
+
+  window.addEventListener('keydown', function (e) {
+    var k = e.key;
+    var map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+                w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right' };
+    if (map[k]) { e.preventDefault(); self.audio.unlock(); self.move(map[k]); return; }
+    if (k === 'r' || k === 'R') self.restart();
+    else if (k === 'z' || k === 'Z' || k === 'u' || k === 'U') self.undo();
+    else if (k === 'Escape' && self.mode === 'PLAY') self.levelSelect();
+    else if ((k === 'Enter' || k === ' ') && self.mode === 'TITLE') { self.audio.unlock(); self.play(self.progress.last || 0); }
+  });
+};
+
+/* --- a move ----------------------------------------------------------------- */
+GG.Game.prototype.move = function (dir) {
+  if (this.mode !== 'PLAY' || this.state.status !== 'play') return;
+  if (this.cur || this.timeline.length) { this.buffered = dir; return; }
+
+  var res = GG.step(this.level, this.state, dir);
+  if (res.state === this.state) {
+    this.timeline.push({ kind: 'bump', dir: dir, dur: GG.CFG.BUMP_MS });
+    return;
+  }
+  this.history.push(this.state);
+  this.state = res.state;
+  this.ui.setHud(this.level, this.state.moves, this.level.par);
+  this.ui.setUndo(true);
+
+  var self = this, tl = this.timeline, C = GG.CFG;
+  var prev = this.rend.centre(this.history[this.history.length - 1].r, this.history[this.history.length - 1].c);
+  var pendingBreak = null, first = true;
+  res.events.forEach(function (e) {
+    var to;
+    switch (e.type) {
+      case 'break':
+        pendingBreak = { kind: 'break', r: e.r, c: e.c };
+        break;
+      case 'move':
+        to = self.rend.centre(e.r, e.c);
+        tl.push({ kind: 'roll', from: prev, to: to, dur: first ? C.MOVE_MS : C.SLIDE_MS, slide: !first, dir: dir });
+        prev = to; first = false;
+        if (pendingBreak) { tl.push(pendingBreak); pendingBreak = null; }
+        break;
+      case 'stop':
+        tl.push({ kind: 'bump', dir: dir, dur: C.BUMP_MS * 0.7, quiet: true });
+        break;
+      case 'out':
+        to = self.rend.centre(e.r, e.c);
+        tl.push({ kind: 'out', from: prev, to: to, dur: C.OUT_MS, first: first });
+        if (pendingBreak) { tl.push(pendingBreak); pendingBreak = null; }
+        tl.push({ kind: 'fn', f: function () { self.ui.showOut(true); } });
+        tl.push({ kind: 'wait', dur: 950 });
+        tl.push({ kind: 'fn', f: function () { self._load(self.levelIndex); } });
+        break;
+      case 'switch':
+        tl.push({ kind: 'switch', r: e.r, c: e.c, group: e.group, on: e.on });
+        break;
+      case 'collect':
+        tl.push({ kind: 'collect', r: e.r, c: e.c, left: e.left });
+        break;
+      case 'pass':
+        to = self.rend.centre(e.r, e.c);
+        tl.push({ kind: 'pass', from: prev, to: to, dur: C.PASS_MS });
+        prev = to;
+        break;
+      case 'goal':
+        var d = GG.DIRS[self.level.goalDir];
+        to = { x: prev.x + d.dc * self.rend.t * 0.22, y: prev.y + d.dr * self.rend.t * 0.22 };
+        tl.push({ kind: 'roll', from: prev, to: to, dur: C.MOVE_MS * 0.6, slide: true, dir: dir });
+        tl.push({ kind: 'goal', r: e.r, c: e.c });
+        tl.push({ kind: 'wait', dur: C.GOAL_MS });
+        tl.push({ kind: 'fn', f: function () { self._win(); } });
+        break;
+    }
+  });
+};
+
+GG.Game.prototype._win = function () {
+  var moves = this.state.moves, i = this.levelIndex;
+  var best = this.progress.best[i];
+  if (best === undefined || moves < best) this.progress.best[i] = moves;
+  this._save();
+  this.mode = 'WIN';
+  this.ui.showWin(moves, this.level.par, best === undefined ? moves : Math.min(best, moves), i === this.levels.length - 1);
+};
+
+/* --- timeline --------------------------------------------------------------- */
+GG.Game.prototype._update = function (dt, now) {
+  var b = this.ball, t = this.rend.t;
+  if (!this.cur) {
+    if (!this.timeline.length) {
+      if (this.buffered) { var d = this.buffered; this.buffered = null; this.move(d); }
+      return;
+    }
+    this.cur = this.timeline.shift();
+    this.cur.elapsed = 0;
+    this._start(this.cur, now);
+    /* An instant action may have reset the level (out of bounds), which
+       empties the timeline and clears cur under us. Stop here if so. */
+    if (!this.cur) return;
+  }
+  var a = this.cur;
+  if (a.dur === undefined) { this.cur = null; return this._update(dt, now); }
+  a.elapsed += dt * 1000;
+  var p = Math.min(1, a.elapsed / a.dur);
+  switch (a.kind) {
+    case 'roll': {
+      var nx = a.from.x + (a.to.x - a.from.x) * p, ny = a.from.y + (a.to.y - a.from.y) * p;
+      b.rx += nx - b.x; b.ry += ny - b.y; b.x = nx; b.y = ny;
+      break;
+    }
+    case 'bump': {
+      var dd = GG.DIRS[a.dir], k = Math.sin(Math.PI * p) * t * 0.16;
+      b.x = a.base.x + dd.dc * k; b.y = a.base.y + dd.dr * k;
+      break;
+    }
+    case 'pass': {
+      var e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      b.x = a.from.x + (a.to.x - a.from.x) * e; b.y = a.from.y + (a.to.y - a.from.y) * e;
+      b.z = Math.sin(Math.PI * p) * 1.4; b.rx += t * dt * 6;
+      break;
+    }
+    case 'out': {
+      var q = Math.min(1, p / 0.42);
+      var ox = a.from.x + (a.to.x - a.from.x) * q, oy = a.from.y + (a.to.y - a.from.y) * q;
+      b.rx += ox - b.x; b.ry += oy - b.y; b.x = ox; b.y = oy;
+      if (p > 0.42) {
+        var f = (p - 0.42) / 0.58;
+        b.drop = f * f * t * 2.2; b.alpha = 1 - f; b.scale = 1 - f * 0.45;
+        if (!a.whistled) { a.whistled = true; this.audio.out(); }
+      }
+      break;
+    }
+  }
+  if (p >= 1) {
+    if (a.kind === 'bump') { b.x = a.base.x; b.y = a.base.y; }
+    if (a.kind === 'pass') b.z = 0;
+    if (a.kind === 'out') b.visible = false;
+    this.cur = null;
+  }
+};
+
+GG.Game.prototype._start = function (a, now) {
+  var b = this.ball, r = this.rend;
+  switch (a.kind) {
+    case 'roll': if (!a.slide) this.audio.kick(); break;
+    case 'bump': a.base = { x: b.x, y: b.y }; if (!a.quiet) this.audio.bump(); break;
+    case 'pass': this.audio.pass(); break;
+    case 'out': if (a.first) this.audio.kick(); break;
+    case 'break': {
+      this.view.broken[GG.key(a.r, a.c)] = now;
+      var c = r.centre(a.r, a.c);
+      r.dust(c.x, c.y, 14, GG.COLORS.crackLine);
+      this.audio.crumble();
+      break;
+    }
+    case 'switch': {
+      this.view.toggled[a.group] = a.on;
+      var s = r.centre(a.r, a.c);
+      r.pulse(s.x, s.y, GG.COLORS.groups[a.group]);
+      this.audio.click(a.on);
+      break;
+    }
+    case 'collect': {
+      this.view.cups[GG.key(a.r, a.c)] = true;
+      var cc = r.centre(a.r, a.c);
+      r.pulse(cc.x, cc.y, GG.COLORS.gold);
+      r.dust(cc.x, cc.y, 10, GG.COLORS.gold);
+      this.ui.setCups(this.level.cups.length - a.left, this.level.cups.length);
+      this.audio.collect(a.left === 0);
+      break;
+    }
+    case 'goal': {
+      this.view.goalFlash = now;
+      var g = r.centre(a.r, a.c);
+      r.confetti(g.x, g.y, 90);
+      this.audio.goal();
+      break;
+    }
+    case 'fn': a.f(); break;
+  }
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = GG;
+
+})(window.GG);
+
+</script>
+<script>
+  window.addEventListener('load', function () {
+    try {
+      window.GG.game = new GG.Game(document.getElementById('c'));
+    } catch (err) {
+      var tag = document.querySelector('#title .tag');
+      if (tag) tag.textContent = 'Could not start: ' + (err && err.message ? err.message : err);
+      throw err;
+    }
+  });
+</script>
+</body>
+</html>
