@@ -1,0 +1,1641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#5db7ff">
+<title>SPRINTER — Tap Dash</title>
+<style>
+  :root{
+    --ink:#20243a; --paper:#fffdf7;
+    --hot:#ff5a5f; --gold:#ffd23f; --sky:#7dd3fc; --mint:#6ee7b7;
+    --round: ui-rounded,'Arial Rounded MT Bold','Hiragino Maru Gothic ProN',Quicksand,Nunito,system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#5db7ff;
+    font-family:var(--round);color:var(--paper);overscroll-behavior:none;touch-action:none;}
+  canvas{position:fixed;inset:0;display:block;}
+  button{font-family:inherit;}
+
+  .hide{display:none !important;}
+  #ui{position:fixed;inset:0;pointer-events:none;
+      padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right))
+              max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));}
+
+  /* ---------- HUD ---------- */
+  #hud{position:absolute;inset:0;}
+  .pill{position:absolute;background:rgba(16,20,34,.55);backdrop-filter:blur(7px);
+        border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:8px 14px;
+        font-weight:800;letter-spacing:.4px;line-height:1;
+        display:flex;flex-direction:column;align-items:flex-start;gap:4px;}
+  .pill small{font-size:11px;opacity:.7;letter-spacing:1px;}
+  .pill b{font-size:24px;}
+  #distBox{top:14px;left:14px;}  #distBox b{color:var(--gold);}
+  #tapBox{top:14px;right:14px;align-items:flex-end;} #tapBox b{color:var(--sky);}
+
+  #timer{position:absolute;top:8px;left:50%;transform:translateX(-50%);
+         font-size:64px;font-weight:900;letter-spacing:-1px;color:var(--paper);
+         text-shadow:0 4px 0 rgba(0,0,0,.28), 0 0 24px rgba(0,0,0,.15);
+         font-variant-numeric:tabular-nums;transition:color .15s;}
+  #timer.low{color:var(--hot);animation:tick .5s infinite;}
+  #timer.bump{color:var(--gold);animation:bump .45s cubic-bezier(.2,1.6,.4,1);}
+  @keyframes bump{0%{transform:translateX(-50%) scale(1)}40%{transform:translateX(-50%) scale(1.35)}100%{transform:translateX(-50%) scale(1)}}
+  #nextBonus{position:absolute;top:78px;left:50%;transform:translateX(-50%);
+             font-size:13px;font-weight:800;letter-spacing:1px;color:var(--gold);
+             background:rgba(16,20,34,.55);border-radius:999px;padding:5px 12px;white-space:nowrap;}
+  @keyframes tick{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.08)}}
+
+  #tapFlash{position:absolute;inset:0;border:0 solid rgba(255,255,255,.0);pointer-events:none;}
+  #tapFlash.go{animation:edge .18s ease-out;}
+  @keyframes edge{0%{box-shadow:inset 0 0 0 10px rgba(255,255,255,.55)}100%{box-shadow:inset 0 0 0 0 rgba(255,255,255,0)}}
+
+  #meters{position:absolute;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);
+          width:min(78vw,360px);display:flex;flex-direction:column;gap:8px;}
+  .meter{background:rgba(16,20,34,.55);backdrop-filter:blur(7px);border:2px solid rgba(255,255,255,.18);
+         border-radius:14px;padding:6px 12px 8px;}
+  .meter .row{display:flex;justify-content:space-between;font-size:12px;font-weight:800;letter-spacing:1px;opacity:.85;margin-bottom:5px;}
+  .meter .row b{font-size:14px;letter-spacing:0;opacity:1;}
+  .track{height:10px;background:rgba(255,255,255,.15);border-radius:99px;overflow:hidden;}
+  .track > div{height:100%;width:0;border-radius:99px;transition:width .08s linear;}
+  #rateBar{background:linear-gradient(90deg,var(--sky),var(--mint),var(--gold),var(--hot));}
+  #speedBar{background:var(--gold);}
+
+  #hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+        font-size:34px;font-weight:900;color:var(--paper);text-shadow:0 4px 0 rgba(0,0,0,.3);
+        animation:pulse .5s infinite alternate;letter-spacing:2px;}
+  @keyframes pulse{from{transform:translate(-50%,-50%) scale(1)}to{transform:translate(-50%,-50%) scale(1.18)}}
+
+  #banner{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);
+          font-size:min(13vw,72px);font-weight:900;letter-spacing:1px;color:var(--paper);
+          text-shadow:0 5px 0 rgba(0,0,0,.3);white-space:nowrap;
+          animation:pop .35s cubic-bezier(.2,1.6,.4,1);}
+  #banner.long{font-size:min(8.5vw,56px);}
+  #banner.go{color:var(--mint);font-size:min(22vw,120px);}
+  #banner.bad{color:var(--hot);}
+  #banner.gold{color:var(--gold);}
+  @keyframes pop{from{transform:translate(-50%,-50%) scale(.3);opacity:0}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+
+  #mute{position:absolute;top:calc(max(12px,env(safe-area-inset-top)) + 72px);right:14px;font-size:19px;pointer-events:auto;
+        background:rgba(16,20,34,.55);border:2px solid rgba(255,255,255,.18);color:var(--paper);
+        border-radius:999px;width:40px;height:40px;display:flex;align-items:center;
+        justify-content:center;cursor:pointer;}
+
+  /* ---------- screens ---------- */
+  .screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+          justify-content:center;text-align:center;padding:24px;gap:10px;}
+  #title{background:linear-gradient(180deg,rgba(32,36,58,.30),rgba(32,36,58,.55));}
+  #over{background:rgba(32,36,58,.72);backdrop-filter:blur(4px);}
+  h1{font-size:min(17vw,84px);font-weight:900;letter-spacing:2px;line-height:1;
+     color:var(--gold);text-shadow:0 6px 0 rgba(0,0,0,.3);transform:skewX(-8deg);}
+  .tag{font-size:min(5.2vw,22px);font-weight:800;letter-spacing:2px;opacity:.95;text-shadow:0 2px 0 rgba(0,0,0,.3);}
+  .sub{font-size:15px;opacity:.85;max-width:320px;line-height:1.4;text-shadow:0 1px 0 rgba(0,0,0,.3);}
+  .sub b{color:var(--gold);}
+  .bestRow{font-size:14px;font-weight:800;letter-spacing:1px;opacity:.9;margin-top:4px;
+           background:rgba(16,20,34,.45);border-radius:999px;padding:6px 14px;}
+  .bestRow b{color:var(--gold);letter-spacing:0;font-size:16px;}
+  .btn{pointer-events:auto;cursor:pointer;margin-top:16px;border:0;
+       background:var(--hot);color:var(--paper);font-weight:900;font-size:26px;letter-spacing:3px;
+       padding:16px 52px;border-radius:999px;box-shadow:0 7px 0 #b8383c, 0 12px 24px rgba(0,0,0,.25);
+       transition:transform .06s, box-shadow .06s;}
+  .btn:active{transform:translateY(5px);box-shadow:0 2px 0 #b8383c;}
+  .hintline{font-size:12px;opacity:.7;letter-spacing:1px;margin-top:10px;}
+  .hintline.keys{margin-top:4px;opacity:.55;}
+  @media (hover:none) and (pointer:coarse){ .hintline.keys{display:none;} }
+
+  #ovDist{font-size:min(24vw,110px);font-weight:900;line-height:1;color:var(--paper);
+          text-shadow:0 6px 0 rgba(0,0,0,.3);font-variant-numeric:tabular-nums;}
+  #ovDist span{font-size:.35em;opacity:.8;margin-left:4px;}
+  #ovRating{font-size:min(9vw,40px);font-weight:900;letter-spacing:3px;color:var(--gold);
+            text-shadow:0 4px 0 rgba(0,0,0,.3);transform:skewX(-8deg);}
+  #ovBlurb{font-size:15px;opacity:.85;margin-top:-4px;}
+  #ovNew{background:var(--gold);color:var(--ink);font-weight:900;letter-spacing:2px;font-size:14px;
+         padding:6px 14px;border-radius:999px;animation:pulse2 .6s infinite alternate;}
+  @keyframes pulse2{from{transform:scale(1)}to{transform:scale(1.08)}}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin-top:12px;
+         background:rgba(16,20,34,.45);border-radius:18px;padding:12px 18px;min-width:260px;}
+  .stats div{display:flex;justify-content:space-between;gap:14px;font-size:14px;font-weight:800;}
+  .stats div small{opacity:.7;letter-spacing:1px;font-size:11px;align-self:center;white-space:nowrap;}
+  .stats div b{white-space:nowrap;}
+  .stats div b{font-variant-numeric:tabular-nums;}
+  .stats .wide{grid-column:1/3;}
+  #ovHundredRow b{color:var(--mint);}
+  #ovFalse{font-size:12px;color:var(--hot);font-weight:800;letter-spacing:1px;}
+  #ovPerfect{font-size:12px;color:var(--gold);font-weight:800;letter-spacing:1px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <!-- ---------- HUD ---------- -->
+  <div id="hud" class="hide">
+    <div id="tapFlash"></div>
+    <div id="timer">10.0</div>
+    <div id="nextBonus" class="hide"></div>
+    <div id="distBox" class="pill"><small>DISTANCE</small><b><span id="dist">0.0</span> m</b></div>
+    <div id="tapBox" class="pill"><small>TAPS</small><b id="taps">0</b></div>
+    <div id="hint" class="hide">TAP! TAP! TAP!</div>
+    <div id="meters">
+      <div class="meter">
+        <div class="row"><span>TAPS / SEC</span><b id="rate">0.0</b></div>
+        <div class="track"><div id="rateBar"></div></div>
+      </div>
+      <div class="meter">
+        <div class="row"><span>SPEED</span></div>
+        <div class="track"><div id="speedBar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="banner" class="hide"></div>
+
+  <!-- ---------- title ---------- -->
+  <div id="title" class="screen">
+    <h1>SPRINTER</h1>
+    <div class="tag">TAP AS FAST AS YOU CAN</div>
+    <div class="sub">Ten seconds on the clock. <b>Every tap is a stride.</b><br>Every 50 m buys <b>+2 seconds</b>.<br>Wait for the gun, react fast for a <b>perfect start</b>.</div>
+    <div id="bestRow" class="bestRow hide">BEST &nbsp;<b id="bestTitle">0.0 m</b></div>
+    <button id="btnPlay" class="btn">PLAY</button>
+    <div class="hintline">TWO THUMBS BEAT ONE FINGER</div>
+    <div class="hintline keys">KEYBOARD: &larr; &rarr; &nbsp;&middot;&nbsp; A D &nbsp;&middot;&nbsp; SPACE</div>
+  </div>
+
+  <!-- ---------- results ---------- -->
+  <div id="over" class="screen hide">
+    <div id="ovNew" class="hide">NEW BEST!</div>
+    <div id="ovDist"><span id="ovDistNum">0.0</span><span>m</span></div>
+    <div id="ovRating">RUNNER</div>
+    <div id="ovBlurb"></div>
+    <div class="stats">
+      <div><small>TAPS</small><b id="ovTaps">0</b></div>
+      <div><small>AVG</small><b id="ovRate">0.0/s</b></div>
+      <div><small>TOP SPEED</small><b id="ovSpeed">0 km/h</b></div>
+      <div><small>BEST</small><b id="ovBest">0.0 m</b></div>
+      <div class="wide"><small>CLOCK</small><b id="ovClock">10 s</b></div>
+      <div id="ovHundredRow" class="wide hide"><small>100 m TIME</small><b id="ovHundred">0.00 s</b></div>
+    </div>
+    <div id="ovPerfect" class="hide">&#9889; PERFECT START</div>
+    <div id="ovFalse" class="hide"></div>
+    <button id="btnRetry" class="btn">AGAIN</button>
+    <div class="hintline">OR TAP ANYWHERE</div>
+  </div>
+
+  <button id="mute">🔊</button>
+</div>
+
+<script>
+window.SP = window.SP || {};
+/* ===== config.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — config.js
+   All tuning lives here. Nothing in this file touches the DOM or canvas, so
+   it can be loaded in node for headless model tests.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+
+SP.CFG = {
+  /* --- The period ----------------------------------------------------------
+     A race is a fixed window. Distance covered inside it is the score, so a
+     tapper who fades at the end is punished exactly as much as one who starts
+     slow. Not "run 100m as fast as you can": the finish line at 100m is a
+     landmark and a bragging stat, not the end of the race. */
+  RACE_TIME: 10,          // seconds on the clock at the gun
+  FINISH_LINE: 100,       // metres; crossing it records a "100m time"
+
+  /* --- Time extensions -----------------------------------------------------
+     Every BONUS_EVERY metres adds BONUS_TIME to the clock. This cannot run
+     away: at the speed cap 50m takes 4s and buys back 2s, so each extension
+     is worth half the last and the total converges. Roughly, a runner
+     holding v m/s covers 10v / (1 - v * BONUS_TIME / BONUS_EVERY) metres,
+     which is ~250m at the cap and ~140m for a one-finger 8 taps/s. */
+  BONUS_EVERY: 50,        // m
+  BONUS_TIME: 2,          // s
+
+  /* --- Tap -> speed --------------------------------------------------------
+     Every counted tap is a stride: it adds TAP_IMPULSE to speed, and speed
+     bleeds away exponentially with time constant SPEED_TAU. So the steady
+     state for a tapper holding rate R is roughly R * TAP_IMPULSE * SPEED_TAU,
+     which is what the ratings table below is tuned against:
+       5 taps/s  (one lazy finger)      ->  ~5.7 m/s  -> ~50 m
+       8 taps/s  (one fast finger)      ->  ~9.2 m/s  -> ~85 m
+       11 taps/s (two thumbs, on form)  -> capped     -> ~110 m
+     The cap is where a human sprinter tops out; past it more taps only keep
+     you there, they cannot make you faster. */
+  TAP_IMPULSE: 1.35,      // m/s per counted tap
+  SPEED_TAU: 0.85,        // s; speed halves every ~0.6s with no taps
+  MAX_SPEED: 12.5,        // m/s (45 km/h)
+
+  /* Two thumbs alternating can legitimately reach ~15 taps/s (65 ms apart).
+     Anything tighter than MIN_TAP_GAP is a double-fire from one contact
+     (pointerdown + synthetic mouse event, a glitchy digitiser, an
+     auto-clicker) and is dropped. */
+  MIN_TAP_GAP: 0.025,     // s
+
+  /* --- The start -----------------------------------------------------------
+     ON YOUR MARKS is fixed; SET is randomised so the gun cannot be
+     anticipated. Tapping before the gun is a false start: the runner
+     stumbles out of the blocks and taps are ignored for FALSE_START_PENALTY
+     seconds of race time, stacking per offence. START_GRACE swallows the
+     stray extra taps a fast tapper lands right after hitting PLAY, so the
+     first thing the game does is not punish them for being eager. */
+  MARKS_TIME: 1.2,        // s
+  SET_MIN: 0.9,           // s
+  SET_MAX: 1.7,           // s
+  START_GRACE: 0.35,      // s at the start of MARKS where taps are ignored
+  FALSE_START_PENALTY: 0.6,
+
+  /* --- Perfect start -------------------------------------------------------
+     A first stride within PERFECT_START_WINDOW of the gun is a perfect
+     start: the runner explodes out of the blocks and is held at BOOST_SPEED
+     for the first BOOST_DISTANCE metres, then ordinary decay takes over and
+     speed settles back to whatever the tapping sustains. A third of a
+     second is a genuine reaction test: a player watching the screen makes
+     it most of the time, a distracted one does not. The ratings below
+     assume it is made. A false start eats the window entirely. Against a first
+     stride just outside the window it is worth ~8m at 11 taps/s, ~10m at
+     8/s and ~12m at 5/s: it helps the slow tapper most, and never beats an
+     extra tap per second, so fast thumbs still win. */
+  PERFECT_START_WINDOW: 1 / 3,  // s after the gun, inclusive
+  BOOST_DISTANCE: 10,           // m
+  BOOST_SPEED: 9.0,             // m/s floor while boosted
+
+  /* --- Readouts ------------------------------------------------------------ */
+  RATE_WINDOW: 1.0,       // s of history behind the taps/sec meter
+  STRIDE_LEN: 2.2         // m per full leg cycle at speed; drives animation
+};
+
+/* Ratings by distance, worst first, tuned for a race WITH a perfect start
+   (see above). Time extensions make the curve a staircase: each 50m gate you
+   reach before the clock runs out buys the next stretch, so the steps are
+   the gates, not the tap rates.
+     5 taps/s   ~74m  (1 gate)  RUNNER      one lazy finger
+     8 taps/s  ~127m  (2 gates) SPRINTER    one fast finger
+     10 taps/s ~179m  (3 gates) OLYMPIAN    two thumbs
+     12 taps/s ~187m  (3 gates) LIGHTNING   two thumbs, on form
+   The 4th gate (200m by 16s) is out of reach even at the cap, so ~190m is
+   the ceiling. Without the perfect start the cap reaches ~184m, so a slow
+   reaction still costs the top rating. */
+SP.RATINGS = [
+  { min: 0,   name: 'WARM-UP',   blurb: 'Stretching, were we?' },
+  { min: 35,  name: 'JOGGER',    blurb: 'Nice and steady. Too steady.' },
+  { min: 55,  name: 'RUNNER',    blurb: 'Now we are moving.' },
+  { min: 95,  name: 'SPRINTER',  blurb: 'Fast fingers.' },
+  { min: 140, name: 'OLYMPIAN',  blurb: 'Gold-medal cadence.' },
+  { min: 185, name: 'LIGHTNING', blurb: 'Is that even legal?' }
+];
+
+SP.ratingFor = function (distance) {
+  var r = SP.RATINGS[0];
+  for (var i = 0; i < SP.RATINGS.length; i++) {
+    if (distance >= SP.RATINGS[i].min) r = SP.RATINGS[i];
+  }
+  return r;
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+/* ===== sprint.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — sprint.js
+   The whole game as a pure model: a state machine fed dt and taps. No DOM,
+   no canvas, no clock of its own, so it runs identically in the browser loop
+   and in a node test at any speed.
+
+   Phases:  IDLE -> MARKS -> SET -> GO -> DONE
+   Events are queued in .events for the game layer to drain each frame, so
+   the model never needs a callback and the order of "what happened this
+   step" is preserved even when several things land in one dt.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+if (typeof require !== 'undefined' && typeof SP.CFG === 'undefined') {
+  SP = require('./config.js');
+}
+
+SP.Sprint = function (opts) { this.reset(opts); };
+
+SP.Sprint.prototype.reset = function (opts) {
+  opts = opts || {};
+  var C = SP.CFG;
+  var rnd = opts.random || Math.random;
+  this.phase = 'IDLE';
+  this.phaseT = 0;          // time inside the current phase
+  this.clock = 0;           // total model time, for tap spacing
+  this.raceT = 0;           // counted race time, 0..raceLimit
+  this.raceLimit = C.RACE_TIME; // grows by BONUS_TIME every BONUS_EVERY m
+  this.bonuses = 0;         // extensions earned
+  this.speed = 0;           // m/s
+  this.distance = 0;        // m, frozen when the window closes
+  this.coast = 0;           // m the runner keeps moving after DONE (visual only)
+  this.taps = 0;
+  this.falseStarts = 0;
+  this.penaltyUntil = 0;    // race time before which taps are stumbles
+  this.finishTime = null;   // s at which FINISH_LINE was crossed, or null
+  this.perfectStart = false;
+  this.boostEnd = -1;       // distance at which a perfect-start boost expires
+  this.stridePhase = 0;     // leg cycles, for animation
+  this.setDuration = opts.setDuration !== undefined
+    ? opts.setDuration : C.SET_MIN + rnd() * (C.SET_MAX - C.SET_MIN);
+  this._lastTap = -Infinity;
+  this._tapTimes = [];
+  this.events = [];
+};
+
+SP.Sprint.prototype.start = function () {
+  if (this.phase !== 'IDLE') return;
+  this.phase = 'MARKS';
+  this.phaseT = 0;
+  this.events.push('marks');
+};
+
+SP.Sprint.prototype.step = function (dt) {
+  var C = SP.CFG;
+  this.clock += dt;
+  this.phaseT += dt;
+
+  switch (this.phase) {
+    case 'MARKS':
+      if (this.phaseT >= C.MARKS_TIME) { this.phase = 'SET'; this.phaseT = 0; this.events.push('set'); }
+      break;
+
+    case 'SET':
+      if (this.phaseT >= this.setDuration) {
+        this.phase = 'GO'; this.phaseT = 0; this.raceT = 0;
+        this.events.push('go');
+      }
+      break;
+
+    case 'GO': {
+      /* Score only up to the clock, but an extension earned mid-step raises
+         the clock, so loop until the step is spent or the clock really runs
+         out. */
+      var left = dt;
+      while (left > 0 && this.phase === 'GO') {
+        var counted = Math.min(left, this.raceLimit - this.raceT);
+        this._move(counted, true);
+        this.raceT += counted;
+        left -= counted;
+        if (this.raceT >= this.raceLimit - 1e-9) {
+          this.phase = 'DONE'; this.phaseT = 0;
+          this.events.push('done');
+          this._move(left, false);
+        }
+      }
+      break;
+    }
+
+    case 'DONE':
+      this._move(dt, false);
+      break;
+  }
+};
+
+/* Advance the runner. Scored movement freezes .distance at the window edge;
+   unscored movement (the run-out after the gun) only feeds .coast so the
+   runner does not stop dead the instant the clock hits zero. */
+SP.Sprint.prototype._move = function (dt, scored) {
+  if (dt <= 0) return;
+  var C = SP.CFG;
+  var before = this.distance;
+  /* Exact integral of exponentially decaying speed over dt, not Euler, so a
+     long frame (a backgrounded tab returning) cannot score more than the
+     taps actually earned. */
+  var k = Math.exp(-dt / C.SPEED_TAU);
+  var d = this.speed * C.SPEED_TAU * (1 - k);
+  this.speed *= k;
+  /* Perfect-start boost: hold speed up until the boost distance is spent.
+     Applied after the decay so the very first frame of the boost already
+     moves at full boost speed. Past boostEnd nothing props speed up, which
+     is the "slowing back down". */
+  if (scored && this.distance < this.boostEnd && this.speed < C.BOOST_SPEED) {
+    this.speed = C.BOOST_SPEED;
+  }
+  this.stridePhase += d / C.STRIDE_LEN;
+  if (scored) {
+    this.distance += d;
+    var earned = Math.floor(this.distance / C.BONUS_EVERY);
+    while (this.bonuses < earned) {
+      this.bonuses++;
+      this.raceLimit += C.BONUS_TIME;
+      this.events.push('bonus');
+    }
+    if (this.finishTime === null && before < C.FINISH_LINE && this.distance >= C.FINISH_LINE) {
+      /* Interpolate inside the step so the 100m time is not quantised to dt. */
+      var frac = (C.FINISH_LINE - before) / (this.distance - before);
+      this.finishTime = this.raceT + dt * frac;
+      this.events.push('finish');
+    }
+  } else {
+    this.coast += d;
+  }
+};
+
+/* One tap. Returns what the model did with it, so the game layer can pick
+   feedback without re-deriving the rules:
+     'counted'   a stride
+     'false'     jumped the gun; a penalty was added
+     'penalty'   still stumbling from a false start
+     'debounced' too close to the previous tap; treated as the same contact
+     'ignored'   no race in progress (title, results, start grace) */
+SP.Sprint.prototype.tap = function () {
+  var C = SP.CFG;
+  if (this.clock - this._lastTap < C.MIN_TAP_GAP) return 'debounced';
+  this._lastTap = this.clock;
+
+  switch (this.phase) {
+    case 'MARKS':
+      if (this.phaseT < C.START_GRACE) return 'ignored';
+      /* falls through */
+    case 'SET':
+      this.falseStarts++;
+      this.penaltyUntil += C.FALSE_START_PENALTY;
+      this.events.push('falseStart');
+      return 'false';
+
+    case 'GO':
+      if (this.raceT < this.penaltyUntil) return 'penalty';
+      this.taps++;
+      this.speed = Math.min(C.MAX_SPEED, this.speed + C.TAP_IMPULSE);
+      this._tapTimes.push(this.clock);
+      if (this.taps === 1 && this.raceT <= C.PERFECT_START_WINDOW) {
+        this.perfectStart = true;
+        this.boostEnd = this.distance + C.BOOST_DISTANCE;
+        this.speed = Math.max(this.speed, C.BOOST_SPEED);
+        this.events.push('perfectStart');
+      }
+      return 'counted';
+
+    default:
+      return 'ignored';
+  }
+};
+
+/* Taps per second over the trailing RATE_WINDOW. */
+SP.Sprint.prototype.tapRate = function () {
+  var cutoff = this.clock - SP.CFG.RATE_WINDOW;
+  while (this._tapTimes.length && this._tapTimes[0] < cutoff) this._tapTimes.shift();
+  return this._tapTimes.length / SP.CFG.RATE_WINDOW;
+};
+
+SP.Sprint.prototype.timeLeft = function () {
+  return Math.max(0, this.raceLimit - this.raceT);
+};
+
+/* Metres to the next extension. */
+SP.Sprint.prototype.toNextBonus = function () {
+  return (this.bonuses + 1) * SP.CFG.BONUS_EVERY - this.distance;
+};
+
+SP.Sprint.prototype.isRacing = function () { return this.phase === 'GO'; };
+SP.Sprint.prototype.isBoosting = function () {
+  return this.phase === 'GO' && this.distance < this.boostEnd;
+};
+SP.Sprint.prototype.isStumbling = function () {
+  return this.phase === 'GO' && this.raceT < this.penaltyUntil;
+};
+
+/* Where the runner is drawn: scored distance plus any run-out. */
+SP.Sprint.prototype.visualDistance = function () {
+  return this.distance + this.coast;
+};
+
+SP.Sprint.prototype.drainEvents = function () {
+  var e = this.events; this.events = []; return e;
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+/* ===== audio.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — audio.js
+   Fully procedural, so the game stays one file. The crowd bed is the main
+   feedback channel after the visuals: its volume tracks speed, so a tapper
+   who fades hears the stadium go quiet before they see the bar drop.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+
+SP.Audio = function () {
+  this.ctx = null;
+  this.enabled = true;
+  this.ready = false;
+  this._stepToggle = 0;
+};
+
+SP.Audio.prototype.init = function () {
+  if (this.ready) return;
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { this.enabled = false; return; }
+  var ctx = this.ctx = new AC();
+
+  this.master = ctx.createGain();
+  this.master.gain.value = 0.6;
+  this.master.connect(ctx.destination);
+
+  /* Crowd: looping brown-ish noise -> bandpass -> gain. */
+  var len = ctx.sampleRate * 2;
+  var buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  var d = buf.getChannelData(0);
+  var last = 0;
+  for (var i = 0; i < len; i++) {
+    var white = Math.random() * 2 - 1;
+    last = (last + 0.04 * white) / 1.04;
+    d[i] = last * 3;
+  }
+  var src = ctx.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  var filt = ctx.createBiquadFilter();
+  filt.type = 'bandpass'; filt.frequency.value = 900; filt.Q.value = 0.5;
+  this.crowdGain = ctx.createGain();
+  this.crowdGain.gain.value = 0.0;
+  src.connect(filt); filt.connect(this.crowdGain); this.crowdGain.connect(this.master);
+  src.start();
+
+  /* Short noise burst buffer reused for steps and the gun. */
+  var blen = Math.floor(ctx.sampleRate * 0.25);
+  this.noise = ctx.createBuffer(1, blen, ctx.sampleRate);
+  var nd = this.noise.getChannelData(0);
+  for (var j = 0; j < blen; j++) nd[j] = Math.random() * 2 - 1;
+
+  this.ready = true;
+};
+
+SP.Audio.prototype.resume = function () {
+  if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+};
+
+SP.Audio.prototype._ok = function () { return this.ready && this.enabled; };
+
+/* speedFrac 0..1 */
+SP.Audio.prototype.setCrowd = function (speedFrac) {
+  if (!this._ok()) return;
+  var target = 0.03 + speedFrac * 0.22;
+  this.crowdGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.15);
+};
+
+SP.Audio.prototype.quiet = function () {
+  if (!this._ok()) return;
+  this.crowdGain.gain.setTargetAtTime(0.0, this.ctx.currentTime, 0.4);
+};
+
+SP.Audio.prototype._burst = function (gain, hz, dur) {
+  var ctx = this.ctx, t = ctx.currentTime;
+  var s = ctx.createBufferSource(); s.buffer = this.noise;
+  var f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = hz; f.Q.value = 1;
+  var g = ctx.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(this.master);
+  s.start(t); s.stop(t + dur);
+};
+
+SP.Audio.prototype._tone = function (hz, dur, gain, type) {
+  var ctx = this.ctx, t = ctx.currentTime;
+  var o = ctx.createOscillator(); o.type = type || 'square'; o.frequency.value = hz;
+  var g = ctx.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(this.master);
+  o.start(t); o.stop(t + dur);
+};
+
+/* One footfall. Alternates pitch so left/right steps read as a rhythm. */
+SP.Audio.prototype.step = function (speedFrac) {
+  if (!this._ok()) return;
+  this._stepToggle ^= 1;
+  this._burst(0.35, this._stepToggle ? 420 : 300, 0.06 + speedFrac * 0.02);
+};
+
+SP.Audio.prototype.stumble = function () {
+  if (!this._ok()) return;
+  this._burst(0.3, 180, 0.18);
+  this._tone(160, 0.25, 0.12, 'sawtooth');
+};
+
+SP.Audio.prototype.marks = function () { if (this._ok()) this._tone(440, 0.12, 0.18); };
+SP.Audio.prototype.set   = function () { if (this._ok()) this._tone(440, 0.12, 0.18); };
+
+SP.Audio.prototype.gun = function () {
+  if (!this._ok()) return;
+  this._burst(0.9, 1200, 0.25);
+  this._burst(0.7, 250, 0.35);
+  this._tone(880, 0.35, 0.2);
+};
+
+SP.Audio.prototype.falseStart = function () {
+  if (!this._ok()) return;
+  this._tone(220, 0.35, 0.2, 'sawtooth');
+  this._tone(220, 0.35, 0.2, 'sawtooth');
+};
+
+SP.Audio.prototype.finishLine = function () {
+  if (!this._ok()) return;
+  var self = this;
+  [660, 880, 1320].forEach(function (hz, i) {
+    setTimeout(function () { if (self._ok()) self._tone(hz, 0.25, 0.18, 'triangle'); }, i * 90);
+  });
+};
+
+/* Rising three-note sting for a perfect start. */
+SP.Audio.prototype.perfect = function () {
+  if (!this._ok()) return;
+  var self = this;
+  [784, 1047, 1568].forEach(function (hz, i) {
+    setTimeout(function () { if (self._ok()) self._tone(hz, 0.22, 0.2, 'triangle'); }, i * 70);
+  });
+};
+
+/* Two quick rising notes for a time extension. */
+SP.Audio.prototype.bonus = function () {
+  if (!this._ok()) return;
+  var self = this;
+  [988, 1319].forEach(function (hz, i) {
+    setTimeout(function () { if (self._ok()) self._tone(hz, 0.2, 0.18, 'triangle'); }, i * 80);
+  });
+};
+
+SP.Audio.prototype.done = function () {
+  if (!this._ok()) return;
+  this._tone(1500, 0.5, 0.2, 'sine');   // whistle
+  this._tone(1520, 0.5, 0.1, 'sine');
+};
+
+SP.Audio.prototype.newBest = function () {
+  if (!this._ok()) return;
+  var self = this;
+  [523, 659, 784, 1047].forEach(function (hz, i) {
+    setTimeout(function () { if (self._ok()) self._tone(hz, 0.3, 0.18, 'triangle'); }, 200 + i * 110);
+  });
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+/* ===== render.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — render.js
+   2D canvas, drawn as a chunky cartoon: every shape gets a black outline,
+   anything solid gets an extruded side face so it reads as a block rather
+   than a sticker, and the crowd, flags and clouds keep moving so the frame
+   is never still even when the runner is.
+
+   Everything is laid out in metres via `s` (pixels per metre), so the scene
+   fits the same way on a phone held either way. The runner never moves on
+   screen; the world scrolls under them.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+
+var FONT = "ui-rounded,'Arial Rounded MT Bold',Quicksand,Nunito,system-ui,sans-serif";
+var INK = '#1b1e2e';
+
+/* Depth vector for extrusions, in metres: mostly up, a touch right, which
+   reads as "away from the camera" in a side view with a raised eye. */
+var DEPTH_X = 0.10, DEPTH_Y = -0.22;
+
+SP.Renderer = function (canvas) {
+  this.canvas = canvas;
+  this.ctx = canvas.getContext('2d');
+  this.time = 0;
+  this.shake = 0;
+  this.popT = 1;              // squash timer on each stride, 0 = just tapped
+  this.ripples = [];
+  this.puffs = [];
+  this.streaks = [];
+  this.confetti = [];
+  this._crowd = null;
+  this._clouds = [];
+  for (var i = 0; i < 5; i++) {
+    this._clouds.push({ x: i * 9 + Math.random() * 6, y: 0.05 + Math.random() * 0.30, sc: 0.30 + Math.random() * 0.28, v: 0.15 + Math.random() * 0.25 });
+  }
+  this.resize();
+};
+
+SP.Renderer.prototype.resize = function () {
+  var w = this.w = window.innerWidth, h = this.h = window.innerHeight;
+  var dpr = this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  this.canvas.width = Math.round(w * dpr);
+  this.canvas.height = Math.round(h * dpr);
+  this.canvas.style.width = w + 'px';
+  this.canvas.style.height = h + 'px';
+  this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  /* Pixels per metre: runner about a fifth of the screen tall, but never so
+     big that a portrait phone shows fewer than ~8m of track. */
+  this.s = Math.min(h * 0.10, w / 8);
+  this.ol = Math.max(2, this.s * 0.045);   // outline width
+  this.groundY = Math.round(h * 0.70);
+  this.runnerX = Math.round(w * 0.30);
+  this._buildCrowd();
+};
+
+/* --- small drawing helpers --------------------------------------------------- */
+function shade(hex, mul) {
+  var n = parseInt(hex.slice(1), 16);
+  var r = Math.min(255, ((n >> 16) & 255) * mul), g = Math.min(255, ((n >> 8) & 255) * mul), b = Math.min(255, (n & 255) * mul);
+  return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+}
+
+function rrPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* A block: front face plus extruded top and side faces, all outlined. */
+SP.Renderer.prototype.block = function (x, y, w, h, color, depth, radius) {
+  var ctx = this.ctx, s = this.s, ol = this.ol;
+  var dx = DEPTH_X * s * depth, dy = DEPTH_Y * s * depth;
+  ctx.lineJoin = 'round'; ctx.lineWidth = ol; ctx.strokeStyle = INK;
+  // top face
+  ctx.fillStyle = shade(color, 1.22);
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx, y + dy); ctx.lineTo(x + w + dx, y + dy); ctx.lineTo(x + w, y); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  // side face
+  ctx.fillStyle = shade(color, 0.72);
+  ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w + dx, y + dy); ctx.lineTo(x + w + dx, y + h + dy); ctx.lineTo(x + w, y + h); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  // front
+  ctx.fillStyle = color;
+  if (radius) rrPath(ctx, x, y, w, h, radius); else { ctx.beginPath(); ctx.rect(x, y, w, h); }
+  ctx.fill(); ctx.stroke();
+};
+
+/* Outlined text with a hard drop. */
+SP.Renderer.prototype.label = function (text, x, y, size, color, align) {
+  var ctx = this.ctx;
+  ctx.font = 'bold ' + size + 'px ' + FONT;
+  ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, size * 0.16); ctx.strokeStyle = INK;
+  ctx.strokeText(text, x, y + size * 0.08);
+  ctx.fillStyle = INK; ctx.fillText(text, x, y + size * 0.08);
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color; ctx.fillText(text, x, y);
+};
+
+/* Pre-render one tile of crowd so the stands cost a few drawImage calls per
+   frame instead of hundreds of outlined shapes. */
+SP.Renderer.prototype._buildCrowd = function () {
+  var s = this.s;
+  var tw = Math.round(s * 12), th = Math.round(s * 2.6);
+  var c = document.createElement('canvas');
+  c.width = Math.round(tw * this.dpr); c.height = Math.round(th * this.dpr);
+  var g = c.getContext('2d');
+  g.scale(this.dpr, this.dpr);
+  var cols = ['#ff5a5f', '#ffd23f', '#7dd3fc', '#6ee7b7', '#fffdf7', '#f59e0b', '#c084fc', '#38bdf8', '#fb7185'];
+  var skins = ['#f4c9a4', '#c68642', '#8d5524', '#ffdbac', '#e0ac69'];
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  var rows = 4, per = Math.round(tw / (s * 0.36));
+  g.lineWidth = Math.max(1.5, s * 0.03); g.strokeStyle = INK; g.lineJoin = 'round';
+  for (var r = 0; r < rows; r++) {
+    var y = th - (r + 0.45) * (th / rows);
+    for (var i = 0; i < per; i++) {
+      var x = (i + 0.5 + (r % 2) * 0.5) * (tw / per) + (rnd() - 0.5) * s * 0.05;
+      var col = cols[Math.floor(rnd() * cols.length)];
+      var skin = skins[Math.floor(rnd() * skins.length)];
+      var rad = s * (0.13 + rnd() * 0.04);
+      // arms up on some of them
+      if (rnd() < 0.3) {
+        g.strokeStyle = INK; g.lineWidth = Math.max(2.5, s * 0.07); g.lineCap = 'round';
+        g.beginPath(); g.moveTo(x - rad * 0.8, y); g.lineTo(x - rad * 1.3, y - rad * 1.6); g.stroke();
+        g.beginPath(); g.moveTo(x + rad * 0.8, y); g.lineTo(x + rad * 1.3, y - rad * 1.6); g.stroke();
+        g.strokeStyle = skin; g.lineWidth = Math.max(1.5, s * 0.045);
+        g.beginPath(); g.moveTo(x - rad * 0.8, y); g.lineTo(x - rad * 1.3, y - rad * 1.6); g.stroke();
+        g.beginPath(); g.moveTo(x + rad * 0.8, y); g.lineTo(x + rad * 1.3, y - rad * 1.6); g.stroke();
+        g.lineWidth = Math.max(1.5, s * 0.03); g.strokeStyle = INK;
+      }
+      g.fillStyle = col;
+      rrPath(g, x - rad, y - rad * 0.9, rad * 2, rad * 1.9, rad * 0.7); g.fill(); g.stroke();      // body
+      g.fillStyle = skin;
+      g.beginPath(); g.arc(x, y - rad * 1.25, rad * 0.62, 0, Math.PI * 2); g.fill(); g.stroke();    // head
+    }
+  }
+  this._crowd = c; this._crowdW = tw; this._crowdH = th;
+};
+
+/* --- effects --------------------------------------------------------------- */
+SP.Renderer.prototype.ripple = function (x, y, bad) {
+  this.ripples.push({ x: x, y: y, t: 0, bad: !!bad });
+  if (this.ripples.length > 24) this.ripples.shift();
+};
+
+SP.Renderer.prototype.puff = function () {
+  var s = this.s;
+  for (var i = 0; i < 3; i++) {
+    this.puffs.push({
+      x: this.runnerX - s * (0.1 + Math.random() * 0.3), y: this.groundY - s * Math.random() * 0.1,
+      vx: -s * (1.5 + Math.random() * 2), vy: -s * (0.5 + Math.random() * 1.2),
+      r: s * (0.08 + Math.random() * 0.08), t: 0
+    });
+  }
+  if (this.puffs.length > 60) this.puffs.splice(0, this.puffs.length - 60);
+  this.popT = 0;
+};
+
+SP.Renderer.prototype.kick = function (amount) { this.shake = Math.max(this.shake, amount); };
+
+/* Burst of confetti from the top of the screen. */
+SP.Renderer.prototype.burst = function (n) {
+  var cols = ['#ff5a5f', '#ffd23f', '#7dd3fc', '#6ee7b7', '#c084fc', '#fffdf7'];
+  var s = this.s;
+  for (var i = 0; i < n; i++) {
+    this.confetti.push({
+      x: Math.random() * this.w, y: -s * 0.5 - Math.random() * s,
+      vx: (Math.random() - 0.5) * s * 2, vy: s * (1 + Math.random() * 3),
+      rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 10,
+      w: s * (0.10 + Math.random() * 0.10), h: s * (0.06 + Math.random() * 0.06),
+      col: cols[Math.floor(Math.random() * cols.length)], t: 0, life: 1.6 + Math.random() * 0.8
+    });
+  }
+  if (this.confetti.length > 240) this.confetti.splice(0, this.confetti.length - 240);
+};
+
+/* --- pose ------------------------------------------------------------------
+   All limb angles are from straight-down, positive = forward (+x). Legs bend
+   at the knee backward (shin = thigh - bend); arms bend at the elbow forward
+   (forearm = upper + bend). */
+SP.Renderer.prototype._pose = function (kind, phase, speedFrac, t) {
+  var TAU = Math.PI * 2;
+  switch (kind) {
+    case 'marks':
+      return { hip: 0.58, lean: 0.95,
+        legs: [{ a: -0.85, bend: 1.9 }, { a: 0.55, bend: 2.3 }],
+        arms: [{ a: 0.95, bend: 0.05 }, { a: 0.95, bend: 0.05 }] };
+    case 'set':
+      return { hip: 0.78, lean: 1.15,
+        legs: [{ a: -0.55, bend: 1.5 }, { a: 0.35, bend: 1.4 }],
+        arms: [{ a: 1.15, bend: 0.05 }, { a: 1.15, bend: 0.05 }] };
+    case 'stumble': {
+      var w = Math.sin(t * 28);
+      return { hip: 0.80, lean: 0.75 + w * 0.08,
+        legs: [{ a: 0.7 + w * 0.2, bend: 0.9 }, { a: -0.5 - w * 0.2, bend: 1.6 }],
+        arms: [{ a: -2.2 + w * 0.3, bend: 0.4 }, { a: -1.6 - w * 0.3, bend: 0.5 }] };
+    }
+    case 'stand': {
+      var b = Math.sin(t * 2.2) * 0.01;
+      return { hip: 0.94 + b, lean: 0.02,
+        legs: [{ a: 0.04, bend: 0.05 }, { a: -0.04, bend: 0.05 }],
+        arms: [{ a: 0.12, bend: 0.25 }, { a: -0.10, bend: 0.25 }] };
+    }
+    default: { // run
+      var f = Math.max(0.15, speedFrac);
+      var th0 = phase * TAU, th1 = th0 + Math.PI;
+      var swing = 0.35 + 0.55 * f, kb = 1.3 + 0.6 * f, armSwing = 0.4 + 0.6 * f;
+      return {
+        hip: 0.93 - 0.05 * f * (1 - Math.abs(Math.sin(th0))),
+        lean: 0.06 + 0.30 * f,
+        legs: [{ a: swing * Math.sin(th0), bend: 0.12 + kb * Math.max(0, Math.cos(th0)) },
+               { a: swing * Math.sin(th1), bend: 0.12 + kb * Math.max(0, Math.cos(th1)) }],
+        arms: [{ a: -armSwing * Math.sin(th0), bend: 1.7 },
+               { a: -armSwing * Math.sin(th1), bend: 1.7 }]
+      };
+    }
+  }
+};
+
+/* Draw a figure whose feet stand at (x, groundY). Far limbs first. Each
+   limb is an outline pass then a colour pass, in painter's order, which is
+   what gives the cel-shaded look where limbs overlap. */
+SP.Renderer.prototype._figure = function (x, groundY, pose, alpha, ghost, squash) {
+  var ctx = this.ctx, s = this.s, ol = this.ol;
+  var skin = '#f4c9a4', vest = '#ff5a5f', shorts = '#20243a', shoe = '#fffdf7', hair = '#2b1d12', band = '#ffd23f';
+  if (ghost) { skin = vest = shorts = shoe = hair = band = '#ffffff'; }
+  var dim = ghost ? 1 : 0.8;
+  var ink = ghost ? 'rgba(255,255,255,.9)' : INK;
+
+  var hipY = groundY - pose.hip * s;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // squash & stretch about the feet on each stride
+  if (squash) { ctx.translate(x, groundY); ctx.scale(1 + squash * 0.10, 1 - squash * 0.10); ctx.translate(-x, -groundY); }
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  function seg(ax, ay, bx, by, w, color) {
+    ctx.lineWidth = w + ol * 2; ctx.strokeStyle = ink;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.lineWidth = w; ctx.strokeStyle = color;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  }
+  function dot(cx, cy, r, color) {
+    ctx.fillStyle = color; ctx.lineWidth = ol; ctx.strokeStyle = ink;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  function tone(c, mul) { return ghost ? c : shade(c, mul); }
+
+  var thigh = 0.46 * s, shin = 0.46 * s, legW = 0.15 * s;
+  function leg(i, mul) {
+    var L = pose.legs[i];
+    var kx = x + Math.sin(L.a) * thigh, ky = hipY + Math.cos(L.a) * thigh;
+    var a2 = L.a - L.bend;
+    var fx = kx + Math.sin(a2) * shin, fy = ky + Math.cos(a2) * shin;
+    seg(x, hipY, kx, ky, legW, tone(skin, mul));
+    seg(kx, ky, fx, fy, legW * 0.9, tone(skin, mul));
+    // shorts over the top of the thigh
+    seg(x, hipY, x + (kx - x) * 0.45, hipY + (ky - hipY) * 0.45, legW * 1.3, tone(shorts, mul));
+    // shoe: a small block pointing along the shin
+    ctx.save(); ctx.translate(fx, fy); ctx.rotate(Math.atan2(fy - ky, fx - kx) + Math.PI / 2);
+    ctx.fillStyle = tone(shoe, mul); ctx.lineWidth = ol; ctx.strokeStyle = ink;
+    rrPath(ctx, -0.13 * s, -0.08 * s, 0.30 * s, 0.16 * s, 0.06 * s); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = tone(vest, mul); ctx.fillRect(-0.05 * s, -0.03 * s, 0.10 * s, 0.06 * s);
+    ctx.restore();
+  }
+
+  var shoulderL = 0.62 * s, armW = 0.11 * s, upper = 0.30 * s, fore = 0.28 * s;
+  function arm(i, mul) {
+    var A = pose.arms[i];
+    var sx = 0, sy = -shoulderL * 0.92;
+    var ex = sx + Math.sin(A.a) * upper, ey = sy + Math.cos(A.a) * upper;
+    var a2 = A.a + A.bend;
+    var hx = ex + Math.sin(a2) * fore, hy = ey + Math.cos(a2) * fore;
+    seg(sx, sy, ex, ey, armW, tone(skin, mul));
+    seg(ex, ey, hx, hy, armW * 0.9, tone(skin, mul));
+    dot(hx, hy, 0.075 * s, tone(skin, mul));
+  }
+
+  function upperBody(farOnly, mul) {
+    ctx.save();
+    ctx.translate(x, hipY); ctx.rotate(pose.lean);
+    if (farOnly) { arm(1, mul); ctx.restore(); return; }
+    // torso block with a darker side band for roundness
+    seg(0, -0.05 * s, 0, -shoulderL, 0.32 * s, vest);
+    if (!ghost) {
+      ctx.lineWidth = 0.09 * s; ctx.strokeStyle = shade(vest, 0.8); ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(-0.11 * s, -0.10 * s); ctx.lineTo(-0.11 * s, -shoulderL + 0.05 * s); ctx.stroke();
+      // number bib
+      ctx.fillStyle = '#fffdf7'; ctx.lineWidth = ol * 0.8; ctx.strokeStyle = ink;
+      rrPath(ctx, -0.10 * s, -0.50 * s, 0.20 * s, 0.15 * s, 0.03 * s); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = ink; ctx.font = 'bold ' + (0.11 * s) + 'px ' + FONT;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('7', 0, -0.425 * s);
+    }
+    // neck + head
+    seg(0, -shoulderL, 0, -shoulderL - 0.08 * s, 0.11 * s, skin);
+    var hy = -shoulderL - 0.25 * s, hr = 0.18 * s;
+    dot(0.02 * s, hy, hr, skin);
+    // hair cap
+    ctx.fillStyle = hair; ctx.lineWidth = ol; ctx.strokeStyle = ink;
+    ctx.beginPath(); ctx.arc(0.0, hy - 0.01 * s, hr, Math.PI * 1.02, Math.PI * 1.98); ctx.closePath(); ctx.fill(); ctx.stroke();
+    // headband
+    ctx.strokeStyle = ink; ctx.lineWidth = 0.06 * s + ol * 2;
+    ctx.beginPath(); ctx.arc(0.02 * s, hy, hr * 0.98, Math.PI * 1.12, Math.PI * 1.9); ctx.stroke();
+    ctx.strokeStyle = band; ctx.lineWidth = 0.06 * s;
+    ctx.beginPath(); ctx.arc(0.02 * s, hy, hr * 0.98, Math.PI * 1.12, Math.PI * 1.9); ctx.stroke();
+    if (!ghost) {
+      // eye + determined brow
+      ctx.fillStyle = ink; ctx.beginPath(); ctx.arc(0.12 * s, hy - 0.01 * s, 0.03 * s, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 0.035 * s; ctx.strokeStyle = ink; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0.06 * s, hy - 0.09 * s); ctx.lineTo(0.16 * s, hy - 0.06 * s); ctx.stroke();
+      // cheek highlight
+      ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.arc(-0.05 * s, hy - 0.08 * s, 0.05 * s, 0, Math.PI * 2); ctx.fill();
+    }
+    arm(0, 1);
+    ctx.restore();
+  }
+
+  leg(1, dim);
+  upperBody(true, dim);
+  upperBody(false, 1);
+  leg(0, 1);
+  ctx.restore();
+};
+
+/* --- frame -------------------------------------------------------------------
+   state: { sprint, pose, ghost (m or null), ghostPose, ghostSpeedFrac,
+            flash 0..1, boost, dt } */
+SP.Renderer.prototype.draw = function (st) {
+  var ctx = this.ctx, w = this.w, h = this.h, s = this.s, g = this.groundY, ol = this.ol;
+  var sp = st.sprint, dt = st.dt || 0;
+  this.time += dt;
+  this.popT = Math.min(1, this.popT + dt * 7);
+  var t = this.time;
+  var camX = sp.visualDistance();
+  var speedFrac = Math.min(1, sp.speed / SP.CFG.MAX_SPEED);
+  var self = this;
+  function X(m) { return self.runnerX + (m - camX) * s; }
+
+  ctx.save();
+  if (this.shake > 0.01) {
+    ctx.translate((Math.random() - 0.5) * this.shake * s * 0.25, (Math.random() - 0.5) * this.shake * s * 0.25);
+    this.shake *= Math.pow(0.02, dt);
+  }
+  ctx.lineJoin = 'round';
+
+  /* ---- sky, sun, clouds ---- */
+  var sky = ctx.createLinearGradient(0, 0, 0, g);
+  sky.addColorStop(0, '#4fb0ff'); sky.addColorStop(1, '#cdefff');
+  ctx.fillStyle = sky; ctx.fillRect(-w, -h, w * 3, g + h);
+  var sunX = w * 0.82 - camX * s * 0.02, sunY = g - h * 0.56;
+  ctx.fillStyle = 'rgba(255,240,150,.35)'; ctx.beginPath(); ctx.arc(sunX, sunY, s * 1.35, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffe66d'; ctx.lineWidth = ol; ctx.strokeStyle = INK;
+  ctx.beginPath(); ctx.arc(sunX, sunY, s * 0.95, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff3a8'; ctx.beginPath(); ctx.arc(sunX - s * 0.25, sunY - s * 0.25, s * 0.35, 0, Math.PI * 2); ctx.fill();
+
+  /* Small clouds, kept in the band of sky above the stands. */
+  var roofTop = g - s * 4.6 > h * 0.33 ? g - s * 8.0 : g - s * 4.6;
+  var skyH = Math.max(s * 1.6, roofTop - s * 0.4);
+  for (var ci = 0; ci < this._clouds.length; ci++) {
+    var cl = this._clouds[ci];
+    cl.x += cl.v * dt;
+    var span = w / s + 6;
+    var cx = ((cl.x - camX * 0.08) % span + span) % span * s - 3 * s;
+    var cy = s * 0.5 + skyH * cl.y;
+    this._cloud(cx, cy, s * cl.sc);
+  }
+
+  /* ---- stands ---- */
+  var roofY = g - s * 4.6, crowdTop = g - s * 3.9, wallTop = g - s * 1.5;
+  var tw = this._crowdW, th = this._crowdH;
+  var wave = speedFrac;
+  if (roofY > h * 0.33) {
+    var roof2 = roofY - s * 3.4, top2 = roofY - s * 2.9;
+    this.block(0 - s, roof2, w + 2 * s, top2 - roof2, '#2a3454', 0.6);
+    ctx.fillStyle = '#334066'; ctx.fillRect(0, top2, w, roofY - top2);
+    this._crowdRow(-((camX * s * 0.2) % tw), roofY - th * 0.95, 0.5 * wave, t, 0.75);
+    this._flags(roof2, camX * s * 0.2, t);
+  }
+  this.block(0 - s, roofY, w + 2 * s, crowdTop - roofY, '#2f3b5c', 0.7);
+  ctx.fillStyle = '#3d4a70'; ctx.fillRect(0, crowdTop, w, wallTop - crowdTop);
+  this._crowdRow(-((camX * s * 0.35) % tw), wallTop - th + s * 0.1, wave, t, 1);
+  if (!(roofY > h * 0.33)) this._flags(roofY, camX * s * 0.35, t);
+
+  // front wall: a block, with 3D ad boards on it, parallax 0.6
+  this.block(0 - s, wallTop, w + 2 * s, g - s * 0.9 - wallTop, '#516282', 0.5);
+  var boardCols = ['#ff5a5f', '#ffd23f', '#6ee7b7', '#7dd3fc', '#c084fc'];
+  var bw = s * 4.5, gap = s * 1.1, period = bw + gap;
+  var boff = -((camX * s * 0.6) % period);
+  var bi = Math.floor((camX * s * 0.6) / period);
+  for (var bx = boff - period, k = bi - 1; bx < w + period; bx += period, k++) {
+    var col = boardCols[((k % 5) + 5) % 5];
+    this.block(bx, wallTop + s * 0.22, bw, g - s * 0.9 - wallTop - s * 0.45, col, 0.35, s * 0.08);
+    ctx.fillStyle = 'rgba(255,255,255,.22)';
+    rrPath(ctx, bx + s * 0.15, wallTop + s * 0.32, bw - s * 0.3, s * 0.14, s * 0.07); ctx.fill();
+  }
+
+  /* ---- grass kerb + track ---- */
+  this.block(0 - s, g - s * 0.9, w + 2 * s, s * 0.78, '#5cc45c', 0.4);
+  // track surface
+  ctx.fillStyle = '#d95a3d'; ctx.fillRect(0, g, w, h - g);
+  var trackGrad = ctx.createLinearGradient(0, g, 0, h);
+  trackGrad.addColorStop(0, 'rgba(255,255,255,.10)'); trackGrad.addColorStop(1, 'rgba(0,0,0,.12)');
+  ctx.fillStyle = trackGrad; ctx.fillRect(0, g, w, h - g);
+  // lanes
+  var laneYs = [0.18, 0.42, 0.72].map(function (f) { return g + (h - g) * f; });
+  ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.lineWidth = Math.max(2, s * 0.035);
+  laneYs.forEach(function (y) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); });
+  // inner kerb: raised white block with outline along the runner's lane
+  this.block(0 - s, g - s * 0.12, w + 2 * s, s * 0.14, '#fffdf7', 0.25);
+
+  /* ---- distance marks, gates, start, finish ---- */
+  var mFirst = Math.floor((camX - this.runnerX / s) / 10) * 10;
+  var mLast = camX + (w - this.runnerX) / s;
+  for (var m = mFirst; m <= mLast; m += 10) {
+    if (m < 0) continue;
+    var mx = X(m);
+    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    ctx.fillRect(mx - s * 0.035, g, s * 0.07, h - g);
+    this.label(String(m), mx + s * 0.16, g + s * 0.36, 0.44 * s, '#fffdf7', 'left');
+  }
+  var gateStep = SP.CFG.BONUS_EVERY;
+  var gFirst = Math.max(gateStep, Math.floor((camX - this.runnerX / s) / gateStep) * gateStep);
+  for (var gm = gFirst; gm <= mLast + 3; gm += gateStep) {
+    var gx = X(gm);
+    ctx.fillStyle = '#ffd23f'; ctx.lineWidth = ol; ctx.strokeStyle = INK;
+    ctx.fillRect(gx - s * 0.14, g, s * 0.28, h - g);
+    ctx.strokeRect(gx - s * 0.14, g - ol / 2, s * 0.28, h - g + ol);
+    // sign on a post
+    var postTop = g - s * 1.9;
+    this.block(gx - s * 0.06, postTop, s * 0.12, s * 1.0, '#3d4a70', 0.3);
+    this.block(gx - s * 0.6, postTop - s * 0.55, s * 1.2, s * 0.55, '#ffd23f', 0.35, s * 0.1);
+    this.label('+' + SP.CFG.BONUS_TIME + 's', gx, postTop - s * 0.27, 0.32 * s, INK);
+  }
+  var sx = X(0);
+  if (sx > -s && sx < w + s) {
+    ctx.fillStyle = '#fffdf7'; ctx.lineWidth = ol; ctx.strokeStyle = INK;
+    ctx.fillRect(sx - s * 0.1, g, s * 0.2, h - g); ctx.strokeRect(sx - s * 0.1, g - ol / 2, s * 0.2, h - g + ol);
+  }
+  var fx = X(SP.CFG.FINISH_LINE);
+  if (fx > -s * 4 && fx < w + s * 4) {
+    var sq = (h - g) / 6, bwid = s * 0.5;
+    for (var r = 0; r < 6; r++) for (var c = 0; c < 2; c++) {
+      ctx.fillStyle = (r + c) % 2 ? INK : '#fffdf7';
+      ctx.fillRect(fx - bwid / 2 + c * bwid / 2, g + r * sq, bwid / 2, sq);
+    }
+    ctx.lineWidth = ol; ctx.strokeStyle = INK; ctx.strokeRect(fx - bwid / 2, g - ol / 2, bwid, h - g + ol);
+    var top = g - s * 3.2;
+    this.block(fx - s * 1.7, top, s * 0.16, g - top, '#3d4a70', 0.3);
+    this.block(fx + s * 1.54, top, s * 0.16, g - top, '#3d4a70', 0.3);
+    this.block(fx - s * 1.85, top - s * 0.1, s * 3.7, s * 0.72, '#ff5a5f', 0.4, s * 0.1);
+    this.label('FINISH', fx, top + s * 0.26, 0.46 * s, '#fffdf7');
+  }
+
+  /* ---- shadows, ghost, runner ---- */
+  function shadow(x, a) {
+    ctx.fillStyle = 'rgba(0,0,0,' + (0.25 * a) + ')';
+    ctx.beginPath(); ctx.ellipse(x, g + s * 0.03, s * 0.5, s * 0.10, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  if (st.ghost !== null && st.ghost !== undefined) {
+    var gxx = X(st.ghost);
+    if (gxx > -s * 2 && gxx < w + s * 2) {
+      var gp = this._pose(st.ghostPose || 'run', st.ghost / SP.CFG.STRIDE_LEN, st.ghostSpeedFrac || 0, t);
+      shadow(gxx, 0.4);
+      this._figure(gxx, g, gp, 0.4, true, 0);
+      this.label('BEST', gxx, g - s * 2.1, 0.26 * s, '#fffdf7');
+    }
+  }
+  shadow(this.runnerX, 1);
+  var pose = this._pose(st.pose, sp.stridePhase, speedFrac, t);
+  var squash = Math.sin(Math.min(1, this.popT) * Math.PI) * (st.pose === 'run' ? 1 : 0);
+  this._figure(this.runnerX, g, pose, 1, false, squash);
+
+  /* ---- speed streaks; a boost trails gold ones ---- */
+  if (speedFrac > 0.5) {
+    var n = Math.round((speedFrac - 0.5) * 10);
+    for (var i = 0; i < n; i++) {
+      this.streaks.push({ x: this.runnerX + s * (-0.5 + Math.random() * 2.5), y: g - s * (0.2 + Math.random() * 1.9),
+                          len: s * (0.6 + Math.random() * 1.4), t: 0, gold: false });
+    }
+  }
+  if (st.boost) {
+    for (var i = 0; i < 4; i++) {
+      this.streaks.push({ x: this.runnerX + s * (-0.2 + Math.random() * 0.6), y: g - s * (0.1 + Math.random() * 1.7),
+                          len: s * (1.2 + Math.random() * 2.0), t: 0, gold: true });
+    }
+  }
+  ctx.lineCap = 'round';
+  for (var i = this.streaks.length - 1; i >= 0; i--) {
+    var k2 = this.streaks[i]; k2.t += dt; k2.x -= sp.speed * s * 1.5 * dt;
+    if (k2.t > 0.25) { this.streaks.splice(i, 1); continue; }
+    var fade = 1 - k2.t / 0.25;
+    ctx.lineWidth = Math.max(2, s * (k2.gold ? 0.08 : 0.05));
+    ctx.strokeStyle = k2.gold ? 'rgba(255,210,63,' + (0.9 * fade) + ')' : 'rgba(255,255,255,' + (0.6 * fade) + ')';
+    ctx.beginPath(); ctx.moveTo(k2.x, k2.y); ctx.lineTo(k2.x - k2.len, k2.y); ctx.stroke();
+  }
+  if (this.streaks.length > 80) this.streaks.splice(0, this.streaks.length - 80);
+
+  /* ---- dust ---- */
+  for (var i = this.puffs.length - 1; i >= 0; i--) {
+    var p = this.puffs[i]; p.t += dt;
+    if (p.t > 0.45) { this.puffs.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += s * 1.5 * dt;
+    var pr = p.r * (1 + p.t * 3), pa = 1 - p.t / 0.45;
+    ctx.fillStyle = 'rgba(255,225,190,' + (0.75 * pa) + ')';
+    ctx.strokeStyle = 'rgba(27,30,46,' + (0.6 * pa) + ')'; ctx.lineWidth = ol * 0.8;
+    ctx.beginPath(); ctx.arc(p.x, p.y, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+
+  /* ---- confetti ---- */
+  for (var i = this.confetti.length - 1; i >= 0; i--) {
+    var cf = this.confetti[i]; cf.t += dt;
+    if (cf.t > cf.life) { this.confetti.splice(i, 1); continue; }
+    cf.vy += s * 2.5 * dt; cf.x += cf.vx * dt + Math.sin(t * 6 + i) * s * 0.4 * dt; cf.y += cf.vy * dt; cf.rot += cf.vr * dt;
+    ctx.save(); ctx.translate(cf.x, cf.y); ctx.rotate(cf.rot);
+    ctx.globalAlpha = Math.min(1, (cf.life - cf.t) * 2);
+    ctx.fillStyle = cf.col; ctx.lineWidth = Math.max(1.5, ol * 0.6); ctx.strokeStyle = INK;
+    ctx.beginPath(); ctx.rect(-cf.w / 2, -cf.h / 2, cf.w, cf.h); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  /* ---- tap ripples (screen space, not shaken) ---- */
+  for (var i = this.ripples.length - 1; i >= 0; i--) {
+    var rp = this.ripples[i]; rp.t += dt;
+    if (rp.t > 0.35) { this.ripples.splice(i, 1); continue; }
+    var f = rp.t / 0.35;
+    ctx.strokeStyle = (rp.bad ? 'rgba(255,90,95,' : 'rgba(255,255,255,') + (0.85 * (1 - f)) + ')';
+    ctx.lineWidth = 5 * (1 - f) + 1.5;
+    ctx.beginPath(); ctx.arc(rp.x, rp.y, 14 + f * 70, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  /* ---- red flash on a false start / stumble ---- */
+  if (st.flash > 0.01) {
+    ctx.fillStyle = 'rgba(255,60,60,' + (st.flash * 0.35) + ')';
+    ctx.fillRect(0, 0, w, h);
+  }
+};
+
+/* One row of crowd tiles, sliced into columns so a wave can run through
+   it: each slice bobs on its own phase, and the amount scales with speed. */
+SP.Renderer.prototype._crowdRow = function (off, y, amount, t, alpha) {
+  var ctx = this.ctx, s = this.s, tw = this._crowdW, th = this._crowdH, w = this.w;
+  var slices = 8, sw = tw / slices;
+  ctx.globalAlpha = alpha;
+  for (var x = off - tw; x < w + tw; x += tw) {
+    for (var i = 0; i < slices; i++) {
+      var sx = x + i * sw;
+      if (sx + sw < 0 || sx > w) continue;
+      var bob = -s * (0.05 + 0.16 * amount) * Math.max(0, Math.sin(t * 7 - sx / s * 0.9));
+      ctx.drawImage(this._crowd, i * sw * this.dpr, 0, sw * this.dpr, th * this.dpr, sx, y + bob, sw + 0.5, th);
+    }
+  }
+  ctx.globalAlpha = 1;
+};
+
+/* Pennants along a roof line, waving. */
+SP.Renderer.prototype._flags = function (roofY, scroll, t) {
+  var ctx = this.ctx, s = this.s, w = this.w, ol = this.ol;
+  var cols = ['#ff5a5f', '#ffd23f', '#6ee7b7', '#7dd3fc', '#c084fc'];
+  var step = s * 2.6;
+  var off = -((scroll) % step);
+  var idx = Math.floor(scroll / step);
+  for (var x = off - step, k = idx - 1; x < w + step; x += step, k++) {
+    var col = cols[((k % 5) + 5) % 5];
+    var poleH = s * 0.9;
+    ctx.lineWidth = ol * 1.4; ctx.strokeStyle = INK; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, roofY); ctx.lineTo(x, roofY - poleH); ctx.stroke();
+    var wv = Math.sin(t * 5 + k * 1.3) * s * 0.12;
+    ctx.fillStyle = col; ctx.lineWidth = ol; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(x, roofY - poleH); ctx.lineTo(x + s * 0.75, roofY - poleH + s * 0.2 + wv); ctx.lineTo(x, roofY - poleH + s * 0.42);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+};
+
+/* A cloud: three blobs outlined as one shape. */
+SP.Renderer.prototype._cloud = function (x, y, r) {
+  var ctx = this.ctx, ol = this.ol;
+  var blobs = [[0, 0, 1], [-0.9, 0.25, 0.7], [0.95, 0.2, 0.75], [0.1, 0.45, 0.6], [-0.3, -0.15, 0.7]];
+  ctx.lineWidth = ol; ctx.strokeStyle = INK; ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  for (var i = 0; i < blobs.length; i++) { ctx.moveTo(x + blobs[i][0] * r + blobs[i][2] * r, y + blobs[i][1] * r); ctx.arc(x + blobs[i][0] * r, y + blobs[i][1] * r, blobs[i][2] * r, 0, Math.PI * 2); }
+  ctx.stroke(); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,.08)';
+  ctx.beginPath(); ctx.ellipse(x, y + r * 0.55, r * 1.5, r * 0.28, 0, 0, Math.PI); ctx.fill();
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+/* ===== ui.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — ui.js
+   HUD, screens and readouts. The clock is the biggest thing on screen
+   because the whole game is a race against it; taps/sec sits under the
+   thumbs where a fading tapper will see it drop.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+
+SP.UI = function () {
+  var $ = function (id) { return document.getElementById(id); };
+  this.el = {
+    title: $('title'), hud: $('hud'), over: $('over'), banner: $('banner'),
+    timer: $('timer'), nextBonus: $('nextBonus'), dist: $('dist'), taps: $('taps'), rate: $('rate'), rateBar: $('rateBar'),
+    speedBar: $('speedBar'), hint: $('hint'), tapFlash: $('tapFlash'),
+    bestTitle: $('bestTitle'), bestRow: $('bestRow'),
+    ovDist: $('ovDistNum'), ovRating: $('ovRating'), ovBlurb: $('ovBlurb'),
+    ovTaps: $('ovTaps'), ovRate: $('ovRate'), ovSpeed: $('ovSpeed'),
+    ovHundred: $('ovHundred'), ovHundredRow: $('ovHundredRow'), ovClock: $('ovClock'),
+    ovBest: $('ovBest'), ovNew: $('ovNew'), ovFalse: $('ovFalse'), ovPerfect: $('ovPerfect'),
+    btnPlay: $('btnPlay'), btnRetry: $('btnRetry'), mute: $('mute')
+  };
+  this._bannerTimer = null;
+};
+
+SP.UI.prototype.onPlay = function (fn) {
+  function go(e) { e.preventDefault(); e.stopPropagation(); fn(); }
+  this.el.btnPlay.addEventListener('pointerdown', go);
+  this.el.btnRetry.addEventListener('pointerdown', go);
+};
+
+SP.UI.prototype.onMute = function (fn) {
+  this.el.mute.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); fn(); });
+};
+
+SP.UI.prototype.setMuted = function (m) { this.el.mute.textContent = m ? '🔇' : '🔊'; };
+
+SP.UI.prototype.showTitle = function (best) {
+  this.el.title.classList.remove('hide');
+  this.el.hud.classList.add('hide');
+  this.el.over.classList.add('hide');
+  this.el.bestRow.classList.toggle('hide', !best);
+  this.el.bestTitle.textContent = best.toFixed(1) + ' m';
+};
+
+SP.UI.prototype.showHud = function () {
+  this.el.title.classList.add('hide');
+  this.el.over.classList.add('hide');
+  this.el.hud.classList.remove('hide');
+  this.el.hint.classList.add('hide');
+  this.setTimer(SP.CFG.RACE_TIME);
+  this.setStats(0, 0, 0, 0);
+  this.setNextBonus(null);
+};
+
+SP.UI.prototype.showHint = function (show) { this.el.hint.classList.toggle('hide', !show); };
+
+SP.UI.prototype.setTimer = function (t) {
+  var el = this.el.timer;
+  el.textContent = t.toFixed(1);
+  el.classList.toggle('low', t <= 3 && t > 0);
+};
+
+SP.UI.prototype.setStats = function (dist, taps, rate, speedFrac) {
+  this.el.dist.textContent = dist.toFixed(1);
+  this.el.taps.textContent = taps;
+  this.el.rate.textContent = rate.toFixed(1);
+  this.el.rateBar.style.width = Math.min(100, rate / 14 * 100) + '%';
+  this.el.speedBar.style.width = (speedFrac * 100) + '%';
+};
+
+SP.UI.prototype.timerBump = function () {
+  var el = this.el.timer;
+  el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+};
+
+/* Metres to the next +time gate, or null to hide. */
+SP.UI.prototype.setNextBonus = function (m) {
+  var el = this.el.nextBonus;
+  if (m === null) { el.classList.add('hide'); return; }
+  el.classList.remove('hide');
+  el.textContent = '+' + SP.CFG.BONUS_TIME + 's in ' + Math.max(0, Math.ceil(m)) + ' m';
+};
+
+SP.UI.prototype.tapFlash = function () {
+  var el = this.el.tapFlash;
+  el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+};
+
+/* Big centre text. cls: '', 'go', 'bad', 'gold'. */
+SP.UI.prototype.banner = function (text, cls, ms) {
+  var el = this.el.banner;
+  clearTimeout(this._bannerTimer);
+  el.className = 'hide';
+  void el.offsetWidth;
+  el.textContent = text;
+  /* Long phrases (ON YOUR MARKS, PERFECT START!) get a smaller size so they
+     fit a phone held upright; GO! stays huge. */
+  el.className = (cls || '') + (text.length > 8 ? ' long' : '');
+  var self = this;
+  this._bannerTimer = setTimeout(function () { el.className = 'hide'; }, ms || 900);
+};
+
+SP.UI.prototype.showOver = function (r) {
+  this.el.hud.classList.add('hide');
+  this.el.over.classList.remove('hide');
+  this.el.ovDist.textContent = r.distance.toFixed(1);
+  this.el.ovRating.textContent = r.rating.name;
+  this.el.ovBlurb.textContent = r.rating.blurb;
+  this.el.ovTaps.textContent = r.taps;
+  this.el.ovRate.textContent = r.avgRate.toFixed(1) + '/s';
+  this.el.ovSpeed.textContent = r.topKmh.toFixed(0) + ' km/h';
+  this.el.ovHundredRow.classList.toggle('hide', r.hundred === null);
+  if (r.hundred !== null) this.el.ovHundred.textContent = r.hundred.toFixed(2) + ' s';
+  this.el.ovBest.textContent = r.best.toFixed(1) + ' m';
+  this.el.ovClock.textContent = r.clock + ' s' + (r.bonuses ? ' (+' + (r.bonuses * SP.CFG.BONUS_TIME) + ')' : '');
+  this.el.ovNew.classList.toggle('hide', !r.isNew);
+  this.el.ovPerfect.classList.toggle('hide', !r.perfectStart);
+  this.el.ovFalse.classList.toggle('hide', !r.falseStarts);
+  this.el.ovFalse.textContent = r.falseStarts + (r.falseStarts === 1 ? ' false start' : ' false starts');
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+/* ===== game.js ===== */
+(function(SP){
+/* ===========================================================================
+   SPRINTER — game.js
+   Glue: input -> model, model events -> feedback, and the frame loop.
+   Everything that decides whether a tap counts lives in sprint.js; this file
+   only decides what it looks and sounds like.
+   ===========================================================================*/
+var SP = (typeof SP !== 'undefined') ? SP : {};
+
+/* localStorage throws in some embeds (sandboxed iframes, private mode on
+   older iOS). A lost best is fine; a crash on the title screen is not. */
+SP.store = function (key, value) {
+  try {
+    if (value === undefined) return window.localStorage.getItem(key);
+    window.localStorage.setItem(key, value);
+  } catch (e) { return null; }
+};
+
+SP.RUN_KEYS = {
+  'ArrowLeft': 1, 'ArrowRight': 1,
+  'a': 1, 'd': 1, 'A': 1, 'D': 1,
+  ' ': 1, 'Spacebar': 1
+};
+
+SP.Game = function (canvas, ui) {
+  this.ui = ui;
+  this.renderer = new SP.Renderer(canvas);
+  this.audio = new SP.Audio();
+  this.sprint = new SP.Sprint();
+  this.state = 'TITLE';           // TITLE | RACE | OVER
+  this.best = parseFloat(SP.store('sprinter.best') || '0') || 0;
+  this.bestHundred = parseFloat(SP.store('sprinter.best100') || '0') || null;
+  this.flash = 0;
+  this.topSpeed = 0;
+  this.overT = 0;
+  this.doneT = 0;
+  this._lastStumbleSfx = -1;
+  this._initInput();
+  this.ui.showTitle(this.best);
+};
+
+SP.Game.prototype._initInput = function () {
+  var self = this;
+  this.ui.onPlay(function () { self.startRace(); });
+  this.ui.onMute(function () {
+    self.audio.enabled = !self.audio.enabled;
+    self.ui.setMuted(!self.audio.enabled);
+    if (!self.audio.enabled) self.audio.quiet();
+  });
+
+  /* pointerdown, not click: click waits for pointerup and on some phones
+     for a double-tap timeout, and every ms of latency here is a stride. One
+     event per contact, so two thumbs each count. */
+  window.addEventListener('pointerdown', function (e) {
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    e.preventDefault();
+    self.onTap(e.clientX, e.clientY);
+  }, { passive: false });
+  /* Keyboard: only the run keys count. Left/right arrows and A/D are a
+     two-hand pair (alternate them like two thumbs); space is the one-finger
+     option. Auto-repeat is dropped so holding a key is not running. */
+  window.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
+    if (!SP.RUN_KEYS[e.key]) return;
+    e.preventDefault();
+    self.onTap(self.renderer.w / 2, self.renderer.h * 0.55);
+  });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  window.addEventListener('resize', function () { self.renderer.resize(); });
+};
+
+SP.Game.prototype.startRace = function () {
+  this.audio.init(); this.audio.resume();
+  this.sprint.reset();
+  this.sprint.start();
+  this.state = 'RACE';
+  this.flash = 0; this.topSpeed = 0; this.doneT = 0; this._firstTap = false;
+  this.ui.showHud();
+};
+
+SP.Game.prototype.onTap = function (x, y) {
+  this.audio.init(); this.audio.resume();
+  if (this.state === 'TITLE') { this.startRace(); return; }
+  if (this.state === 'OVER') { if (this.overT > 0.8) this.startRace(); return; }
+
+  var r = this.sprint.tap();
+  var sf = Math.min(1, this.sprint.speed / SP.CFG.MAX_SPEED);
+  if (r === 'counted') {
+    this.audio.step(sf);
+    this.renderer.puff();
+    this.renderer.ripple(x, y, false);
+    this.ui.tapFlash();
+    if (!this._firstTap) { this._firstTap = true; this.ui.showHint(false); }
+  } else if (r === 'penalty') {
+    this.renderer.ripple(x, y, true);
+    if (this.sprint.clock - this._lastStumbleSfx > 0.12) { this.audio.stumble(); this._lastStumbleSfx = this.sprint.clock; }
+  } else if (r === 'false') {
+    this.renderer.ripple(x, y, true);
+  }
+};
+
+SP.Game.prototype._handle = function (ev, evs) {
+  var ui = this.ui, au = this.audio;
+  switch (ev) {
+    case 'bonus':
+      /* The 100m gate is also the finish line; let that banner say both. */
+      if (evs.indexOf('finish') === -1) ui.banner('+' + SP.CFG.BONUS_TIME + ' SECONDS', 'gold', 800);
+      au.bonus(); ui.timerBump(); this.renderer.kick(0.4); this.renderer.burst(40);
+      break;
+    case 'marks': ui.banner('ON YOUR MARKS', '', 1100); au.marks(); break;
+    case 'set': ui.banner('SET', '', 1500); au.set(); break;
+    case 'go':
+      ui.banner('GO!', 'go', 700); au.gun(); this.renderer.kick(1.2);
+      if (!this._firstTap) ui.showHint(true);
+      break;
+    case 'falseStart':
+      ui.banner('FALSE START!', 'bad', 1000); au.falseStart(); this.flash = 1; this.renderer.kick(0.6);
+      break;
+    case 'perfectStart': ui.banner('PERFECT START!', 'gold', 1000); au.perfect(); this.renderer.kick(0.8); this.renderer.burst(30); break;
+    case 'finish': ui.banner('100 m!  +' + SP.CFG.BONUS_TIME + ' s', 'gold', 1000); au.finishLine(); this.renderer.kick(0.5); break;
+    case 'done': ui.banner('TIME!', 'gold', 1200); au.done(); this.doneT = 0; ui.showHint(false); this.renderer.burst(80); break;
+  }
+};
+
+SP.Game.prototype._finishRace = function () {
+  var sp = this.sprint;
+  var isNew = sp.distance > this.best;
+  if (isNew) { this.best = sp.distance; SP.store('sprinter.best', String(this.best)); }
+  if (sp.finishTime !== null && (this.bestHundred === null || sp.finishTime < this.bestHundred)) {
+    this.bestHundred = sp.finishTime; SP.store('sprinter.best100', String(this.bestHundred));
+  }
+  this.state = 'OVER'; this.overT = 0;
+  this.audio.quiet();
+  if (isNew && sp.distance > 0) this.audio.newBest();
+  this.ui.showOver({
+    distance: sp.distance,
+    rating: SP.ratingFor(sp.distance),
+    taps: sp.taps,
+    avgRate: sp.taps / sp.raceLimit,
+    clock: sp.raceLimit,
+    bonuses: sp.bonuses,
+    topKmh: this.topSpeed * 3.6,
+    hundred: sp.finishTime,
+    best: this.best,
+    isNew: isNew && sp.distance > 0,
+    falseStarts: sp.falseStarts,
+    perfectStart: sp.perfectStart
+  });
+};
+
+SP.Game.prototype.update = function (dt) {
+  var sp = this.sprint;
+  this.flash = Math.max(0, this.flash - dt * 2.5);
+
+  if (this.state === 'RACE') {
+    sp.step(dt);
+    var evs = sp.drainEvents();
+    for (var i = 0; i < evs.length; i++) this._handle(evs[i], evs);
+    this.topSpeed = Math.max(this.topSpeed, sp.speed);
+    var sf = Math.min(1, sp.speed / SP.CFG.MAX_SPEED);
+    this.audio.setCrowd(sp.phase === 'GO' || sp.phase === 'DONE' ? sf : 0);
+    if (sp.phase === 'GO' || sp.phase === 'DONE') {
+      this.ui.setTimer(sp.timeLeft());
+      this.ui.setStats(sp.distance, sp.taps, sp.tapRate(), sf);
+      this.ui.setNextBonus(sp.phase === 'GO' ? sp.toNextBonus() : null);
+    }
+    if (sp.phase === 'DONE') {
+      this.doneT += dt;
+      if (this.doneT > 1.4) this._finishRace();
+    }
+  } else if (this.state === 'OVER') {
+    this.overT += dt;
+    sp.step(dt);       // let the runner jog to a stop behind the results
+  }
+};
+
+SP.Game.prototype._pose = function () {
+  var sp = this.sprint;
+  switch (sp.phase) {
+    case 'MARKS': return 'marks';
+    case 'SET': return 'set';
+    case 'GO': return sp.isStumbling() ? 'stumble' : 'run';
+    case 'DONE': return sp.speed < 0.35 ? 'stand' : 'run';
+    default: return 'stand';
+  }
+};
+
+SP.Game.prototype.render = function (dt) {
+  var sp = this.sprint;
+  var ghost = null, ghostPose = 'run', ghostSf = 0;
+  if (this.best > 0 && this.state !== 'TITLE') {
+    var v = this.best / SP.CFG.RACE_TIME;
+    if (sp.phase === 'GO') { ghost = v * sp.raceT; ghostSf = v / SP.CFG.MAX_SPEED; }
+    else if (sp.phase === 'DONE') { ghost = this.best + Math.min(sp.coast, v * SP.CFG.SPEED_TAU); ghostPose = sp.speed < 0.35 ? 'stand' : 'run'; ghostSf = ghost > this.best + 0.1 ? 0.3 : 0; }
+    else { ghost = 0; ghostPose = this._pose(); }
+  }
+  this.renderer.draw({ sprint: sp, pose: this._pose(), ghost: ghost, ghostPose: ghostPose,
+                       ghostSpeedFrac: ghostSf, flash: this.flash, dt: dt, boost: sp.isBoosting() });
+};
+
+SP.Game.prototype.run = function () {
+  var self = this, last = performance.now();
+  function frame(now) {
+    /* Clamp dt: a backgrounded tab returns with a multi-second delta. The
+       model integrates exactly so it would not over-score, but the timer
+       would jump and the player would lose the window without seeing it. */
+    var dt = Math.min((now - last) / 1000, 1 / 20);
+    last = now;
+    self.update(dt);
+    self.render(dt);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = SP;
+
+})(window.SP);
+
+</script>
+<script>
+(function () {
+  var ui = new SP.UI();
+  var game = new SP.Game(document.getElementById('c'), ui);
+  game.run();
+  window.__sprinter = game;   // handy for tuning from the console
+})();
+</script>
+</body>
+</html>
